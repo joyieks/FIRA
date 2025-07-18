@@ -69,10 +69,10 @@ const login = () => {
           {/* Logo */}
           <View className="items-center mb-12">
             <Image
-              source={require('../../assets/images/getstart1.png')}
+              source={require('../../assets/images/firemen.png')}
               className="w-24 h-24 mb-4"
             />
-            <Text className="text-3xl font-bold text-fire">Fire Response</Text>
+            <Text className="text-3xl font-bold text-fire">Project FIRA</Text>
           </View>
 
           {/* Login Form */}
