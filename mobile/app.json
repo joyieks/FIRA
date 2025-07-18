@@ -1,0 +1,47 @@
+{
+  "expo": {
+    "name": "PROJECT FIRA",
+    "slug": "fira-mobile",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/images/logoonly.png",
+    "scheme": "firamobile",
+    "userInterfaceStyle": "automatic",
+    "newArchEnabled": true,
+    "ios": {
+      "supportsTablet": true
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/images/logoonly.png",
+        "backgroundColor": "transparent"
+      },
+      "edgeToEdgeEnabled": true,
+      "config": {
+        "googleMaps": {
+          "apiKey": "AIzaSyDv-FC2CTEpLuVAlXCHMtu4XqAEPNtOjos"
+        }
+      }
+    },
+    "web": {
+      "bundler": "metro",
+      "output": "static",
+      "favicon": "./assets/images/logoonly.png"
+    },
+    "plugins": [
+      "expo-router",
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/images/logoonly.png",
+          "imageWidth": 200,
+          "resizeMode": "contain",
+          "backgroundColor": "transparent"
+        }
+      ]
+    ],
+    "experiments": {
+      "typedRoutes": true
+    }
+  }
+}
