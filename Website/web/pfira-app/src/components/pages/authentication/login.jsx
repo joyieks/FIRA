@@ -150,6 +150,16 @@ const Login = () => {
                 Sign in
               </button>
             </div>
+            <div>
+              <button
+                type="button"
+                className="w-full flex justify-center items-center py-2 px-4 mt-2 border border-gray-300 rounded-lg shadow-sm text-sm font-medium text-gray-700 bg-white hover:bg-gray-100 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 transition"
+                // onClick={handleGoogleSignIn} // Uncomment and implement this for real Google sign-in
+              >
+                {/* You can add a Google icon here if you want */}
+                Sign in with Google
+              </button>
+            </div>
           </form>
 
           <div className="mt-4 text-center">
