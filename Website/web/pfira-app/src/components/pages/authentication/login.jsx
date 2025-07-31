@@ -1,14 +1,14 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { CiLock, CiUser } from 'react-icons/ci';
-import { signInWithEmailAndPassword } from 'firebase/auth';
+import { signInWithEmailAndPassword, signInWithPopup, GoogleAuthProvider } from 'firebase/auth';
 import { auth } from "../../../firebase";
 
 const Login = () => {
   const navigate = useNavigate();
   const location = useLocation();
   const [formData, setFormData] = useState({
-    username: '', // This will act as email
+    username: '',
     password: ''
   });
   const [error, setError] = useState('');
@@ -42,12 +42,11 @@ const Login = () => {
     try {
       const userCredential = await signInWithEmailAndPassword(
         auth,
-        formData.username, // This is email
+        formData.username,
         formData.password
       );
       const user = userCredential.user;
 
-      // Store token or session as needed
       localStorage.setItem('authToken', user.uid);
       localStorage.setItem('userType', 'firebase');
       localStorage.setItem('loginTime', Date.now().toString());
@@ -56,6 +55,23 @@ const Login = () => {
     } catch (err) {
       console.error('Firebase login error:', err);
       setError('Login failed: ' + err.message);
+    }
+  };
+
+  const handleGoogleSignIn = async () => {
+    const provider = new GoogleAuthProvider();
+    try {
+      const result = await signInWithPopup(auth, provider);
+      const user = result.user;
+
+      localStorage.setItem('authToken', user.uid);
+      localStorage.setItem('userType', 'google');
+      localStorage.setItem('loginTime', Date.now().toString());
+
+      navigate('/station-dashboard');
+    } catch (err) {
+      console.error('Google sign-in error:', err);
+      setError('Google sign-in failed: ' + err.message);
     }
   };
 
@@ -150,8 +166,8 @@ const Login = () => {
             <div>
               <button
                 type="button"
+                onClick={handleGoogleSignIn}
                 className="w-full flex justify-center items-center py-2 px-4 mt-2 border border-gray-300 rounded-lg shadow-sm text-sm font-medium text-gray-700 bg-white hover:bg-gray-100 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 transition"
-                // onClick={handleGoogleSignIn}
               >
                 Sign in with Google
               </button>
