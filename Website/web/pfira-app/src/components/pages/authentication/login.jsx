@@ -1,31 +1,26 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { CiLock, CiUser } from 'react-icons/ci';
+import { signInWithEmailAndPassword } from 'firebase/auth';
+import { auth } from "../../../firebase";
 
 const Login = () => {
   const navigate = useNavigate();
   const location = useLocation();
   const [formData, setFormData] = useState({
-    username: '',
+    username: '', // This will act as email
     password: ''
   });
   const [error, setError] = useState('');
 
-  // Check for error messages from protected routes
   useEffect(() => {
     if (location.state?.error) {
       setError(location.state.error);
-      // Clear the state to prevent showing the error again on refresh
       navigate(location.pathname, { replace: true });
     }
   }, [location.state, navigate, location.pathname]);
 
-  // Only redirect if there's an error from protected routes
-  // Don't auto-redirect logged-in users to prevent issues with landing page login
-  
-  // Clear any existing tokens when login page loads (for fresh login)
   useEffect(() => {
-    // Only clear if user is coming from landing page (not from protected route error)
     if (!location.state?.error) {
       localStorage.removeItem('authToken');
       localStorage.removeItem('userType');
@@ -38,48 +33,48 @@ const Login = () => {
       ...formData,
       [e.target.name]: e.target.value
     });
-    setError(''); // Clear error when user types
+    setError('');
   };
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
-    
-    // Check for admin credentials
-    if (formData.username === 'admin' && formData.password === 'admin') {
-      // Admin login successful
-      localStorage.setItem('authToken', 'admin-token');
-      localStorage.setItem('userType', 'admin');
+
+    try {
+      const userCredential = await signInWithEmailAndPassword(
+        auth,
+        formData.username, // This is email
+        formData.password
+      );
+      const user = userCredential.user;
+
+      // Store token or session as needed
+      localStorage.setItem('authToken', user.uid);
+      localStorage.setItem('userType', 'firebase');
       localStorage.setItem('loginTime', Date.now().toString());
-      navigate('/admin-dashboard');
-    } else if (formData.username === 'station' && formData.password === 'station') {
-      // Station login successful
-      localStorage.setItem('authToken', 'station-token');
-      localStorage.setItem('userType', 'station');
-      localStorage.setItem('loginTime', Date.now().toString());
+
       navigate('/station-dashboard');
-    } else {
-      // Invalid credentials
-      setError('Invalid username or password');
+    } catch (err) {
+      console.error('Firebase login error:', err);
+      setError('Login failed: ' + err.message);
     }
   };
 
   return (
     <div className="flex h-screen">
-      {/* Left Side - Login Form */}
       <div className="w-full md:w-1/2 bg-white flex items-center justify-center p-8">
         <div className="w-full max-w-md">
           <h1 className="text-3xl font-bold text-gray-800 mb-6">Welcome Back</h1>
-          
+
           {error && (
             <div className="mb-4 p-3 bg-red-100 border border-red-400 text-red-700 rounded">
               {error}
             </div>
           )}
-          
+
           <form onSubmit={handleSubmit} className="space-y-6">
             <div>
               <label htmlFor="username" className="block text-sm font-medium text-gray-700 mb-1">
-                Username
+                Email
               </label>
               <div className="relative">
                 <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
@@ -88,12 +83,12 @@ const Login = () => {
                 <input
                   id="username"
                   name="username"
-                  type="text"
+                  type="email"
                   required
                   value={formData.username}
                   onChange={handleChange}
                   className="pl-10 w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:border-red-500 outline-none transition"
-                  placeholder="Enter your username"
+                  placeholder="Enter your email"
                 />
               </div>
             </div>
@@ -134,6 +129,7 @@ const Login = () => {
 
               <div className="text-sm">
                 <button
+                  type="button"
                   onClick={() => navigate('/forgot-password')}
                   className="font-medium text-red-700 hover:text-red-700 hover:underline"
                 >
@@ -150,13 +146,13 @@ const Login = () => {
                 Sign in
               </button>
             </div>
+
             <div>
               <button
                 type="button"
                 className="w-full flex justify-center items-center py-2 px-4 mt-2 border border-gray-300 rounded-lg shadow-sm text-sm font-medium text-gray-700 bg-white hover:bg-gray-100 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 transition"
-                // onClick={handleGoogleSignIn} // Uncomment and implement this for real Google sign-in
+                // onClick={handleGoogleSignIn}
               >
-                {/* You can add a Google icon here if you want */}
                 Sign in with Google
               </button>
             </div>
@@ -171,11 +167,9 @@ const Login = () => {
               Register here
             </button>
           </div>
-
         </div>
       </div>
 
-      {/* Right Side - Red Background */}
       <div className="hidden md:flex md:w-1/2 bg-red-700 items-center justify-center">
         <div className="text-white text-center p-8 max-w-md">
           <h2 className="text-4xl font-bold mb-4">Project FIRA</h2>
