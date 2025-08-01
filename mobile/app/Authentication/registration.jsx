@@ -2,6 +2,8 @@ import React, { useState } from 'react';
 import { View, Text, TextInput, TouchableOpacity, Image, ScrollView, Alert } from 'react-native';
 import { useRouter } from 'expo-router';
 import { AntDesign } from '@expo/vector-icons';
+import { createUserWithEmailAndPassword } from 'firebase/auth';
+import { auth } from '../config/firebase'; // Adjust if needed
 
 const registration = () => {
   const router = useRouter();
@@ -37,15 +39,21 @@ const registration = () => {
     return Object.keys(newErrors).length === 0;
   };
 
-  const handleRegister = () => {
-    if (validate()) {
+  const handleRegister = async () => {
+    if (!validate()) return;
+
+    try {
+      const fakeEmail = `${formData.username}@firaregistration.com`;
+      await createUserWithEmailAndPassword(auth, fakeEmail, formData.password);
+
       Alert.alert(
         'Registration Successful',
         'Your account has been created!',
-        [
-          { text: 'OK', onPress: () => router.push('/Authentication/login') }
-        ]
+        [{ text: 'OK', onPress: () => router.push('/Authentication/login') }]
       );
+    } catch (error) {
+      console.error('Firebase registration error:', error);
+      Alert.alert('Registration Error', error.message);
     }
   };
 
@@ -58,90 +66,37 @@ const registration = () => {
 
   return (
     <ScrollView className="flex-1 bg-white px-6">
-      {/* Back Button */}
       <TouchableOpacity style={{ position: 'absolute', top: 40, left: 0, zIndex: 10 }} onPress={() => router.back()}>
         <AntDesign name="arrowleft" size={32} color="#dc2626" />
       </TouchableOpacity>
-      {/* Header */}
+
       <View className="items-center py-8 mt-8">
-        <Image 
-          source={require('../../assets/images/getstart2.png')}
-          className="w-20 h-20 mb-4"
-        />
-        <Text className="text-2xl font-bold text-fire">
-          Create Account
-        </Text>
+        <Image source={require('../../assets/images/getstart2.png')} className="w-20 h-20 mb-4" />
+        <Text className="text-2xl font-bold text-fire">Create Account</Text>
       </View>
 
-      {/* Registration Form */}
-      <View className="mb-4">
-        <Text className="text-gray-700 mb-1">First Name</Text>
-        <TextInput
-          className={`border ${errors.firstName ? 'border-fire' : 'border-gray-300'} rounded-lg px-4 py-3`}
-          placeholder="John"
-          value={formData.firstName}
-          onChangeText={(text) => handleChange('firstName', text)}
-        />
-        {errors.firstName && <Text className="text-fire text-sm mt-1">{errors.firstName}</Text>}
-      </View>
-
-      <View className="mb-4">
-        <Text className="text-gray-700 mb-1">Last Name</Text>
-        <TextInput
-          className={`border ${errors.lastName ? 'border-fire' : 'border-gray-300'} rounded-lg px-4 py-3`}
-          placeholder="Doe"
-          value={formData.lastName}
-          onChangeText={(text) => handleChange('lastName', text)}
-        />
-        {errors.lastName && <Text className="text-fire text-sm mt-1">{errors.lastName}</Text>}
-      </View>
-
-      <View className="mb-4">
-        <Text className="text-gray-700 mb-1">Username</Text>
-        <TextInput
-          className={`border ${errors.username ? 'border-fire' : 'border-gray-300'} rounded-lg px-4 py-3`}
-          placeholder="Enter your username"
-          value={formData.username}
-          onChangeText={(text) => handleChange('username', text)}
-        />
-        {errors.username && <Text className="text-fire text-sm mt-1">{errors.username}</Text>}
-      </View>
-
-      <View className="mb-4">
-        <Text className="text-gray-700 mb-1">Phone Number</Text>
-        <TextInput
-          className={`border ${errors.phoneNumber ? 'border-fire' : 'border-gray-300'} rounded-lg px-4 py-3`}
-          placeholder="09XXXXXXXXX"
-          value={formData.phoneNumber}
-          onChangeText={(text) => handleChange('phoneNumber', text)}
-          keyboardType="phone-pad"
-        />
-        {errors.phoneNumber && <Text className="text-fire text-sm mt-1">{errors.phoneNumber}</Text>}
-      </View>
-
-      <View className="mb-4">
-        <Text className="text-gray-700 mb-1">Password</Text>
-        <TextInput
-          className={`border ${errors.password ? 'border-fire' : 'border-gray-300'} rounded-lg px-4 py-3`}
-          placeholder="At least 6 characters"
-          secureTextEntry
-          value={formData.password}
-          onChangeText={(text) => handleChange('password', text)}
-        />
-        {errors.password && <Text className="text-fire text-sm mt-1">{errors.password}</Text>}
-      </View>
-
-      <View className="mb-6">
-        <Text className="text-gray-700 mb-1">Confirm Password</Text>
-        <TextInput
-          className={`border ${errors.confirmPassword ? 'border-fire' : 'border-gray-300'} rounded-lg px-4 py-3`}
-          placeholder="Confirm your password"
-          secureTextEntry
-          value={formData.confirmPassword}
-          onChangeText={(text) => handleChange('confirmPassword', text)}
-        />
-        {errors.confirmPassword && <Text className="text-fire text-sm mt-1">{errors.confirmPassword}</Text>}
-      </View>
+      {/* Form Fields */}
+      {['firstName', 'lastName', 'username', 'phoneNumber', 'password', 'confirmPassword'].map((field, idx) => (
+        <View className="mb-4" key={idx}>
+          <Text className="text-gray-700 mb-1">{field.replace(/([A-Z])/g, ' $1').replace(/^./, str => str.toUpperCase())}</Text>
+          <TextInput
+            className={`border ${errors[field] ? 'border-fire' : 'border-gray-300'} rounded-lg px-4 py-3`}
+            placeholder={
+              field === 'phoneNumber'
+                ? '09XXXXXXXXX'
+                : field === 'password' || field === 'confirmPassword'
+                ? 'At least 6 characters'
+                : ''
+            }
+            value={formData[field]}
+            onChangeText={(text) => handleChange(field, text)}
+            secureTextEntry={field === 'password' || field === 'confirmPassword'}
+            keyboardType={field === 'phoneNumber' ? 'phone-pad' : 'default'}
+            autoCapitalize="none"
+          />
+          {errors[field] && <Text className="text-fire text-sm mt-1">{errors[field]}</Text>}
+        </View>
+      ))}
 
       <View className="mb-8 flex-row items-start">
         <TouchableOpacity
@@ -157,17 +112,31 @@ const registration = () => {
         </Text>
       </View>
 
-      {/* Register Button */}
+      {/* Google button - not functional yet */}
       <TouchableOpacity
-        className="py-4 rounded-xl items-center mb-4 bg-fire"
-        onPress={handleRegister}
+        style={{
+          paddingVertical: 16,
+          borderRadius: 16,
+          alignItems: 'center',
+          marginBottom: 16,
+          flexDirection: 'row',
+          justifyContent: 'center',
+          borderWidth: 1,
+          borderColor: '#d1d5db',
+          backgroundColor: '#fff'
+        }}
+        onPress={() => {}}
       >
-        <Text className="text-white font-bold text-lg">
-          Register
+        <AntDesign name="google" size={24} color="#dc2626" style={{ marginRight: 8 }} />
+        <Text style={{ color: '#dc2626', fontWeight: 'bold', fontSize: 18 }}>
+          Register with Google
         </Text>
       </TouchableOpacity>
 
-      {/* Back to Login */}
+      <TouchableOpacity className="py-4 rounded-xl items-center mb-4 bg-fire" onPress={handleRegister}>
+        <Text className="text-white font-bold text-lg">Register</Text>
+      </TouchableOpacity>
+
       <View className="flex-row justify-center py-4">
         <Text className="text-gray-600">Already have an account? </Text>
         <TouchableOpacity onPress={() => router.push('/Authentication/login')}>
