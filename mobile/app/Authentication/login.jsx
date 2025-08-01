@@ -2,9 +2,10 @@ import React, { useState } from 'react';
 import { View, Text, TextInput, TouchableOpacity, Image, KeyboardAvoidingView, Platform, Alert } from 'react-native';
 import { useRouter } from 'expo-router';
 import { AntDesign } from '@expo/vector-icons';
-import { signInWithEmailAndPassword } from 'firebase/auth';
-import { auth, db } from '../config/firebase'; // make sure this is correct
-import { collection, query, where, getDocs } from 'firebase/firestore';
+import { signInWithEmailAndPassword, signInWithCredential, GoogleAuthProvider } from 'firebase/auth';
+import { auth, db } from '../config/firebase';
+import { collection, query, where, getDocs, setDoc, doc } from 'firebase/firestore';
+import { WebBrowser, Crypto, googleSignInConfig } from '../config/googleSignIn';
 
 const login = () => {
   const [email, setEmail] = useState('');
@@ -60,6 +61,80 @@ const login = () => {
     } catch (error) {
       console.error('Login error:', error);
       Alert.alert('Login Failed', error.message);
+    }
+  };
+
+    const handleGoogleSignIn = async () => {
+    try {
+      // Generate a random nonce for security
+      const nonce = await Crypto.digestStringAsync(
+        Crypto.CryptoDigestAlgorithm.SHA256,
+        Math.random().toString(),
+        { encoding: Crypto.CryptoEncoding.HEX }
+      );
+
+      // Create Google OAuth URL
+      const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?` +
+        `client_id=${googleSignInConfig.clientId}&` +
+        `redirect_uri=${encodeURIComponent(googleSignInConfig.redirectUri)}&` +
+        `response_type=id_token&` +
+        `scope=${encodeURIComponent(googleSignInConfig.scopes.join(' '))}&` +
+        `nonce=${nonce}`;
+
+      // Open browser for Google authentication
+      const result = await WebBrowser.openAuthSessionAsync(authUrl, googleSignInConfig.redirectUri);
+
+      if (result.type === 'success') {
+        // Parse the URL to get the id_token
+        const url = result.url;
+        const urlParams = new URLSearchParams(url.split('#')[1]);
+        const idToken = urlParams.get('id_token');
+        
+        if (idToken) {
+          // Create Firebase credential from Google ID token
+          const credential = GoogleAuthProvider.credential(idToken);
+          
+          // Sign in to Firebase with Google credential
+          const userCredential = await signInWithCredential(auth, credential);
+          const user = userCredential.user;
+
+          // Check if user exists in Firestore
+          const q = query(collection(db, 'mobileUsers'), where('email', '==', user.email));
+          const snapshot = await getDocs(q);
+
+          if (snapshot.empty) {
+            // User doesn't exist, create new account
+            const userData = {
+              uid: user.uid,
+              firstName: user.displayName?.split(' ')[0] || 'Google',
+              lastName: user.displayName?.split(' ').slice(1).join(' ') || 'User',
+              email: user.email,
+              phoneNumber: user.phoneNumber || '',
+              userType: 'citizen',
+              createdAt: new Date().toISOString(),
+              googleSignIn: true,
+            };
+
+            await setDoc(doc(db, 'mobileUsers', user.uid), userData);
+            Alert.alert('Registration Successful! 🎉', `Welcome, ${userData.firstName}! Your Google account has been registered.`);
+          } else {
+            // User exists, just sign in
+            const userData = snapshot.docs[0].data();
+            Alert.alert('Login Successful! 🎉', `Welcome back, ${userData.firstName || 'User'}!`);
+          }
+
+          router.replace('/Screens/CitizenScreen');
+        } else {
+          Alert.alert('Google Sign-In Failed', 'No ID token received from Google.');
+        }
+      } else if (result.type === 'cancel') {
+        Alert.alert('Sign In Cancelled', 'You cancelled the Google Sign-In process.');
+      } else {
+        Alert.alert('Google Sign-In Failed', 'An error occurred during sign-in.');
+      }
+    } catch (error) {
+      console.error('Google Sign-In error:', error);
+      Alert.alert('Google Sign-In Failed', error.message);
     }
   };
 
@@ -121,6 +196,39 @@ const login = () => {
 
         <TouchableOpacity className="bg-fire py-4 rounded-xl items-center mb-4" onPress={handleLogin}>
           <Text className="text-white font-bold text-lg">Login</Text>
+        </TouchableOpacity>
+
+        <View className="flex-row items-center mb-4">
+          <View className="flex-1 h-px bg-gray-300" />
+          <Text className="mx-4 text-gray-500 text-sm">or</Text>
+          <View className="flex-1 h-px bg-gray-300" />
+        </View>
+
+        <TouchableOpacity
+          style={{
+            paddingVertical: 16,
+            borderRadius: 12,
+            alignItems: 'center',
+            marginBottom: 16,
+            flexDirection: 'row',
+            justifyContent: 'center',
+            borderWidth: 1,
+            borderColor: '#e5e7eb',
+            backgroundColor: '#ffffff',
+            shadowColor: '#000',
+            shadowOffset: { width: 0, height: 2 },
+            shadowOpacity: 0.1,
+            shadowRadius: 3.84,
+            elevation: 5,
+          }}
+          onPress={handleGoogleSignIn}
+        >
+          <View style={{ width: 24, height: 24, marginRight: 12, justifyContent: 'center', alignItems: 'center' }}>
+            <AntDesign name="google" size={20} color="#dc2626" />
+          </View>
+          <Text style={{ color: '#dc2626', fontWeight: '600', fontSize: 16, letterSpacing: 0.5 }}>
+            Sign in with Google
+          </Text>
         </TouchableOpacity>
 
         <TouchableOpacity className="items-center mb-6">
