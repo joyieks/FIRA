@@ -10,7 +10,7 @@ const registration = () => {
   const [formData, setFormData] = useState({
     firstName: '',
     lastName: '',
-    username: '',
+    email: '',
     password: '',
     confirmPassword: '',
     phoneNumber: '',
@@ -22,7 +22,11 @@ const registration = () => {
     const newErrors = {};
     if (!formData.firstName) newErrors.firstName = 'First name is required';
     if (!formData.lastName) newErrors.lastName = 'Last name is required';
-    if (!formData.username) newErrors.username = 'Username is required';
+    if (!formData.email) {
+      newErrors.email = 'Email is required';
+    } else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(formData.email)) {
+      newErrors.email = 'Please enter a valid email';
+    }
     if (!formData.phoneNumber) newErrors.phoneNumber = 'Phone number is required';
     if (!formData.password) {
       newErrors.password = 'Password is required';
@@ -43,8 +47,7 @@ const registration = () => {
     if (!validate()) return;
 
     try {
-      const fakeEmail = `${formData.username}@firaregistration.com`;
-      await createUserWithEmailAndPassword(auth, fakeEmail, formData.password);
+      await createUserWithEmailAndPassword(auth, formData.email, formData.password);
 
       Alert.alert(
         'Registration Successful',
@@ -76,13 +79,15 @@ const registration = () => {
       </View>
 
       {/* Form Fields */}
-      {['firstName', 'lastName', 'username', 'phoneNumber', 'password', 'confirmPassword'].map((field, idx) => (
+      {['firstName', 'lastName', 'password', 'confirmPassword', 'email', 'phoneNumber'].map((field, idx) => (
         <View className="mb-4" key={idx}>
           <Text className="text-gray-700 mb-1">{field.replace(/([A-Z])/g, ' $1').replace(/^./, str => str.toUpperCase())}</Text>
           <TextInput
             className={`border ${errors[field] ? 'border-fire' : 'border-gray-300'} rounded-lg px-4 py-3`}
             placeholder={
-              field === 'phoneNumber'
+              field === 'email'
+                ? 'Enter your email address'
+                : field === 'phoneNumber'
                 ? '09XXXXXXXXX'
                 : field === 'password' || field === 'confirmPassword'
                 ? 'At least 6 characters'
@@ -91,7 +96,7 @@ const registration = () => {
             value={formData[field]}
             onChangeText={(text) => handleChange(field, text)}
             secureTextEntry={field === 'password' || field === 'confirmPassword'}
-            keyboardType={field === 'phoneNumber' ? 'phone-pad' : 'default'}
+            keyboardType={field === 'phoneNumber' ? 'phone-pad' : field === 'email' ? 'email-address' : 'default'}
             autoCapitalize="none"
           />
           {errors[field] && <Text className="text-fire text-sm mt-1">{errors[field]}</Text>}
@@ -112,29 +117,57 @@ const registration = () => {
         </Text>
       </View>
 
+      <TouchableOpacity className="py-4 rounded-xl items-center mb-4 bg-fire" onPress={handleRegister}>
+        <Text className="text-white font-bold text-lg">Register</Text>
+      </TouchableOpacity>
+
+      {/* Register using text */}
+      <View className="flex-row items-center mb-4">
+        <View className="flex-1 h-px bg-gray-300" />
+        <Text className="mx-4 text-gray-500 text-sm">or</Text>
+        <View className="flex-1 h-px bg-gray-300" />
+      </View>
+
       {/* Google button - not functional yet */}
       <TouchableOpacity
         style={{
           paddingVertical: 16,
-          borderRadius: 16,
+          borderRadius: 12,
           alignItems: 'center',
           marginBottom: 16,
           flexDirection: 'row',
           justifyContent: 'center',
           borderWidth: 1,
-          borderColor: '#d1d5db',
-          backgroundColor: '#fff'
+          borderColor: '#e5e7eb',
+          backgroundColor: '#ffffff',
+          shadowColor: '#000',
+          shadowOffset: {
+            width: 0,
+            height: 2,
+          },
+          shadowOpacity: 0.1,
+          shadowRadius: 3.84,
+          elevation: 5,
         }}
         onPress={() => {}}
       >
-        <AntDesign name="google" size={24} color="#dc2626" style={{ marginRight: 8 }} />
-        <Text style={{ color: '#dc2626', fontWeight: 'bold', fontSize: 18 }}>
+        <View style={{ 
+          width: 24, 
+          height: 24, 
+          marginRight: 12,
+          justifyContent: 'center',
+          alignItems: 'center'
+        }}>
+          <AntDesign name="google" size={20} color="#dc2626" />
+        </View>
+        <Text style={{ 
+          color: '#dc2626', 
+          fontWeight: '600', 
+          fontSize: 16,
+          letterSpacing: 0.5
+        }}>
           Register with Google
         </Text>
-      </TouchableOpacity>
-
-      <TouchableOpacity className="py-4 rounded-xl items-center mb-4 bg-fire" onPress={handleRegister}>
-        <Text className="text-white font-bold text-lg">Register</Text>
       </TouchableOpacity>
 
       <View className="flex-row justify-center py-4">
