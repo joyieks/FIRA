@@ -137,6 +137,27 @@ const login = () => {
             <Text className="text-white font-bold text-lg">Login</Text>
           </TouchableOpacity>
 
+          {/* Google Login Button */}
+          <TouchableOpacity
+            style={{
+              paddingVertical: 16,
+              borderRadius: 16,
+              alignItems: 'center',
+              marginBottom: 16,
+              flexDirection: 'row',
+              justifyContent: 'center',
+              borderWidth: 1,
+              borderColor: '#d1d5db',
+              backgroundColor: '#fff'
+            }}
+            onPress={() => { /* Google login logic goes here */ }}
+          >
+            <AntDesign name="google" size={24} color="#dc2626" style={{ marginRight: 8 }} />
+            <Text style={{ color: '#dc2626', fontWeight: 'bold', fontSize: 18 }}>
+              Login with Google
+            </Text>
+          </TouchableOpacity>
+
           {/* Forgot Password */}
           <TouchableOpacity className="items-center mb-6">
             <Text className="text-fire font-medium">Forgot Password?</Text>
