@@ -12,11 +12,13 @@ const registration = () => {
     firstName: '',
     lastName: '',
     username: '',
+    email: '',
     password: '',
     confirmPassword: '',
     phoneNumber: '',
     agreeTerms: false,
   });
+
   const [errors, setErrors] = useState({});
 
   const validate = () => {
@@ -24,6 +26,7 @@ const registration = () => {
     if (!formData.firstName) newErrors.firstName = 'First name is required';
     if (!formData.lastName) newErrors.lastName = 'Last name is required';
     if (!formData.username) newErrors.username = 'Username is required';
+    if (!formData.email) newErrors.email = 'Email is required';
     if (!formData.phoneNumber) newErrors.phoneNumber = 'Phone number is required';
     if (!formData.password) {
       newErrors.password = 'Password is required';
@@ -45,32 +48,23 @@ const registration = () => {
 
     try {
       console.log('Starting mobile registration process...');
-      console.log('Firebase auth object:', auth);
-      console.log('Firebase db object:', db);
-      
-      const fakeEmail = `${formData.username}@firaregistration.com`;
-      console.log('Creating Firebase user account with email:', fakeEmail);
-      
-      const userCredential = await createUserWithEmailAndPassword(auth, fakeEmail, formData.password);
-      const user = userCredential.user;
-      console.log('User created successfully:', user.uid);
 
-      // Store user data in Firestore
+      const userCredential = await createUserWithEmailAndPassword(auth, formData.email, formData.password);
+      const user = userCredential.user;
+
       const userData = {
         uid: user.uid,
         firstName: formData.firstName,
         lastName: formData.lastName,
         username: formData.username,
+        email: formData.email,
         phoneNumber: formData.phoneNumber,
-        email: fakeEmail,
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
-        userType: 'citizen' // or 'responder' based on your app logic
+        userType: 'citizen',
       };
 
-      console.log('Storing user data in Firestore...');
-      await setDoc(doc(db, 'users', user.uid), userData);
-      console.log('User data stored successfully');
+      await setDoc(doc(db, 'mobileUsers', user.uid), userData);
 
       Alert.alert(
         'Registration Successful',
@@ -79,44 +73,30 @@ const registration = () => {
       );
     } catch (error) {
       console.error('Firebase registration error:', error);
-      console.error('Error details:', {
-        code: error.code,
-        message: error.message,
-        stack: error.stack
-      });
-      
-      // Provide user-friendly error messages
       let errorMessage = 'Registration failed. Please try again.';
-      
       switch (error.code) {
         case 'auth/email-already-in-use':
-          errorMessage = 'This email address is already registered. Please use a different email or try logging in instead.';
+          errorMessage = 'This email is already in use.';
           break;
         case 'auth/invalid-email':
-          errorMessage = 'Please enter a valid email address.';
+          errorMessage = 'Please enter a valid email.';
           break;
         case 'auth/weak-password':
-          errorMessage = 'Password is too weak. Please choose a stronger password (at least 6 characters).';
+          errorMessage = 'Password is too weak. Must be at least 6 characters.';
           break;
         case 'auth/network-request-failed':
-          errorMessage = 'Network error. Please check your internet connection and try again.';
-          break;
-        case 'permission-denied':
-          errorMessage = 'Database permission error. Please contact the administrator to update Firestore security rules.';
+          errorMessage = 'Network error. Please check your connection.';
           break;
         default:
           errorMessage = `Registration failed: ${error.message}`;
       }
-      
       Alert.alert('Registration Error', errorMessage);
     }
   };
 
   const handleChange = (name, value) => {
     setFormData({ ...formData, [name]: value });
-    if (errors[name]) {
-      setErrors({ ...errors, [name]: null });
-    }
+    if (errors[name]) setErrors({ ...errors, [name]: null });
   };
 
   return (
@@ -130,10 +110,11 @@ const registration = () => {
         <Text className="text-2xl font-bold text-fire">Create Account</Text>
       </View>
 
-      {/* Form Fields */}
-      {['firstName', 'lastName', 'username', 'phoneNumber', 'password', 'confirmPassword'].map((field, idx) => (
+      {['firstName', 'lastName', 'username', 'email', 'phoneNumber', 'password', 'confirmPassword'].map((field, idx) => (
         <View className="mb-4" key={idx}>
-          <Text className="text-gray-700 mb-1">{field.replace(/([A-Z])/g, ' $1').replace(/^./, str => str.toUpperCase())}</Text>
+          <Text className="text-gray-700 mb-1">
+            {field.replace(/([A-Z])/g, ' $1').replace(/^./, str => str.toUpperCase())}
+          </Text>
           <TextInput
             className={`border ${errors[field] ? 'border-fire' : 'border-gray-300'} rounded-lg px-4 py-3`}
             placeholder={
@@ -141,12 +122,14 @@ const registration = () => {
                 ? '09XXXXXXXXX'
                 : field === 'password' || field === 'confirmPassword'
                 ? 'At least 6 characters'
+                : field === 'email'
+                ? 'example@email.com'
                 : ''
             }
             value={formData[field]}
             onChangeText={(text) => handleChange(field, text)}
             secureTextEntry={field === 'password' || field === 'confirmPassword'}
-            keyboardType={field === 'phoneNumber' ? 'phone-pad' : 'default'}
+            keyboardType={field === 'phoneNumber' ? 'phone-pad' : field === 'email' ? 'email-address' : 'default'}
             autoCapitalize="none"
           />
           {errors[field] && <Text className="text-fire text-sm mt-1">{errors[field]}</Text>}
@@ -167,7 +150,6 @@ const registration = () => {
         </Text>
       </View>
 
-      {/* Google button - not functional yet */}
       <TouchableOpacity
         style={{
           paddingVertical: 16,
