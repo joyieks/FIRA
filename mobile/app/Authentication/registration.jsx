@@ -3,7 +3,8 @@ import { View, Text, TextInput, TouchableOpacity, Image, ScrollView, Alert } fro
 import { useRouter } from 'expo-router';
 import { AntDesign } from '@expo/vector-icons';
 import { createUserWithEmailAndPassword } from 'firebase/auth';
-import { auth } from '../config/firebase'; // Adjust if needed
+import { auth, db } from '../config/firebase'; // include db
+import { doc, setDoc } from 'firebase/firestore'; // Firestore methods
 
 const registration = () => {
   const router = useRouter();
@@ -47,7 +48,20 @@ const registration = () => {
     if (!validate()) return;
 
     try {
-      await createUserWithEmailAndPassword(auth, formData.email, formData.password);
+      const userCredential = await createUserWithEmailAndPassword(auth, formData.email, formData.password);
+      const user = userCredential.user;
+
+      const userData = {
+        uid: user.uid,
+        firstName: formData.firstName,
+        lastName: formData.lastName,
+        email: formData.email,
+        phoneNumber: formData.phoneNumber,
+        userType: 'citizen',
+        createdAt: new Date().toISOString(),
+      };
+
+      await setDoc(doc(db, 'mobileUsers', user.uid), userData);
 
       Alert.alert(
         'Registration Successful',
@@ -78,10 +92,11 @@ const registration = () => {
         <Text className="text-2xl font-bold text-fire">Create Account</Text>
       </View>
 
-      {/* Form Fields */}
       {['firstName', 'lastName', 'password', 'confirmPassword', 'email', 'phoneNumber'].map((field, idx) => (
         <View className="mb-4" key={idx}>
-          <Text className="text-gray-700 mb-1">{field.replace(/([A-Z])/g, ' $1').replace(/^./, str => str.toUpperCase())}</Text>
+          <Text className="text-gray-700 mb-1">
+            {field.replace(/([A-Z])/g, ' $1').replace(/^./, str => str.toUpperCase())}
+          </Text>
           <TextInput
             className={`border ${errors[field] ? 'border-fire' : 'border-gray-300'} rounded-lg px-4 py-3`}
             placeholder={
@@ -96,7 +111,9 @@ const registration = () => {
             value={formData[field]}
             onChangeText={(text) => handleChange(field, text)}
             secureTextEntry={field === 'password' || field === 'confirmPassword'}
-            keyboardType={field === 'phoneNumber' ? 'phone-pad' : field === 'email' ? 'email-address' : 'default'}
+            keyboardType={
+              field === 'phoneNumber' ? 'phone-pad' : field === 'email' ? 'email-address' : 'default'
+            }
             autoCapitalize="none"
           />
           {errors[field] && <Text className="text-fire text-sm mt-1">{errors[field]}</Text>}
@@ -112,8 +129,13 @@ const registration = () => {
         </TouchableOpacity>
         <Text className="flex-1 text-gray-600">
           By signing up, you agree to our{' '}
-          <Text className="text-fire" onPress={() => router.push('/Policy/TermsAndConditions')}>Terms and Conditions</Text> and{' '}
-          <Text className="text-fire" onPress={() => router.push('/Policy/PrivacyAndPolicy')}>Privacy Policy</Text>
+          <Text className="text-fire" onPress={() => router.push('/Policy/TermsAndConditions')}>
+            Terms and Conditions
+          </Text>{' '}
+          and{' '}
+          <Text className="text-fire" onPress={() => router.push('/Policy/PrivacyAndPolicy')}>
+            Privacy Policy
+          </Text>
         </Text>
       </View>
 
@@ -121,14 +143,12 @@ const registration = () => {
         <Text className="text-white font-bold text-lg">Register</Text>
       </TouchableOpacity>
 
-      {/* Register using text */}
       <View className="flex-row items-center mb-4">
         <View className="flex-1 h-px bg-gray-300" />
         <Text className="mx-4 text-gray-500 text-sm">or</Text>
         <View className="flex-1 h-px bg-gray-300" />
       </View>
 
-      {/* Google button - not functional yet */}
       <TouchableOpacity
         style={{
           paddingVertical: 16,
@@ -141,31 +161,17 @@ const registration = () => {
           borderColor: '#e5e7eb',
           backgroundColor: '#ffffff',
           shadowColor: '#000',
-          shadowOffset: {
-            width: 0,
-            height: 2,
-          },
+          shadowOffset: { width: 0, height: 2 },
           shadowOpacity: 0.1,
           shadowRadius: 3.84,
           elevation: 5,
         }}
         onPress={() => {}}
       >
-        <View style={{ 
-          width: 24, 
-          height: 24, 
-          marginRight: 12,
-          justifyContent: 'center',
-          alignItems: 'center'
-        }}>
+        <View style={{ width: 24, height: 24, marginRight: 12, justifyContent: 'center', alignItems: 'center' }}>
           <AntDesign name="google" size={20} color="#dc2626" />
         </View>
-        <Text style={{ 
-          color: '#dc2626', 
-          fontWeight: '600', 
-          fontSize: 16,
-          letterSpacing: 0.5
-        }}>
+        <Text style={{ color: '#dc2626', fontWeight: '600', fontSize: 16, letterSpacing: 0.5 }}>
           Register with Google
         </Text>
       </TouchableOpacity>

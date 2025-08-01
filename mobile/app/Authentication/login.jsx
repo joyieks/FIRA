@@ -1,26 +1,24 @@
 import React, { useState } from 'react';
-import { View, Text, TextInput, TouchableOpacity, Image, KeyboardAvoidingView, Platform } from 'react-native';
+import { View, Text, TextInput, TouchableOpacity, Image, KeyboardAvoidingView, Platform, Alert } from 'react-native';
 import { useRouter } from 'expo-router';
 import { AntDesign } from '@expo/vector-icons';
+import { signInWithEmailAndPassword } from 'firebase/auth';
+import { auth, db } from '../config/firebase'; // make sure this is correct
+import { collection, query, where, getDocs } from 'firebase/firestore';
 
 const login = () => {
-  // Prefill with test credentials
-  const [email, setEmail] = useState('citizen@gmail.com');
-  const [password, setPassword] = useState('citizen');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [emailError, setEmailError] = useState('');
   const [passwordError, setPasswordError] = useState('');
   const router = useRouter();
 
-  const validateEmail = (text) => {
-    const re = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    return re.test(text);
-  };
+  const validateEmail = (text) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(text);
 
-  const handleLogin = () => {
+  const handleLogin = async () => {
     let isValid = true;
 
-    // Validate email
     if (!email) {
       setEmailError('Email is required');
       isValid = false;
@@ -31,7 +29,6 @@ const login = () => {
       setEmailError('');
     }
 
-    // Validate password
     if (!password) {
       setPasswordError('Password is required');
       isValid = false;
@@ -42,22 +39,27 @@ const login = () => {
       setPasswordError('');
     }
 
-    if (isValid) {
-      // Check for test credentials
-      if (email === 'citizen@gmail.com' && password === 'citizen') {
+    if (!isValid) return;
+
+    try {
+      // Sign in via Firebase Auth
+      const userCredential = await signInWithEmailAndPassword(auth, email, password);
+      const user = userCredential.user;
+
+      // Check if this user exists in 'mobileUsers' Firestore
+      const q = query(collection(db, 'mobileUsers'), where('email', '==', email));
+      const snapshot = await getDocs(q);
+
+      if (!snapshot.empty) {
+        const userData = snapshot.docs[0].data();
+        Alert.alert('Login Successful', `Welcome, ${userData.firstName || 'User'}!`);
         router.replace('/Screens/CitizenScreen');
-      } else if (email === 'responders@gmail.com' && password === 'responders') {
-        // Use the correct route for responders screen
-        router.replace('/Screens/RespondersScreen');
-      } else if (email === 'admin@gmail.com' && password === 'admin') {
-        // Use the correct route for admin screen
-        router.replace('/Screens/AdminScreen');
-      } else if (email === 'station@gmail.com' && password === 'station') {
-        // Use the correct route for station screen
-        router.replace('/Screens/StationScreen');
       } else {
-        setPasswordError('Invalid credentials.\nCitizen: citizen@gmail.com / citizen\nResponder: responders@gmail.com / responders\nAdmin: admin@gmail.com / admin\nStation: station@gmail.com / station');
+        Alert.alert('Login Error', 'No user record found in mobileUsers collection.');
       }
+    } catch (error) {
+      console.error('Login error:', error);
+      Alert.alert('Login Failed', error.message);
     }
   };
 
@@ -66,85 +68,72 @@ const login = () => {
       behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
       className="flex-1 bg-white"
     >
-      {/* <ScrollView contentContainerStyle={{ flexGrow: 1 }} keyboardShouldPersistTaps="handled"> */}
-        <View className="flex-1 px-8 justify-center">
-          {/* Back Button */}
-          <TouchableOpacity style={{ position: 'absolute', top: 40, left: 20, zIndex: 10 }} onPress={() => router.back()}>
-            <AntDesign name="arrowleft" size={32} color="#dc2626" />
-          </TouchableOpacity>
-          {/* Logo */}
-          <View className="items-center mb-12">
-            <Image
-              source={require('../../assets/images/firemen.png')}
-              className="w-24 h-24 mb-4"
-            />
-            <Text className="text-3xl font-bold text-fire">Project FIRA</Text>
-          </View>
+      <View className="flex-1 px-8 justify-center">
+        <TouchableOpacity style={{ position: 'absolute', top: 40, left: 20, zIndex: 10 }} onPress={() => router.back()}>
+          <AntDesign name="arrowleft" size={32} color="#dc2626" />
+        </TouchableOpacity>
 
-          {/* Login Form */}
-          <View className="mb-6">
-            <Text className="text-lg font-medium text-gray-700 mb-2">Email</Text>
+        <View className="items-center mb-12">
+          <Image source={require('../../assets/images/firemen.png')} className="w-24 h-24 mb-4" />
+          <Text className="text-3xl font-bold text-fire">Project FIRA</Text>
+        </View>
+
+        <View className="mb-6">
+          <Text className="text-lg font-medium text-gray-700 mb-2">Email</Text>
+          <TextInput
+            className={`border ${emailError ? 'border-fire' : 'border-gray-300'} rounded-lg px-4 py-3 mb-1`}
+            placeholder="Enter your email"
+            keyboardType="email-address"
+            autoCapitalize="none"
+            value={email}
+            onChangeText={(text) => {
+              setEmail(text);
+              if (emailError) setEmailError('');
+            }}
+          />
+          {emailError ? <Text className="text-fire text-sm">{emailError}</Text> : null}
+        </View>
+
+        <View className="mb-8">
+          <Text className="text-lg font-medium text-gray-700 mb-2">Password</Text>
+          <View className="relative">
             <TextInput
-              className={`border ${emailError ? 'border-fire' : 'border-gray-300'} rounded-lg px-4 py-3 mb-1`}
-              placeholder="Enter your email"
-              keyboardType="email-address"
-              autoCapitalize="none"
-              value={email}
+              className={`border ${passwordError ? 'border-fire' : 'border-gray-300'} rounded-lg px-4 py-3 mb-1`}
+              placeholder="Enter your password"
+              secureTextEntry={!showPassword}
+              value={password}
               onChangeText={(text) => {
-                setEmail(text);
-                if (emailError) setEmailError('');
+                setPassword(text);
+                if (passwordError) setPasswordError('');
               }}
             />
-            {emailError ? <Text className="text-fire text-sm">{emailError}</Text> : null}
-          </View>
-
-          <View className="mb-8">
-            <Text className="text-lg font-medium text-gray-700 mb-2">Password</Text>
-            <View className="relative">
-              <TextInput
-                className={`border ${passwordError ? 'border-fire' : 'border-gray-300'} rounded-lg px-4 py-3 mb-1`}
-                placeholder="Enter your password"
-                secureTextEntry={!showPassword}
-                value={password}
-                onChangeText={(text) => {
-                  setPassword(text);
-                  if (passwordError) setPasswordError('');
-                }}
-              />
-              <TouchableOpacity
-                className="absolute right-3 top-3"
-                onPress={() => setShowPassword(!showPassword)}
-              >
-                <Text className="text-fire font-medium">
-                  {showPassword ? 'Hide' : 'Show'}
-                </Text>
-              </TouchableOpacity>
-            </View>
-            {passwordError ? <Text className="text-fire text-sm">{passwordError}</Text> : null}
-          </View>
-
-          {/* Login Button */}
-          <TouchableOpacity
-            className="bg-fire py-4 rounded-xl items-center mb-4"
-            onPress={handleLogin}
-          >
-            <Text className="text-white font-bold text-lg">Login</Text>
-          </TouchableOpacity>
-
-          {/* Forgot Password */}
-          <TouchableOpacity className="items-center mb-6">
-            <Text className="text-fire font-medium">Forgot Password?</Text>
-          </TouchableOpacity>
-
-          {/* Sign Up Link */}
-          <View className="flex-row justify-center">
-            <Text className="text-gray-600">Don't have an account? </Text>
-            <TouchableOpacity onPress={() => router.push('/Authentication/registration')}>
-              <Text className="text-fire font-medium">Sign Up</Text>
+            <TouchableOpacity
+              className="absolute right-3 top-3"
+              onPress={() => setShowPassword(!showPassword)}
+            >
+              <Text className="text-fire font-medium">
+                {showPassword ? 'Hide' : 'Show'}
+              </Text>
             </TouchableOpacity>
           </View>
+          {passwordError ? <Text className="text-fire text-sm">{passwordError}</Text> : null}
         </View>
-      {/* </ScrollView> */}
+
+        <TouchableOpacity className="bg-fire py-4 rounded-xl items-center mb-4" onPress={handleLogin}>
+          <Text className="text-white font-bold text-lg">Login</Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity className="items-center mb-6">
+          <Text className="text-fire font-medium">Forgot Password?</Text>
+        </TouchableOpacity>
+
+        <View className="flex-row justify-center">
+          <Text className="text-gray-600">Don't have an account? </Text>
+          <TouchableOpacity onPress={() => router.push('/Authentication/registration')}>
+            <Text className="text-fire font-medium">Sign Up</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
     </KeyboardAvoidingView>
   );
 };
