@@ -3,7 +3,7 @@ import { View, Alert } from 'react-native';
 import MapView, { Marker } from 'react-native-maps';
 import * as Location from 'expo-location';
 
-export default function RMap() {
+export default function SMap() {
   const [location, setLocation] = useState(null);
   const [errorMsg, setErrorMsg] = useState(null);
 
@@ -55,4 +55,4 @@ export default function RMap() {
       </MapView>
     </View>
   );
-}
+} 

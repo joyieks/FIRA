@@ -6,7 +6,7 @@ const TABS = [
   { id: 'Notifications', icon: 'notifications', label: 'Notifications' },
   { id: 'Map', icon: 'map', label: 'Map' },
   { id: 'FireStatus', icon: 'whatshot', label: 'Status' },
-  { id: 'Settings', icon: 'settings', label: 'Settings' },
+  { id: 'Chat', icon: 'chat', label: 'Chat' },
   { id: 'Profile', icon: 'person', label: 'Profile' },
 ];
 
@@ -17,7 +17,7 @@ const { width } = Dimensions.get('window');
 const TAB_WIDTH = width / TABS.length;
 const CIRCLE_SIZE = 56;
 
-const CNavbarMenu = ({ activeTab, setActiveTab }) => {
+const ANavbarMenu = ({ activeTab, setActiveTab }) => {
   const animValue = React.useRef(new Animated.Value(activeTab)).current;
 
   React.useEffect(() => {
@@ -102,8 +102,8 @@ const CNavbarMenu = ({ activeTab, setActiveTab }) => {
   );
 };
 
-export default CNavbarMenu;
+export default ANavbarMenu;
 
 export const options = {
   headerShown: false,
-};
+}; 

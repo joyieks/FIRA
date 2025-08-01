@@ -35,8 +35,8 @@ const login = () => {
     if (!password) {
       setPasswordError('Password is required');
       isValid = false;
-    } else if (password.length < 6) {
-      setPasswordError('Password must be at least 6 characters');
+    } else if (password.length < 4) {
+      setPasswordError('Password must be at least 4 characters');
       isValid = false;
     } else {
       setPasswordError('');
@@ -49,8 +49,14 @@ const login = () => {
       } else if (email === 'responders@gmail.com' && password === 'responders') {
         // Use the correct route for responders screen
         router.replace('/Screens/RespondersScreen');
+      } else if (email === 'admin@gmail.com' && password === 'admin') {
+        // Use the correct route for admin screen
+        router.replace('/Screens/AdminScreen');
+      } else if (email === 'station@gmail.com' && password === 'station') {
+        // Use the correct route for station screen
+        router.replace('/Screens/StationScreen');
       } else {
-        setPasswordError('Invalid credentials.\nCitizen: citizen@gmail.com / citizen\nResponder: responders@gmail.com / responders');
+        setPasswordError('Invalid credentials.\nCitizen: citizen@gmail.com / citizen\nResponder: responders@gmail.com / responders\nAdmin: admin@gmail.com / admin\nStation: station@gmail.com / station');
       }
     }
   };

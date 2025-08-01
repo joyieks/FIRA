@@ -15,8 +15,12 @@ export default function RootLayout() {
       <Stack.Screen name="Screens/CitizenScreen" />
       {/* Optional wildcard for other subroutes under CitizenScreen */}
       <Stack.Screen name="Screens/CitizenScreen/*" />
+      <Stack.Screen name="Screens/RespondersScreen" />
+      <Stack.Screen name="Screens/AdminScreen" />
+      <Stack.Screen name="Screens/StationScreen" />
       <Stack.Screen name="Screens/*" />
       <Stack.Screen name="Citizens/CNavBarMenu/CNavbarMenu" />
     </Stack>
   );
 }
+

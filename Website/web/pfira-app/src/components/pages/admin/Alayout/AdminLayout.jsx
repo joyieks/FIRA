@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { FiMenu, FiX, FiBell, FiUser, FiSettings, FiLogOut, FiUsers, FiFileText, FiPieChart, FiShoppingCart } from 'react-icons/fi';
 import { GrOverview } from "react-icons/gr";
 import { FaMapLocationDot } from "react-icons/fa6";
@@ -13,6 +13,8 @@ const AdminLayout = ({ children }) => {
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [notifications, setNotifications] = useState([]);
   const location = useLocation();
+  const profileRef = useRef(null);
+  const notificationsRef = useRef(null);
 
   const toggleSidebar = () => setSidebarOpen(!sidebarOpen);
   const toggleProfile = () => setProfileOpen(!profileOpen);
@@ -36,6 +38,23 @@ const AdminLayout = ({ children }) => {
 
     window.addEventListener('storage', handleStorageChange);
     return () => window.removeEventListener('storage', handleStorageChange);
+  }, []);
+
+  // Handle clicks outside dropdowns
+  useEffect(() => {
+    const handleClickOutside = (event) => {
+      if (profileRef.current && !profileRef.current.contains(event.target)) {
+        setProfileOpen(false);
+      }
+      if (notificationsRef.current && !notificationsRef.current.contains(event.target)) {
+        setNotificationsOpen(false);
+      }
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
   }, []);
 
   const unreadCount = notifications.filter(n => !n.read).length;
@@ -121,7 +140,7 @@ const AdminLayout = ({ children }) => {
             
             <div className="flex items-center space-x-4">
               {/* Notifications */}
-              <div className="relative">
+              <div className="relative" ref={notificationsRef}>
                 <button 
                   onClick={toggleNotifications}
                   className="relative p-2 text-gray-400 hover:text-gray-600 focus:outline-none"
@@ -200,7 +219,7 @@ const AdminLayout = ({ children }) => {
               </div>
               
               {/* Profile Dropdown */}
-              <div className="relative">
+              <div className="relative" ref={profileRef}>
                 <button 
                   onClick={toggleProfile}
                   className="flex items-center space-x-2 focus:outline-none"

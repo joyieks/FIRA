@@ -3,9 +3,9 @@ import { View, TouchableOpacity, Animated, Dimensions, Text } from 'react-native
 import { MaterialIcons } from '@expo/vector-icons';
 
 const TABS = [
-  { id: 'FireStatus', icon: 'whatshot', label: 'Status' },
   { id: 'Notifications', icon: 'notifications', label: 'Notifications' },
   { id: 'Map', icon: 'map', label: 'Map' },
+  { id: 'FireStatus', icon: 'whatshot', label: 'Status' },
   { id: 'Chat', icon: 'chat', label: 'Chat' },
   { id: 'Profile', icon: 'person', label: 'Profile' },
 ];

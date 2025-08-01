@@ -47,13 +47,6 @@ const Admin_Profile = () => {
               <h1 className="text-2xl font-bold">Admin Profile</h1>
               <p className="text-red-100 mt-1">Cebu City Emergency Response System</p>
             </div>
-            <button 
-              onClick={() => setIsDisabled(!isDisabled)}
-              className={`px-4 py-2 rounded-lg flex items-center ${isDisabled ? 'bg-yellow-500 hover:bg-yellow-600' : 'bg-gray-700 hover:bg-gray-800'}`}
-            >
-              {isDisabled ? <FiUnlock className="mr-2" /> : <FiLock className="mr-2" />}
-              {isDisabled ? 'Enable Account' : 'Disable Account'}
-            </button>
           </div>
         </div>
         {/* Profile Content */}
@@ -88,13 +81,6 @@ const Admin_Profile = () => {
                 <p className="text-gray-600">{profileData.position}</p>
                 <p className="text-sm text-gray-500 mt-2">Last login: {profileData.lastLogin}</p>
               </div>
-              <button 
-                onClick={() => window.location.href = '/settings'}
-                className="mt-6 px-4 py-2 bg-gray-200 text-gray-700 rounded-lg flex items-center hover:bg-gray-300"
-              >
-                <FiSettings className="mr-2" />
-                Go to Settings
-              </button>
             </div>
             {/* Profile Information Section */}
             <div className="w-full md:w-2/3">

@@ -181,15 +181,7 @@ const Afira_chat = () => {
             </div>
           </div>
           <div className="flex space-x-2">
-            <button className="p-2 text-gray-600 hover:bg-gray-100 rounded-full">
-              <FiPhone size={20} />
-            </button>
-            <button className="p-2 text-gray-600 hover:bg-gray-100 rounded-full">
-              <FiVideo size={20} />
-            </button>
-            <button className="p-2 text-gray-600 hover:bg-gray-100 rounded-full">
-              <FiMapPin size={20} />
-            </button>
+            {/* Removed video call, map, and call icons */}
           </div>
         </div>
         
@@ -248,9 +240,7 @@ const Afira_chat = () => {
             <button className="p-2 text-gray-500 hover:text-gray-700 mr-2">
               <FiPaperclip size={20} />
             </button>
-            <button className="p-2 text-gray-500 hover:text-gray-700 mr-2">
-              <FiMic size={20} />
-            </button>
+            {/* Removed voice message icon */}
             <div className="flex-1 relative">
               <textarea
                 value={newMessage}
