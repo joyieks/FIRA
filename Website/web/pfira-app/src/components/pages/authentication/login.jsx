@@ -1,8 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { CiLock, CiUser } from 'react-icons/ci';
-import { signInWithEmailAndPassword, signInWithPopup, GoogleAuthProvider } from 'firebase/auth';
-import { auth } from "../../../firebase";
 
 const Login = () => {
   const navigate = useNavigate();
@@ -39,39 +37,18 @@ const Login = () => {
   const handleSubmit = async (e) => {
     e.preventDefault();
 
-    try {
-      const userCredential = await signInWithEmailAndPassword(
-        auth,
-        formData.username,
-        formData.password
-      );
-      const user = userCredential.user;
-
-      localStorage.setItem('authToken', user.uid);
-      localStorage.setItem('userType', 'firebase');
+    // Simple admin login check - accept both "admin" and "admin@" as valid
+    const email = formData.username;
+    const isAdminEmail = email === 'admin' || email === 'admin@' || email === 'admin@admin.com';
+    
+    if (isAdminEmail && formData.password === 'admin') {
+      localStorage.setItem('authToken', 'admin-token');
+      localStorage.setItem('userType', 'admin');
       localStorage.setItem('loginTime', Date.now().toString());
-
-      navigate('/station-dashboard');
-    } catch (err) {
-      console.error('Firebase login error:', err);
-      setError('Login failed: ' + err.message);
-    }
-  };
-
-  const handleGoogleSignIn = async () => {
-    const provider = new GoogleAuthProvider();
-    try {
-      const result = await signInWithPopup(auth, provider);
-      const user = result.user;
-
-      localStorage.setItem('authToken', user.uid);
-      localStorage.setItem('userType', 'google');
-      localStorage.setItem('loginTime', Date.now().toString());
-
-      navigate('/station-dashboard');
-    } catch (err) {
-      console.error('Google sign-in error:', err);
-      setError('Google sign-in failed: ' + err.message);
+      
+      navigate('/admin-dashboard');
+    } else {
+      setError('Invalid credentials. Use email: admin, password: admin');
     }
   };
 
@@ -160,16 +137,6 @@ const Login = () => {
                 className="w-full flex justify-center py-2 px-4 border border-transparent rounded-lg shadow-sm text-sm font-medium text-white bg-red-600 hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 transition"
               >
                 Sign in
-              </button>
-            </div>
-
-            <div>
-              <button
-                type="button"
-                onClick={handleGoogleSignIn}
-                className="w-full flex justify-center items-center py-2 px-4 mt-2 border border-gray-300 rounded-lg shadow-sm text-sm font-medium text-gray-700 bg-white hover:bg-gray-100 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 transition"
-              >
-                Sign in with Google
               </button>
             </div>
           </form>
