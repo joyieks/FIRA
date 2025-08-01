@@ -3,7 +3,8 @@ import { View, Text, TextInput, TouchableOpacity, Image, ScrollView, Alert } fro
 import { useRouter } from 'expo-router';
 import { AntDesign } from '@expo/vector-icons';
 import { createUserWithEmailAndPassword } from 'firebase/auth';
-import { auth } from '../config/firebase'; // Adjust if needed
+import { doc, setDoc } from 'firebase/firestore';
+import { auth, db } from '../config/firebase';
 
 const registration = () => {
   const router = useRouter();
@@ -43,8 +44,33 @@ const registration = () => {
     if (!validate()) return;
 
     try {
+      console.log('Starting mobile registration process...');
+      console.log('Firebase auth object:', auth);
+      console.log('Firebase db object:', db);
+      
       const fakeEmail = `${formData.username}@firaregistration.com`;
-      await createUserWithEmailAndPassword(auth, fakeEmail, formData.password);
+      console.log('Creating Firebase user account with email:', fakeEmail);
+      
+      const userCredential = await createUserWithEmailAndPassword(auth, fakeEmail, formData.password);
+      const user = userCredential.user;
+      console.log('User created successfully:', user.uid);
+
+      // Store user data in Firestore
+      const userData = {
+        uid: user.uid,
+        firstName: formData.firstName,
+        lastName: formData.lastName,
+        username: formData.username,
+        phoneNumber: formData.phoneNumber,
+        email: fakeEmail,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        userType: 'citizen' // or 'responder' based on your app logic
+      };
+
+      console.log('Storing user data in Firestore...');
+      await setDoc(doc(db, 'users', user.uid), userData);
+      console.log('User data stored successfully');
 
       Alert.alert(
         'Registration Successful',
@@ -53,7 +79,36 @@ const registration = () => {
       );
     } catch (error) {
       console.error('Firebase registration error:', error);
-      Alert.alert('Registration Error', error.message);
+      console.error('Error details:', {
+        code: error.code,
+        message: error.message,
+        stack: error.stack
+      });
+      
+      // Provide user-friendly error messages
+      let errorMessage = 'Registration failed. Please try again.';
+      
+      switch (error.code) {
+        case 'auth/email-already-in-use':
+          errorMessage = 'This email address is already registered. Please use a different email or try logging in instead.';
+          break;
+        case 'auth/invalid-email':
+          errorMessage = 'Please enter a valid email address.';
+          break;
+        case 'auth/weak-password':
+          errorMessage = 'Password is too weak. Please choose a stronger password (at least 6 characters).';
+          break;
+        case 'auth/network-request-failed':
+          errorMessage = 'Network error. Please check your internet connection and try again.';
+          break;
+        case 'permission-denied':
+          errorMessage = 'Database permission error. Please contact the administrator to update Firestore security rules.';
+          break;
+        default:
+          errorMessage = `Registration failed: ${error.message}`;
+      }
+      
+      Alert.alert('Registration Error', errorMessage);
     }
   };
 

@@ -3,6 +3,7 @@ import { initializeApp } from "firebase/app";
 import { getAnalytics } from "firebase/analytics";
 import { getAuth } from "firebase/auth";
 import { getFirestore } from 'firebase/firestore';
+import { getStorage } from 'firebase/storage';
 import { getMessaging } from 'firebase/messaging';
 // TODO: Add SDKs for Firebase products that you want to use
 // https://firebase.google.com/docs/web/setup#available-libraries
@@ -19,11 +20,40 @@ const firebaseConfig = {
   measurementId: "G-WVXR0JN8JW"
 };
 
-// Initialize Firebase
-const app = initializeApp(firebaseConfig);
-const analytics = getAnalytics(app);
+// Initialize Firebase with error handling
+let app, auth, db, storage, analytics;
 
-// Initialize Firebase Authentication and get a reference to the service
-const auth = getAuth(app);
-export { app, analytics, auth };
+try {
+  console.log('Initializing Firebase...');
+  app = initializeApp(firebaseConfig);
+  console.log('Firebase app initialized:', app);
+
+  // Initialize Firebase Authentication and get a reference to the service
+  auth = getAuth(app);
+  console.log('Firebase auth initialized:', auth);
+
+  // Initialize Firestore
+  db = getFirestore(app);
+  console.log('Firebase db initialized:', db);
+
+  // Initialize Firebase Storage
+  storage = getStorage(app);
+  console.log('Firebase storage initialized:', storage);
+
+  // Initialize Analytics (only in browser environment)
+  analytics = null;
+  if (typeof window !== 'undefined') {
+    try {
+      analytics = getAnalytics(app);
+      console.log('Firebase analytics initialized:', analytics);
+    } catch (error) {
+      console.warn('Analytics initialization failed:', error);
+    }
+  }
+} catch (error) {
+  console.error('Firebase initialization failed:', error);
+  throw error;
+}
+
+export { app, analytics, auth, db, storage };
 
