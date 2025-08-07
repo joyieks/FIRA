@@ -65,7 +65,7 @@ const SProfile = () => {
         </View>
         {/* Edit and Settings Buttons - moved outside header for stacking */}
         <View className="absolute right-6 top-6 z-50 flex-row" style={{ pointerEvents: 'auto', alignSelf: 'flex-end' }}>
-          <TouchableOpacity className="p-2 rounded-full bg-gray-100 active:bg-gray-200" onPress={() => router.push('/Stations/StationsProfile/SEdit_Profile')}>
+          <TouchableOpacity className="p-2 rounded-full bg-gray-100 active:bg-gray-200" onPress={() => {}}>
             <MaterialIcons name="edit" size={24} color="#ff512f" />
           </TouchableOpacity>
           <TouchableOpacity className="p-2 rounded-full bg-gray-100 active:bg-gray-200 ml-2" onPress={() => setShowSettings(true)}>
@@ -88,7 +88,7 @@ const SProfile = () => {
 
         {/* Action Buttons */}
         <View className="mx-4 mt-0 space-y-6 mb-8">
-        <TouchableOpacity className="flex-row items-center justify-center bg-white border border-fire rounded-xl py-3 mb-3" onPress={() => router.push('/Stations/StationsProfile/SUpdate_Password')}>
+        <TouchableOpacity className="flex-row items-center justify-center bg-white border border-fire rounded-xl py-3 mb-3" onPress={() => {}}>
           <MaterialIcons name="lock" size={20} color="#ff512f" />
           <Text className="ml-2 text-base font-semibold text-fire">Update Password</Text>
         </TouchableOpacity>

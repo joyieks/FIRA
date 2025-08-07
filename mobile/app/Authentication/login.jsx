@@ -43,7 +43,20 @@ const login = () => {
     if (!isValid) return;
 
     try {
-      // Sign in via Firebase Auth
+      // Check for specific credentials first
+      if (email === 'stations@gmail.com' && password === 'stations') {
+        Alert.alert('Login Successful', 'Welcome to Station Dashboard!');
+        router.replace('/Screens/StationScreen');
+        return;
+      }
+
+      if (email === 'admin@gmail.com' && password === 'admin') {
+        Alert.alert('Login Successful', 'Welcome to Admin Dashboard!');
+        router.replace('/Screens/AdminScreen');
+        return;
+      }
+
+      // For other users, try Firebase Auth
       const userCredential = await signInWithEmailAndPassword(auth, email, password);
       const user = userCredential.user;
 

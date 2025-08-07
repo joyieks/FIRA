@@ -63,9 +63,7 @@ const Suser_Management = () => {
 
   return (
     <div className="p-6 bg-gray-50 min-h-screen">
-      <h1 className="text-2xl font-bold text-gray-800 mb-6 flex items-center">
-        <FiUsers className="mr-2" /> Station User Management
-      </h1>
+      
       {/* Add User Button */}
       <div className="mb-4 flex justify-end">
         <button

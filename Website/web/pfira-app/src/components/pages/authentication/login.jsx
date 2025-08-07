@@ -37,19 +37,32 @@ const Login = () => {
   const handleSubmit = async (e) => {
     e.preventDefault();
 
-    // Simple admin login check - accept both "admin" and "admin@" as valid
     const email = formData.username;
+    const password = formData.password;
+
+    // Check for admin credentials
     const isAdminEmail = email === 'admin' || email === 'admin@' || email === 'admin@admin.com';
-    
-    if (isAdminEmail && formData.password === 'admin') {
+    if (isAdminEmail && password === 'admin') {
       localStorage.setItem('authToken', 'admin-token');
       localStorage.setItem('userType', 'admin');
       localStorage.setItem('loginTime', Date.now().toString());
       
       navigate('/admin-dashboard');
-    } else {
-      setError('Invalid credentials. Use email: admin, password: admin');
+      return;
     }
+
+    // Check for stations credentials
+    if (email === 'stations@gmail.com' && password === 'stations') {
+      localStorage.setItem('authToken', 'stations-token');
+      localStorage.setItem('userType', 'stations');
+      localStorage.setItem('loginTime', Date.now().toString());
+      
+      navigate('/station-dashboard');
+      return;
+    }
+
+    // Invalid credentials
+    setError('Invalid credentials. Use admin/admin or stations@gmail.com/stations');
   };
 
   return (

@@ -3,8 +3,12 @@ import { View, Text } from 'react-native';
 
 export default function SFiraChat() {
   return (
-    <View className="flex-1 items-center justify-center">
-      <Text>Station Chat</Text>
+    <View className="flex-1 bg-gray-50">
+      <View className="p-4 pt-32">
+        <View className="flex-1 items-center justify-center">
+          <Text className="text-2xl font-bold text-gray-800">Station Chat</Text>
+        </View>
+      </View>
     </View>
   );
 } 
