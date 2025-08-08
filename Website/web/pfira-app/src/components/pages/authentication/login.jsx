@@ -1,15 +1,18 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { CiLock, CiUser } from 'react-icons/ci';
+import { useAuth } from '../../../contexts/AuthContext';
 
 const Login = () => {
   const navigate = useNavigate();
   const location = useLocation();
+  const { signIn } = useAuth();
   const [formData, setFormData] = useState({
     username: '',
     password: ''
   });
   const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
 
   useEffect(() => {
     if (location.state?.error) {
@@ -17,14 +20,6 @@ const Login = () => {
       navigate(location.pathname, { replace: true });
     }
   }, [location.state, navigate, location.pathname]);
-
-  useEffect(() => {
-    if (!location.state?.error) {
-      localStorage.removeItem('authToken');
-      localStorage.removeItem('userType');
-      localStorage.removeItem('loginTime');
-    }
-  }, [location.state]);
 
   const handleChange = (e) => {
     setFormData({
@@ -36,33 +31,35 @@ const Login = () => {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    setLoading(true);
+    setError('');
 
-    const email = formData.username;
-    const password = formData.password;
+    try {
+      const email = formData.username;
+      const password = formData.password;
 
-    // Check for admin credentials
-    const isAdminEmail = email === 'admin' || email === 'admin@' || email === 'admin@admin.com';
-    if (isAdminEmail && password === 'admin') {
-      localStorage.setItem('authToken', 'admin-token');
-      localStorage.setItem('userType', 'admin');
-      localStorage.setItem('loginTime', Date.now().toString());
+      const result = await signIn(email, password);
       
-      navigate('/admin-dashboard');
-      return;
+      // Navigate based on user type
+      if (result.userType === 'admin') {
+        navigate('/admin-dashboard');
+      } else if (result.userType === 'station') {
+        navigate('/station-dashboard');
+      }
+    } catch (error) {
+      console.error('Login error:', error);
+      if (error.code === 'auth/user-not-found') {
+        setError('User not found. Please check your email.');
+      } else if (error.code === 'auth/wrong-password') {
+        setError('Incorrect password. Please try again.');
+      } else if (error.message === 'User not found in authorized collections') {
+        setError('Access denied. You are not authorized to access this system.');
+      } else {
+        setError('Login failed. Please try again.');
+      }
+    } finally {
+      setLoading(false);
     }
-
-    // Check for stations credentials
-    if (email === 'stations@gmail.com' && password === 'stations') {
-      localStorage.setItem('authToken', 'stations-token');
-      localStorage.setItem('userType', 'stations');
-      localStorage.setItem('loginTime', Date.now().toString());
-      
-      navigate('/station-dashboard');
-      return;
-    }
-
-    // Invalid credentials
-    setError('Invalid credentials. Use admin/admin or stations@gmail.com/stations');
   };
 
   return (
@@ -145,12 +142,13 @@ const Login = () => {
             </div>
 
             <div>
-              <button
-                type="submit"
-                className="w-full flex justify-center py-2 px-4 border border-transparent rounded-lg shadow-sm text-sm font-medium text-white bg-red-600 hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 transition"
-              >
-                Sign in
-              </button>
+                          <button
+              type="submit"
+              disabled={loading}
+              className="w-full flex justify-center py-2 px-4 border border-transparent rounded-lg shadow-sm text-sm font-medium text-white bg-red-600 hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 transition disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {loading ? 'Signing in...' : 'Sign in'}
+            </button>
             </div>
           </form>
 

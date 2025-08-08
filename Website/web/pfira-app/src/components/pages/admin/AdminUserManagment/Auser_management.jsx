@@ -1,9 +1,17 @@
 import React, { useState, useEffect } from 'react';
 import { FiUsers, FiHome, FiUserCheck, FiUserX, FiEdit2, FiTrash2, FiSearch, FiChevronDown, FiEye, FiFileText, FiX, FiPlus } from 'react-icons/fi';
+import { collection, getDocs, doc, updateDoc, deleteDoc, addDoc, onSnapshot } from 'firebase/firestore';
+import { db } from '../../../../firebase/config';
 
 const Auser_management = () => {
   const [activeTab, setActiveTab] = useState('stations');
   const [editUser, setEditUser] = useState(null);
+  const [editForm, setEditForm] = useState({
+    name: '',
+    email: '',
+    role: '',
+    status: ''
+  });
   const [showAddStationModal, setShowAddStationModal] = useState(false);
   const [showAddCitizenModal, setShowAddCitizenModal] = useState(false);
   const [newStation, setNewStation] = useState({
@@ -20,72 +28,110 @@ const Auser_management = () => {
     phone: ''
   });
 
-  // Sample data - replace with real data from your API
+  // State for Firestore data
   const [users, setUsers] = useState({
-    stations: [
-      { id: 1, name: 'Cebu City DRRMO', email: 'drrmo@cebu.gov.ph', role: 'Admin', status: 'active', users: 15 },
-      { id: 2, name: 'BFP Station 1', email: 'bfp1@cebu.gov.ph', role: 'Manager', status: 'active', users: 8 },
-      { id: 3, name: 'CCPO Headquarters', email: 'ccpo@cebu.gov.ph', role: 'Operator', status: 'disabled', users: 23 }
-    ],
-    stationUsers: [
-      { id: 101, name: 'Juan Dela Cruz', email: 'juan@cebu.gov.ph', position: 'Firefighter', station: 'BFP Station 1', status: 'active' },
-      { id: 102, name: 'Maria Santos', email: 'maria@cebu.gov.ph', position: 'EMT', station: 'Cebu City DRRMO', status: 'active' },
-      { id: 103, name: 'Pedro Reyes', email: 'pedro@cebu.gov.ph', position: 'Police Officer', station: 'CCPO Headquarters', status: 'disabled' }
-    ],
-    citizens: [
-      { id: 201, name: 'Ana Lopez', email: 'ana@email.com', barangay: 'Lahug', status: 'active', verified: true },
-      { id: 202, name: 'Carlos Gomez', email: 'carlos@email.com', barangay: 'Talamban', status: 'active', verified: true },
-      { id: 203, name: 'Elena Tan', email: 'elena@email.com', barangay: 'Mabolo', status: 'disabled', verified: false }
-    ]
+    stations: [],
+    stationUsers: [],
+    citizens: []
   });
+  const [loading, setLoading] = useState(true);
 
-  const toggleStatus = (type, id) => {
-    setUsers(prev => ({
-      ...prev,
-      [type]: prev[type].map(user => 
-        user.id === id ? { ...user, status: user.status === 'active' ? 'disabled' : 'active' } : user
-      )
-    }));
-  };
+  // Fetch data from Firestore
+  useEffect(() => {
+    const fetchStations = async () => {
+      try {
+        const stationsRef = collection(db, 'stationUsers');
+        
+        const unsubscribe = onSnapshot(stationsRef, (snapshot) => {
+          const stationsData = snapshot.docs.map(doc => {
+            const data = doc.data();
+            
+            const mappedData = {
+              id: doc.id,
+              ...data,
+              // Handle different possible field names
+              name: data.stationName || data['Station Name'] || 'Unknown Station',
+              role: data.role || data.Role || 'Manager',
+              status: data.status || data.Status || 'Active',
+              users: data.users || data.Users || 0,
+              username: data.username || data.Username || 'N/A',
+              email: data.email || data.Email || ''
+            };
+            
+            return mappedData;
+          });
+          
+          setUsers(prev => ({
+            ...prev,
+            stations: stationsData
+          }));
+          setLoading(false);
+        });
 
-  const handleDelete = (type, id) => {
-    if (window.confirm('Are you sure you want to delete this user?')) {
-      setUsers(prev => ({
-        ...prev,
-        [type]: prev[type].filter(user => user.id !== id)
-      }));
+        return unsubscribe;
+      } catch (error) {
+        console.error('Error fetching stations:', error);
+        setLoading(false);
+      }
+    };
+
+    fetchStations();
+  }, []);
+
+  const toggleStatus = async (type, id) => {
+    try {
+      const stationRef = doc(db, 'stationUsers', id);
+      const currentStation = users.stations.find(station => station.id === id);
+      const newStatus = currentStation.status === 'Active' ? 'Inactive' : 'Active';
+      
+      await updateDoc(stationRef, {
+        Status: newStatus
+      });
+    } catch (error) {
+      console.error('Error updating status:', error);
     }
   };
 
-  const handleAddStation = () => {
+  const handleDelete = async (type, id) => {
+    if (window.confirm('Are you sure you want to delete this station?')) {
+      try {
+        await deleteDoc(doc(db, 'stationUsers', id));
+      } catch (error) {
+        console.error('Error deleting station:', error);
+      }
+    }
+  };
+
+  const handleAddStation = async () => {
     if (newStation.name && newStation.email && newStation.username) {
-      const station = {
-        id: Date.now(), // Simple ID generation
-        name: newStation.name,
-        username: newStation.username,
-        email: newStation.email,
-        role: 'Manager', // Default role
-        status: 'active',
-        users: 0,
-        address: newStation.address,
-        phone: newStation.phone
-      };
-      
-      setUsers(prev => ({
-        ...prev,
-        stations: [...prev.stations, station]
-      }));
-      
-      // Reset form
-      setNewStation({
-        name: '',
-        username: '',
-        email: '',
-        address: '',
-        phone: ''
-      });
-      
-      setShowAddStationModal(false);
+      try {
+        const stationData = {
+          'Station Name': newStation.name,
+          Username: newStation.username,
+          Email: newStation.email,
+          Role: 'Manager', // Default role
+          Status: 'Active',
+          Users: 0,
+          address: newStation.address,
+          phone: newStation.phone,
+          createdAt: new Date().toISOString()
+        };
+        
+        await addDoc(collection(db, 'stationUsers'), stationData);
+        
+        // Reset form
+        setNewStation({
+          name: '',
+          username: '',
+          email: '',
+          address: '',
+          phone: ''
+        });
+        
+        setShowAddStationModal(false);
+      } catch (error) {
+        console.error('Error adding station:', error);
+      }
     }
   };
 
@@ -128,11 +174,40 @@ const Auser_management = () => {
     });
   };
 
+  const handleEditUser = (user) => {
+    setEditUser(user);
+    setEditForm({
+      name: user.name,
+      email: user.email,
+      role: user.role,
+      status: user.status
+    });
+  };
+
+  const handleSaveEdit = async () => {
+    try {
+      const stationRef = doc(db, 'stationUsers', editUser.id);
+      await updateDoc(stationRef, {
+        'Station Name': editForm.name,
+        Email: editForm.email,
+        Role: editForm.role,
+        Status: editForm.status
+      });
+      setEditUser(null);
+    } catch (error) {
+      console.error('Error updating station:', error);
+    }
+  };
+
   return (
     <div className="p-6 bg-gray-50 min-h-screen">
-      
-
-      {/* Tabs */}
+      {loading ? (
+        <div className="flex items-center justify-center h-64">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-red-600"></div>
+        </div>
+      ) : (
+        <>
+          {/* Tabs */}
       <div className="flex border-b border-gray-200 mb-6">
         <button
           onClick={() => setActiveTab('stations')}
@@ -186,7 +261,7 @@ const Auser_management = () => {
                  </tr>
                </thead>
               <tbody className="bg-white divide-y divide-gray-200">
-                                 {users.stations.map(station => (
+                {users.stations.map(station => (
                    <tr key={station.id}>
                      <td className="px-6 py-4 whitespace-nowrap">
                        <div className="font-medium text-gray-900">{station.name}</div>
@@ -201,23 +276,23 @@ const Auser_management = () => {
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap">
                       <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${
-                        station.status === 'active' ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-800'
+                        station.status === 'Active' ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-800'
                       }`}>
                         {station.status}
                       </span>
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
                       <button
-                        onClick={() => setEditUser(station)}
+                        onClick={() => handleEditUser(station)}
                         className="text-blue-600 hover:text-blue-900 mr-3"
                       >
                         <FiEdit2 />
                       </button>
                       <button
                         onClick={() => toggleStatus('stations', station.id)}
-                        className={`mr-3 ${station.status === 'active' ? 'text-yellow-600 hover:text-yellow-900' : 'text-green-600 hover:text-green-900'}`}
+                        className={`mr-3 ${station.status === 'Active' ? 'text-yellow-600 hover:text-yellow-900' : 'text-green-600 hover:text-green-900'}`}
                       >
-                        {station.status === 'active' ? <FiUserX /> : <FiUserCheck />}
+                        {station.status === 'Active' ? <FiUserX /> : <FiUserCheck />}
                       </button>
                       <button
                         onClick={() => handleDelete('stations', station.id)}
@@ -329,10 +404,11 @@ const Auser_management = () => {
               
               <div className="space-y-4">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Name</label>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Station Name</label>
                   <input
                     type="text"
-                    defaultValue={editUser.name}
+                    value={editForm.name}
+                    onChange={(e) => setEditForm({...editForm, name: e.target.value})}
                     className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-red-500 focus:border-red-500"
                   />
                 </div>
@@ -341,44 +417,34 @@ const Auser_management = () => {
                   <label className="block text-sm font-medium text-gray-700 mb-1">Email</label>
                   <input
                     type="email"
-                    defaultValue={editUser.email}
+                    value={editForm.email}
+                    onChange={(e) => setEditForm({...editForm, email: e.target.value})}
                     className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-red-500 focus:border-red-500"
                   />
                 </div>
                 
-                {activeTab === 'stations' && (
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Role</label>
-                    <select
-                      defaultValue={editUser.role}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-red-500 focus:border-red-500"
-                    >
-                      <option value="Admin">Admin</option>
-                      <option value="Manager">Manager</option>
-                      <option value="Operator">Operator</option>
-                    </select>
-                  </div>
-                )}
-                
-                {activeTab === 'citizens' && (
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Barangay</label>
-                    <input
-                      type="text"
-                      defaultValue={editUser.barangay}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-red-500 focus:border-red-500"
-                    />
-                  </div>
-                )}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Role</label>
+                  <select
+                    value={editForm.role}
+                    onChange={(e) => setEditForm({...editForm, role: e.target.value})}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-red-500 focus:border-red-500"
+                  >
+                    <option value="Admin">Admin</option>
+                    <option value="Manager">Manager</option>
+                    <option value="Operator">Operator</option>
+                  </select>
+                </div>
                 
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Status</label>
                   <select
-                    defaultValue={editUser.status}
+                    value={editForm.status}
+                    onChange={(e) => setEditForm({...editForm, status: e.target.value})}
                     className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-red-500 focus:border-red-500"
                   >
-                    <option value="active">Active</option>
-                    <option value="disabled">Disabled</option>
+                    <option value="Active">Active</option>
+                    <option value="Inactive">Inactive</option>
                   </select>
                 </div>
               </div>
@@ -391,7 +457,7 @@ const Auser_management = () => {
                   Cancel
                 </button>
                 <button
-                  onClick={() => setEditUser(null)}
+                  onClick={handleSaveEdit}
                   className="px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-red-600 hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500"
                 >
                   Save Changes
@@ -592,6 +658,8 @@ const Auser_management = () => {
             </div>
           </div>
         </div>
+      )}
+        </>
       )}
     </div>
   );

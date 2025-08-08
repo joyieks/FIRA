@@ -3,7 +3,8 @@ import { FiMenu, FiX, FiBell, FiUser, FiSettings, FiLogOut, FiUsers, FiMessageCi
 import { GrOverview } from "react-icons/gr";
 import { FaMapLocationDot } from "react-icons/fa6";
 import { IoIosNotifications } from "react-icons/io";
-import { Link, useLocation, Outlet } from 'react-router-dom';
+import { Link, useLocation, Outlet, useNavigate } from 'react-router-dom';
+import { useAuth } from '../../../../contexts/AuthContext';
 
 const StationLayout = ({ children }) => {
   const [sidebarOpen, setSidebarOpen] = useState(true);
@@ -11,6 +12,8 @@ const StationLayout = ({ children }) => {
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [notifications, setNotifications] = useState([]);
   const location = useLocation();
+  const navigate = useNavigate();
+  const { logout } = useAuth();
   const profileRef = useRef(null);
   const notificationsRef = useRef(null);
 
@@ -18,20 +21,15 @@ const StationLayout = ({ children }) => {
   const toggleProfile = () => setProfileOpen(!profileOpen);
   const toggleNotifications = () => setNotificationsOpen(!notificationsOpen);
 
-  const handleLogout = () => {
-    // Clear all authentication data
-    localStorage.removeItem('authToken');
-    localStorage.removeItem('userType');
-    localStorage.removeItem('loginTime');
-    localStorage.removeItem('stationNotifications');
-    localStorage.removeItem('stationUser');
-    localStorage.removeItem('stationAuth');
-    
-    // Show logout message
-    alert('Logged out successfully!');
-    
-    // Redirect to login page
-    window.location.href = '/login';
+  const handleLogout = async () => {
+    try {
+      await logout();
+      navigate('/login');
+    } catch (error) {
+      console.error('Logout error:', error);
+      // Still redirect to login even if logout fails
+      navigate('/login');
+    }
   };
 
   // Load notifications from localStorage (station-specific)
