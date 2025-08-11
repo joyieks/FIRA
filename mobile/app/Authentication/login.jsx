@@ -1,7 +1,9 @@
 import React, { useState } from 'react';
-import { View, Text, TextInput, TouchableOpacity, Image, KeyboardAvoidingView, Platform } from 'react-native';
+import { View, Text, TextInput, TouchableOpacity, Image, KeyboardAvoidingView, Platform, Alert } from 'react-native';
 import { useRouter } from 'expo-router';
 import { AntDesign } from '@expo/vector-icons';
+import { signInWithEmailAndPassword } from 'firebase/auth';
+import { auth } from '../config/firebase';
 
 const login = () => {
   // Prefill with test credentials
@@ -17,7 +19,7 @@ const login = () => {
     return re.test(text);
   };
 
-  const handleLogin = () => {
+  const handleLogin = async () => {
     let isValid = true;
 
     // Validate email
@@ -43,14 +45,24 @@ const login = () => {
     }
 
     if (isValid) {
-      // Check for test credentials
-      if (email === 'citizen@gmail.com' && password === 'citizen') {
+      try {
+        // Try Firebase authentication first
+        const userCredential = await signInWithEmailAndPassword(auth, email, password);
+        const user = userCredential.user;
+        
+        // For now, redirect to citizen screen (you can add logic to determine user type)
         router.replace('/Screens/CitizenScreen');
-      } else if (email === 'responders@gmail.com' && password === 'responders') {
-        // Use the correct route for responders screen
-        router.replace('/Screens/RespondersScreen');
-      } else {
-        setPasswordError('Invalid credentials.\nCitizen: citizen@gmail.com / citizen\nResponder: responders@gmail.com / responders');
+      } catch (error) {
+        console.error('Firebase login error:', error);
+        
+        // Fallback to test credentials for demo purposes
+        if (email === 'citizen@gmail.com' && password === 'citizen') {
+          router.replace('/Screens/CitizenScreen');
+        } else if (email === 'responders@gmail.com' && password === 'responders') {
+          router.replace('/Screens/RespondersScreen');
+        } else {
+          setPasswordError('Invalid credentials. Please check your email and password.');
+        }
       }
     }
   };

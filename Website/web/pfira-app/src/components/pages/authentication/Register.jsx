@@ -1,6 +1,9 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { FiUpload, FiCheck, FiChevronDown } from 'react-icons/fi';
 import { useNavigate } from 'react-router-dom';
+import { createUserWithEmailAndPassword } from 'firebase/auth';
+import { doc, setDoc } from 'firebase/firestore';
+import { auth, db } from '../../../firebase';
 
 const Register = () => {
   const [step, setStep] = useState(1);
@@ -14,6 +17,8 @@ const Register = () => {
     headOfficeName: '',
     staffPosition: '',
     email: '',
+    password: '',
+    confirmPassword: '',
     address: '',
     postalCode: '',
     directorName: '',
@@ -27,10 +32,30 @@ const Register = () => {
       additional: null
     }
   });
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
+
+  // Test Firebase initialization
+  useEffect(() => {
+    console.log('Register component mounted');
+    console.log('Firebase auth object:', auth);
+    console.log('Firebase db object:', db);
+    
+    if (!auth) {
+      console.error('Firebase auth is not initialized!');
+      setError('Firebase authentication is not properly configured');
+    }
+    
+    if (!db) {
+      console.error('Firebase db is not initialized!');
+      setError('Firebase database is not properly configured');
+    }
+  }, []);
 
   const handleChange = (e) => {
     const { name, value } = e.target;
     setFormData(prev => ({ ...prev, [name]: value }));
+    setError('');
   };
 
   const handleDocumentUpload = (documentType, file) => {
@@ -48,34 +73,136 @@ const Register = () => {
     setStep(step + 1);
   };
 
-  const handleFinalSubmit = () => {
-    // Add timestamp to the registration
-    const finalFormData = {
-      ...formData,
-      submittedAt: new Date().toISOString(),
-      id: Date.now() // Generate a unique ID
-    };
+  const handleFinalSubmit = async () => {
+    setLoading(true);
+    setError('');
 
-    // Save to localStorage for demo purposes (in real app, this would be an API call)
-    const existingRegistrations = JSON.parse(localStorage.getItem('pendingRegistrations') || '[]');
-    existingRegistrations.push(finalFormData);
-    localStorage.setItem('pendingRegistrations', JSON.stringify(existingRegistrations));
+    try {
+      console.log('Starting registration process...');
+      console.log('Firebase auth object:', auth);
+      console.log('Firebase db object:', db);
+      
+      // Validate passwords match
+      if (formData.password !== formData.confirmPassword) {
+        setError('Passwords do not match');
+        setLoading(false);
+        return;
+      }
 
-    // Create admin notification
-    const notifications = JSON.parse(localStorage.getItem('adminNotifications') || '[]');
-    notifications.push({
-      id: Date.now(),
-      type: 'new_registration',
-      title: 'New Registration Submitted',
-      message: `${finalFormData.firstName} ${finalFormData.lastName} has submitted a new registration application.`,
-      timestamp: new Date().toISOString(),
-      read: false,
-      registrationData: finalFormData
-    });
-    localStorage.setItem('adminNotifications', JSON.stringify(notifications));
+      // Validate password length
+      if (formData.password.length < 6) {
+        setError('Password must be at least 6 characters long');
+        setLoading(false);
+        return;
+      }
 
-    // Move to success step
-    setStep(4);
+      console.log('Creating Firebase user account...');
+      // Create Firebase user account
+      const userCredential = await createUserWithEmailAndPassword(
+        auth,
+        formData.email,
+        formData.password
+      );
+
+      const user = userCredential.user;
+      console.log('User created successfully:', user.uid);
+
+             // Store file metadata in Firestore (no Storage upload due to billing plan)
+       const uploadedDocuments = {};
+       
+       for (const [docType, file] of Object.entries(formData.documents)) {
+         if (file) {
+           console.log(`Storing metadata for ${docType}...`);
+           uploadedDocuments[docType] = {
+             name: file.name,
+             size: file.size,
+             type: file.type,
+             uploadedAt: new Date().toISOString(),
+             note: 'File upload pending - Storage upgrade required'
+           };
+           console.log(`${docType} metadata stored successfully`);
+         } else {
+           // No file uploaded for this document type
+           uploadedDocuments[docType] = null;
+         }
+       }
+
+      // Prepare user data for Firestore
+      const userData = {
+        uid: user.uid,
+        firstName: formData.firstName,
+        lastName: formData.lastName,
+        mobile: formData.mobile,
+        headquarter: formData.headquarter,
+        emergencyExpertise: formData.emergencyExpertise,
+        headOfficeName: formData.headOfficeName,
+        staffPosition: formData.staffPosition,
+        email: formData.email,
+        address: formData.address,
+        postalCode: formData.postalCode,
+        directorName: formData.directorName,
+        status: 'pending',
+        submittedAt: new Date().toISOString(),
+        documents: uploadedDocuments,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      };
+
+      console.log('Storing user data in Firestore...');
+      // Store user data in Firestore
+      await setDoc(doc(db, 'users', user.uid), userData);
+      console.log('User data stored successfully');
+
+      // Create admin notification
+      const notifications = JSON.parse(localStorage.getItem('adminNotifications') || '[]');
+      notifications.push({
+        id: Date.now(),
+        type: 'new_registration',
+        title: 'New Registration Submitted',
+        message: `${formData.firstName} ${formData.lastName} has submitted a new registration application.`,
+        timestamp: new Date().toISOString(),
+        read: false,
+        registrationData: userData
+      });
+      localStorage.setItem('adminNotifications', JSON.stringify(notifications));
+
+      // Move to success step
+      setStep(4);
+    } catch (err) {
+      console.error('Firebase registration error:', err);
+      console.error('Error details:', {
+        code: err.code,
+        message: err.message,
+        stack: err.stack
+      });
+      
+      // Provide user-friendly error messages
+      let errorMessage = 'Registration failed. Please try again.';
+      
+      switch (err.code) {
+        case 'auth/email-already-in-use':
+          errorMessage = 'This email address is already registered. Please use a different email or try logging in instead.';
+          break;
+        case 'auth/invalid-email':
+          errorMessage = 'Please enter a valid email address.';
+          break;
+        case 'auth/weak-password':
+          errorMessage = 'Password is too weak. Please choose a stronger password (at least 6 characters).';
+          break;
+        case 'auth/network-request-failed':
+          errorMessage = 'Network error. Please check your internet connection and try again.';
+          break;
+        case 'permission-denied':
+          errorMessage = 'Database permission error. Please contact the administrator to update Firestore security rules.';
+          break;
+        default:
+          errorMessage = `Registration failed: ${err.message}`;
+      }
+      
+      setError(errorMessage);
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -190,6 +317,30 @@ const Register = () => {
                 </div>
 
                 <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Password</label>
+                  <input
+                    type="password"
+                    name="password"
+                    value={formData.password}
+                    onChange={handleChange}
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:border-red-500"
+                    required
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Confirm Password</label>
+                  <input
+                    type="password"
+                    name="confirmPassword"
+                    value={formData.confirmPassword}
+                    onChange={handleChange}
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:border-red-500"
+                    required
+                  />
+                </div>
+
+                <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Street/Office Address</label>
                   <input
                     type="text"
@@ -227,12 +378,19 @@ const Register = () => {
                 </div>
               </div>
 
+              {error && (
+                <div className="mt-4 p-3 bg-red-100 border border-red-400 text-red-700 rounded">
+                  {error}
+                </div>
+              )}
+
               <div className="mt-8 flex justify-end">
                 <button
                   type="submit"
                   className="px-6 py-2 bg-red-600 text-white font-medium rounded-lg hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2"
+                  disabled={loading}
                 >
-                  Next: Document Upload
+                  {loading ? 'Registering...' : 'Next: Document Upload'}
                 </button>
               </div>
             </form>
@@ -240,8 +398,8 @@ const Register = () => {
 
           {step === 2 && (
             <div>
-              <h2 className="text-xl font-semibold mb-4 text-gray-800">Document Verification</h2>
-              <p className="text-gray-600 mb-6">Please upload the requested documents for validation.</p>
+                             <h2 className="text-xl font-semibold mb-4 text-gray-800">Document Verification</h2>
+               <p className="text-gray-600 mb-6">Please upload the requested documents for validation. <strong>Note: Document uploads are optional and can be completed later. Files will be stored locally until Storage is upgraded.</strong></p>
               
               <div className="space-y-6">
                 {[
@@ -339,18 +497,26 @@ const Register = () => {
                 </div>
               </div>
 
+              {error && (
+                <div className="mt-4 p-3 bg-red-100 border border-red-400 text-red-700 rounded">
+                  {error}
+                </div>
+              )}
+
               <div className="mt-8 pt-6 border-t border-gray-200 flex justify-between">
                 <button
                   onClick={() => setStep(step - 1)}
                   className="px-6 py-2 border border-gray-300 text-gray-700 font-medium rounded-lg hover:bg-gray-50"
+                  disabled={loading}
                 >
                   Back
                 </button>
                 <button
                   onClick={handleFinalSubmit}
                   className="px-6 py-2 bg-red-600 text-white font-medium rounded-lg hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2"
+                  disabled={loading}
                 >
-                  Submit Application
+                  {loading ? 'Submitting...' : 'Submit Application'}
                 </button>
               </div>
             </div>

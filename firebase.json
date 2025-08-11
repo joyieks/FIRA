@@ -1,16 +1,24 @@
 {
   "firestore": {
+<<<<<<< HEAD
     "database": "(default)",
     "location": "nam5",
+=======
+>>>>>>> eijay_changes
     "rules": "firestore.rules",
     "indexes": "firestore.indexes.json"
   },
   "hosting": {
+<<<<<<< HEAD
     "public": "public",
+=======
+    "public": "Website/web/pfira-app/dist",
+>>>>>>> eijay_changes
     "ignore": [
       "firebase.json",
       "**/.*",
       "**/node_modules/**"
+<<<<<<< HEAD
     ]
   },
   "storage": {
@@ -26,3 +34,14 @@
     "singleProjectMode": true
   }
 }
+=======
+    ],
+    "rewrites": [
+      {
+        "source": "**",
+        "destination": "/index.html"
+      }
+    ]
+  }
+} 
+>>>>>>> eijay_changes
