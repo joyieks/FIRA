@@ -109,7 +109,7 @@ const StationLayout = ({ children }) => {
         </div>
         <nav className="mt-6">
           <SidebarItem icon={<FaMapLocationDot size={20} />} text="Map Dashboard" to="/station-dashboard" active={location.pathname === '/station-dashboard'} collapsed={!sidebarOpen} />
-          <SidebarItem icon={<GrOverview size={20} />} text="Overall" to="/station-dashboard/overall" active={location.pathname === '/station-dashboard/overall'} collapsed={!sidebarOpen} />
+          <SidebarItem icon={<GrOverview size={20} />} text="Overview" to="/station-dashboard/overall" active={location.pathname === '/station-dashboard/overall'} collapsed={!sidebarOpen} />
           <SidebarItem 
             icon={<IoIosNotifications size={20} />} 
             text="Notification" 
@@ -127,7 +127,17 @@ const StationLayout = ({ children }) => {
         {/* Top Navigation */}
         <header className="bg-white shadow-sm z-10">
           <div className="flex items-center justify-between px-6 py-4">
-            <h2 className="text-xl font-semibold text-gray-800">Project FIRA</h2>
+            <h2 className="text-xl font-semibold text-gray-800">
+              {(() => {
+                const path = location.pathname;
+                if (path.includes('user-management')) return 'User Management';
+                if (path.includes('fira-chat')) return 'FIRA Chat';
+                if (path.includes('notification')) return 'Notifications';
+                if (path.includes('overall')) return 'Overview Dashboard';
+                if (path.includes('station-dashboard') && !path.includes('/')) return 'Map Dashboard';
+                return 'Project FIRA';
+              })()}
+            </h2>
             <div className="flex items-center space-x-4">
               {/* Notifications */}
               <div className="relative" ref={notificationsRef}>

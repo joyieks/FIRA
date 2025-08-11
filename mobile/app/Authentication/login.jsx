@@ -1,7 +1,8 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { View, Text, TextInput, TouchableOpacity, Image, KeyboardAvoidingView, Platform, Alert } from 'react-native';
 import { useRouter } from 'expo-router';
 import { AntDesign } from '@expo/vector-icons';
+import { MaterialIcons } from '@expo/vector-icons';
 import { signInWithEmailAndPassword, signInWithCredential, GoogleAuthProvider } from 'firebase/auth';
 import { auth, db } from '../config/firebase';
 import { collection, query, where, getDocs, setDoc, doc } from 'firebase/firestore';
@@ -13,9 +14,21 @@ const login = () => {
   const [showPassword, setShowPassword] = useState(false);
   const [emailError, setEmailError] = useState('');
   const [passwordError, setPasswordError] = useState('');
+  const [showToast, setShowToast] = useState(false);
+  const [toastMessage, setToastMessage] = useState('');
+  const [toastType, setToastType] = useState('success'); // 'success' or 'error'
   const router = useRouter();
 
   const validateEmail = (text) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(text);
+
+  const displayToast = (message, type = 'success') => {
+    setToastMessage(message);
+    setToastType(type);
+    setShowToast(true);
+    setTimeout(() => {
+      setShowToast(false);
+    }, 3000);
+  };
 
   const handleLogin = async () => {
     let isValid = true;
@@ -45,14 +58,18 @@ const login = () => {
     try {
       // Check for specific credentials first
       if (email === 'stations@gmail.com' && password === 'stations') {
-        Alert.alert('Login Successful', 'Welcome to Station Dashboard!');
-        router.replace('/Screens/StationScreen');
+        displayToast('Welcome to Station Dashboard!', 'success');
+        setTimeout(() => {
+          router.replace('/Screens/StationScreen');
+        }, 1000);
         return;
       }
 
       if (email === 'admin@gmail.com' && password === 'admin') {
-        Alert.alert('Login Successful', 'Welcome to Admin Dashboard!');
-        router.replace('/Screens/AdminScreen');
+        displayToast('Welcome to Admin Dashboard!', 'success');
+        setTimeout(() => {
+          router.replace('/Screens/AdminScreen');
+        }, 1000);
         return;
       }
 
@@ -66,14 +83,16 @@ const login = () => {
 
       if (!snapshot.empty) {
         const userData = snapshot.docs[0].data();
-        Alert.alert('Login Successful', `Welcome, ${userData.firstName || 'User'}!`);
-        router.replace('/Screens/CitizenScreen');
+        displayToast(`Welcome, ${userData.firstName || 'User'}!`, 'success');
+        setTimeout(() => {
+          router.replace('/Screens/CitizenScreen');
+        }, 1000);
       } else {
-        Alert.alert('Login Error', 'No user record found in mobileUsers collection.');
+        displayToast('No user record found in mobileUsers collection.', 'error');
       }
     } catch (error) {
       console.error('Login error:', error);
-      Alert.alert('Login Failed', error.message);
+      displayToast(error.message, 'error');
     }
   };
 
@@ -129,25 +148,27 @@ const login = () => {
             };
 
             await setDoc(doc(db, 'mobileUsers', user.uid), userData);
-            Alert.alert('Registration Successful! 🎉', `Welcome, ${userData.firstName}! Your Google account has been registered.`);
+            displayToast(`Welcome, ${userData.firstName}! Your Google account has been registered.`, 'success');
           } else {
             // User exists, just sign in
             const userData = snapshot.docs[0].data();
-            Alert.alert('Login Successful! 🎉', `Welcome back, ${userData.firstName || 'User'}!`);
+            displayToast(`Welcome back, ${userData.firstName || 'User'}!`, 'success');
           }
 
-          router.replace('/Screens/CitizenScreen');
+          setTimeout(() => {
+            router.replace('/Screens/CitizenScreen');
+          }, 1000);
         } else {
-          Alert.alert('Google Sign-In Failed', 'No ID token received from Google.');
+          displayToast('No ID token received from Google.', 'error');
         }
       } else if (result.type === 'cancel') {
-        Alert.alert('Sign In Cancelled', 'You cancelled the Google Sign-In process.');
+        displayToast('You cancelled the Google Sign-In process.', 'error');
       } else {
-        Alert.alert('Google Sign-In Failed', 'An error occurred during sign-in.');
+        displayToast('An error occurred during sign-in.', 'error');
       }
     } catch (error) {
       console.error('Google Sign-In error:', error);
-      Alert.alert('Google Sign-In Failed', error.message);
+      displayToast(error.message, 'error');
     }
   };
 
@@ -255,6 +276,24 @@ const login = () => {
           </TouchableOpacity>
         </View>
       </View>
+
+      {/* Toast Notification */}
+      {showToast && (
+        <View className="absolute top-20 left-4 right-4 z-50">
+          <View className={`rounded-lg p-4 flex-row items-center shadow-lg ${
+            toastType === 'success' ? 'bg-green-500' : 'bg-red-500'
+          }`}>
+            <MaterialIcons 
+              name={toastType === 'success' ? 'check-circle' : 'error'} 
+              size={24} 
+              color="#ffffff" 
+            />
+            <Text className="text-white font-semibold ml-3 flex-1">
+              {toastMessage}
+            </Text>
+          </View>
+        </View>
+      )}
     </KeyboardAvoidingView>
   );
 };

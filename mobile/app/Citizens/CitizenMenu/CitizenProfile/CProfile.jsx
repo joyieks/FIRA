@@ -33,7 +33,7 @@ const CProfile = () => {
   };
 
   return (
-    <ScrollView className="flex-1 bg-gray-100 pb-6">
+    <ScrollView className="flex-1 bg-gray-100 pb-6 pt-8">
       {/* Profile Header */}
       <View className="bg-white py-8 items-center border-b border-gray-200 relative">
         {/* Edit Button */}

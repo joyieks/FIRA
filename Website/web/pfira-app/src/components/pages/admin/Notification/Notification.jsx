@@ -92,36 +92,8 @@ const Notification = () => {
 
   return (
     <div className="p-6 bg-gray-50 min-h-screen">
-      <div className="max-w-4xl mx-auto">
-        {/* Header */}
-        <div className="flex justify-between items-center mb-6">
-          <div className="flex items-center">
-            <FiBell className="text-red-600 mr-3" size={24} />
-            <h1 className="text-2xl font-bold text-gray-800">Notifications</h1>
-            {unreadCount > 0 && (
-              <span className="ml-3 bg-red-100 text-red-800 text-sm font-semibold px-2 py-1 rounded-full">
-                {unreadCount} new
-              </span>
-            )}
-          </div>
-          
-          <div className="flex space-x-2">
-            <button
-              onClick={markAllAsRead}
-              className="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 flex items-center"
-            >
-              <FiCheck className="mr-1" />
-              Mark All Read
-            </button>
-            <button
-              onClick={clearAllNotifications}
-              className="px-4 py-2 text-sm bg-red-600 text-white rounded-lg hover:bg-red-700 flex items-center"
-            >
-              <FiTrash2 className="mr-1" />
-              Clear All
-            </button>
-          </div>
-        </div>
+      <div className="w-full">
+
 
         {/* Filters */}
         <div className="bg-white rounded-lg shadow-sm p-4 mb-6">

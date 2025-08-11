@@ -69,6 +69,7 @@ const CStatus = () => {
   };
 
   const [showEmergencyModal, setShowEmergencyModal] = useState(false);
+  const [showSuccessToast, setShowSuccessToast] = useState(false);
   const [emergencyData, setEmergencyData] = useState({
     cause: '',
     image: null
@@ -181,24 +182,20 @@ const CStatus = () => {
                // Add to Your Reports
                setYourReports(prevReports => [newReport, ...prevReports]);
 
-               Alert.alert(
-                 'Emergency Reported Successfully!',
-                 'Emergency services have been notified. Help is on the way. Please stay safe and follow instructions from emergency personnel.',
-                 [
-                   {
-                     text: 'OK',
-                     onPress: () => {
-                       setShowEmergencyModal(false);
-                       setEmergencyData({
-                         cause: '',
-                         image: null
-                       });
-                       // Switch to Your Reports tab to show the new report
-                       setActiveTab('Your Reports');
-                     }
-                   }
-                 ]
-               );
+                               // Show success toast instead of alert
+                setShowEmergencyModal(false);
+                setEmergencyData({
+                  cause: '',
+                  image: null
+                });
+                // Switch to Your Reports tab to show the new report
+                setActiveTab('Your Reports');
+                
+                // Show success toast
+                setShowSuccessToast(true);
+                setTimeout(() => {
+                  setShowSuccessToast(false);
+                }, 2000);
              }, 1000);
            }
         }
@@ -218,11 +215,11 @@ const CStatus = () => {
       onPress={() => openReportModal(report)}
       activeOpacity={0.7}
     >
-      <Image
-        source={report.image}
-        className="w-full h-40 rounded-lg mb-3"
-        resizeMode="cover"
-      />
+             <Image
+         source={report.image}
+         className="w-full h-44 rounded-lg mb-3"
+         resizeMode="contain"
+       />
       
       <View className="flex-row items-center justify-between mb-2">
         <Text className="text-sm text-gray-500">{report.reporter}</Text>
@@ -288,7 +285,7 @@ const CStatus = () => {
 
   return (
     <View className="flex-1 bg-gray-50">
-      <View className="p-4 pt-32">
+      <View className="p-4 pt-8">
         {/* Report Emergency Button */}
         <TouchableOpacity
           className="bg-red-600 rounded-lg p-4 mb-6 items-center shadow-sm"
@@ -415,7 +412,7 @@ const CStatus = () => {
          transparent={true}
        >
          <View className="flex-1 bg-black/50 justify-center items-center">
-           <View className="bg-white rounded-lg p-6 w-11/12 max-h-96">
+                       <View className="bg-white rounded-lg p-6 w-11/12 max-h-[80%]">
              {selectedReport && (
                <ScrollView showsVerticalScrollIndicator={false}>
                  <View className="flex-row items-center justify-between mb-4">
@@ -428,11 +425,11 @@ const CStatus = () => {
                    </TouchableOpacity>
                  </View>
 
-                 <Image
-                   source={selectedReport.image}
-                   className="w-full h-48 rounded-lg mb-4"
-                   resizeMode="cover"
-                 />
+                                   <Image
+                    source={selectedReport.image}
+                    className="w-full h-56 rounded-lg mb-4"
+                    resizeMode="contain"
+                  />
 
                  <View className="mb-3">
                    <Text className="text-gray-600 text-sm">Reporter</Text>
@@ -483,11 +480,23 @@ const CStatus = () => {
                </ScrollView>
              )}
            </View>
-         </View>
-       </Modal>
-    </View>
-  );
-};
+                   </View>
+        </Modal>
+
+        {/* Success Toast */}
+        {showSuccessToast && (
+          <View className="absolute top-20 left-4 right-4 z-50">
+            <View className="bg-green-500 rounded-lg p-4 flex-row items-center shadow-lg">
+              <MaterialIcons name="check-circle" size={24} color="#ffffff" />
+              <Text className="text-white font-semibold ml-3 flex-1">
+                Emergency reported successfully!
+              </Text>
+            </View>
+          </View>
+        )}
+     </View>
+   );
+ };
 
 export default CStatus;
 

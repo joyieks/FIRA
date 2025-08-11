@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { FiUsers, FiUserPlus, FiEdit2, FiUserX } from 'react-icons/fi';
+import { FiUsers, FiUserPlus, FiEdit2, FiUserX, FiSearch } from 'react-icons/fi';
 
 const cebuLocations = [
   'Lahug', 'Talamban', 'Mabolo', 'Guadalupe', 'Banilad', 'Capitol', 'Fuente', 'Labangon', 'Pardo', 'Sawang Calero', 'Tisa', 'Inayawan', 'Bulacao', 'Sambag', 'Kamputhaw', 'Other'
@@ -158,10 +158,28 @@ const Suser_Management = () => {
         </div>
       )}
       {/* Responders Table */}
-      <div className="bg-white rounded-lg shadow overflow-hidden">
-        <div className="p-4 border-b flex justify-between items-center">
-          <h2 className="font-semibold text-lg">Responders</h2>
-        </div>
+      <div className="bg-white rounded-xl shadow-sm p-8">
+          <div className="flex justify-between items-center mb-6">
+            <h2 className="text-2xl font-bold text-gray-900">Responders</h2>
+            <button className="bg-red-600 text-white px-6 py-3 rounded-lg hover:bg-red-700 transition-colors flex items-center gap-2">
+              <FiUserPlus className="w-5 h-5" />
+              Add User
+            </button>
+          </div>
+
+          {/* Search Bar */}
+          <div className="mb-6">
+            <div className="relative">
+              <FiSearch className="absolute left-4 top-1/2 transform -translate-y-1/2 text-gray-400 w-5 h-5" />
+              <input
+                type="text"
+                placeholder="Search responders..."
+                className="w-full pl-12 pr-6 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:border-red-500"
+              />
+            </div>
+          </div>
+
+          {/* Responders Table */}
         <div className="overflow-x-auto">
           <table className="min-w-full divide-y divide-gray-200">
             <thead className="bg-gray-50">

@@ -9,6 +9,7 @@ const AUserManagement = () => {
   const [showEditModal, setShowEditModal] = useState(false);
   const [showProfileModal, setShowProfileModal] = useState(false);
   const [showHistoryModal, setShowHistoryModal] = useState(false);
+  const [showRespondersModal, setShowRespondersModal] = useState(false);
   const [selectedUser, setSelectedUser] = useState(null);
   const [newUser, setNewUser] = useState({
     name: '',
@@ -154,10 +155,56 @@ const AUserManagement = () => {
     setShowHistoryModal(true);
   };
 
+  const openRespondersModal = (user) => {
+    setSelectedUser(user);
+    setShowRespondersModal(true);
+  };
+
+  const openResponderProfileModal = (responderIndex) => {
+    console.log('Opening responder profile for index:', responderIndex);
+    Alert.alert(
+      `Responder ${responderIndex + 1} Profile`,
+      `Name: Responder ${responderIndex + 1}\nPosition: Firefighter\nAddress: 123 Fire Station St, City\nPhone: +1-555-012${responderIndex + 1}\nStatus: Active\nExperience: 5 years\nSpecializations: Fire Suppression, Rescue Operations, Hazmat`,
+      [
+        { text: 'Close', style: 'cancel' }
+      ]
+    );
+  };
+
+  const handleEditResponder = (responderIndex) => {
+    console.log('Editing responder at index:', responderIndex);
+    Alert.alert(
+      `Edit Responder ${responderIndex + 1}`,
+      `Current Information:\nName: Responder ${responderIndex + 1}\nAddress: 123 Fire Station St, City\nPhone: +1-555-012${responderIndex + 1}\nPosition: Firefighter\n\nEdit functionality would open here with form fields.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Edit', onPress: () => Alert.alert('Success', `Edit form would open for Responder ${responderIndex + 1}`) }
+      ]
+    );
+  };
+
+  const handleDisableResponder = (responderIndex) => {
+    console.log('Disabling responder at index:', responderIndex);
+    Alert.alert(
+      'Disable Responder',
+      `Are you sure you want to disable Responder ${responderIndex + 1}?`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { 
+          text: 'Disable', 
+          style: 'destructive',
+          onPress: () => Alert.alert('Success', `Responder ${responderIndex + 1} has been disabled`) 
+        }
+      ]
+    );
+  };
+
   return (
     <ScrollView className="flex-1 bg-gray-50">
       <View className="p-4 pt-32">
         
+
+
         {/* Stats Cards */}
         <View className="flex-row mb-6">
           <View className="flex-1 bg-white rounded-lg p-4 mr-2 shadow-sm">
@@ -248,7 +295,9 @@ const AUserManagement = () => {
                       <Text className="text-blue-600 text-xs">Reports: {user.reports}</Text>
                     )}
                     {activeTab === 'Stations' && (
-                      <Text className="text-blue-600 text-xs">Responders: {user.responders}</Text>
+                      <TouchableOpacity onPress={() => openRespondersModal(user)}>
+                        <Text className="text-blue-600 text-xs underline">Responders: {user.responders}</Text>
+                      </TouchableOpacity>
                     )}
                   </View>
                 </View>
@@ -429,48 +478,52 @@ const AUserManagement = () => {
         animationType="slide"
         transparent={true}
       >
-        <View className="flex-1 bg-black/50 justify-center items-center">
-          <View className="bg-white rounded-lg p-6 w-11/12 max-h-96">
-            <Text className="text-xl font-bold text-gray-800 mb-4">
-              {activeTab === 'Citizens' ? 'Citizen' : 'Station'} Profile
-            </Text>
-            
-            <View className="mb-4">
-              <Text className="text-gray-600 text-sm">Name</Text>
-              <Text className="text-gray-800 font-semibold">{selectedUser?.name}</Text>
+        <View className="flex-1 bg-black/50 justify-center items-center p-4">
+          <View className="bg-white rounded-lg w-11/12">
+            <View className="p-6">
+              <Text className="text-xl font-bold text-gray-800 mb-6 text-center">
+                {activeTab === 'Citizens' ? 'Citizen' : 'Station'} Profile
+              </Text>
+              
+              <View className="space-y-4 mb-6">
+                <View className="border-b border-gray-200 pb-3">
+                  <Text className="text-gray-600 text-sm mb-1">Name</Text>
+                  <Text className="text-gray-800 font-bold text-lg">{selectedUser?.name || 'N/A'}</Text>
+                </View>
+                
+                <View className="border-b border-gray-200 pb-3">
+                  <Text className="text-gray-600 text-sm mb-1">Email</Text>
+                  <Text className="text-gray-800 font-bold text-lg">{selectedUser?.email || 'N/A'}</Text>
+                </View>
+                
+                <View className="border-b border-gray-200 pb-3">
+                  <Text className="text-gray-600 text-sm mb-1">Phone</Text>
+                  <Text className="text-gray-800 font-bold text-lg">{selectedUser?.phone || 'N/A'}</Text>
+                </View>
+                
+                <View className="border-b border-gray-200 pb-3">
+                  <Text className="text-gray-600 text-sm mb-1">Address</Text>
+                  <Text className="text-gray-800 font-bold text-lg">{selectedUser?.address || 'N/A'}</Text>
+                </View>
+                
+                <View className="border-b border-gray-200 pb-3">
+                  <Text className="text-gray-600 text-sm mb-1">Status</Text>
+                  <Text className="text-gray-800 font-bold text-lg">{selectedUser?.status || 'N/A'}</Text>
+                </View>
+                
+                <View className="border-b border-gray-200 pb-3">
+                  <Text className="text-gray-600 text-sm mb-1">Last Active</Text>
+                  <Text className="text-red-600 font-bold text-lg">{selectedUser?.lastActive || 'N/A'}</Text>
+                </View>
+              </View>
+              
+              <TouchableOpacity
+                className="bg-[#ff512f] rounded-lg p-4"
+                onPress={() => setShowProfileModal(false)}
+              >
+                <Text className="text-center font-semibold text-white text-lg">Close</Text>
+              </TouchableOpacity>
             </View>
-            
-            <View className="mb-4">
-              <Text className="text-gray-600 text-sm">Email</Text>
-              <Text className="text-gray-800 font-semibold">{selectedUser?.email}</Text>
-            </View>
-            
-            <View className="mb-4">
-              <Text className="text-gray-600 text-sm">Phone</Text>
-              <Text className="text-gray-800 font-semibold">{selectedUser?.phone}</Text>
-            </View>
-            
-            <View className="mb-4">
-              <Text className="text-gray-600 text-sm">Address</Text>
-              <Text className="text-gray-800 font-semibold">{selectedUser?.address}</Text>
-            </View>
-            
-            <View className="mb-4">
-              <Text className="text-gray-600 text-sm">Status</Text>
-              <Text className="text-gray-800 font-semibold">{selectedUser?.status}</Text>
-            </View>
-            
-            <View className="mb-4">
-              <Text className="text-gray-600 text-sm">Last Active</Text>
-              <Text className="text-gray-800 font-semibold">{selectedUser?.lastActive}</Text>
-            </View>
-            
-            <TouchableOpacity
-              className="bg-[#ff512f] rounded-lg p-3"
-              onPress={() => setShowProfileModal(false)}
-            >
-              <Text className="text-center font-semibold text-white">Close</Text>
-            </TouchableOpacity>
           </View>
         </View>
       </Modal>
@@ -528,6 +581,75 @@ const AUserManagement = () => {
           </View>
         </View>
       </Modal>
+
+      {/* Responders Modal */}
+      <Modal
+        visible={showRespondersModal}
+        animationType="slide"
+        transparent={true}
+        onRequestClose={() => setShowRespondersModal(false)}
+      >
+        <View className="flex-1 bg-black/50 justify-center items-center p-4">
+          <View className="bg-white rounded-lg p-6 w-11/12 max-h-96">
+            <Text className="text-xl font-bold text-gray-800 mb-4">
+              Responders - {selectedUser?.name}
+            </Text>
+            
+            <ScrollView className="max-h-64">
+              {selectedUser && Array.from({ length: selectedUser.responders }, (_, i) => (
+                <View key={i} className="bg-gray-50 p-3 rounded-lg mb-2 border border-gray-200">
+                  <View className="flex-row items-center justify-between">
+                    <View className="flex-row items-center flex-1">
+                      <View className="w-10 h-10 rounded-full bg-red-100 items-center justify-center mr-3">
+                        <MaterialIcons name="person" size={20} color="#ef4444" />
+                      </View>
+                      <View className="flex-1">
+                        <Text className="font-semibold text-gray-800">Responder {i + 1}</Text>
+                        <Text className="text-sm text-gray-600">Firefighter</Text>
+                        <Text className="text-xs text-gray-500">ID: RSP-{String(i + 1).padStart(3, '0')}</Text>
+                      </View>
+                    </View>
+                    
+                                         <View className="flex-row">
+                       <TouchableOpacity 
+                         className="w-12 h-12 rounded-full bg-blue-100 items-center justify-center mr-3 border-2 border-blue-400 shadow-sm"
+                         onPress={() => openResponderProfileModal(i)}
+                         activeOpacity={0.6}
+                       >
+                         <MaterialIcons name="visibility" size={20} color="#3b82f6" />
+                       </TouchableOpacity>
+                       <TouchableOpacity 
+                         className="w-12 h-12 rounded-full bg-yellow-100 items-center justify-center mr-3 border-2 border-yellow-400 shadow-sm"
+                         onPress={() => handleEditResponder(i)}
+                         activeOpacity={0.6}
+                       >
+                         <MaterialIcons name="edit" size={20} color="#f59e0b" />
+                       </TouchableOpacity>
+                       <TouchableOpacity 
+                         className="w-12 h-12 rounded-full bg-red-100 items-center justify-center border-2 border-red-400 shadow-sm"
+                         onPress={() => handleDisableResponder(i)}
+                         activeOpacity={0.6}
+                       >
+                         <MaterialIcons name="block" size={20} color="#ef4444" />
+                       </TouchableOpacity>
+                     </View>
+                  </View>
+                </View>
+              ))}
+            </ScrollView>
+            
+            <TouchableOpacity
+              className="bg-[#ff512f] rounded-lg p-3 mt-4"
+              onPress={() => setShowRespondersModal(false)}
+            >
+              <Text className="text-center font-semibold text-white">Close</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+
+        
     </ScrollView>
   );
 };

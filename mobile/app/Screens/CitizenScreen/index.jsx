@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { View } from 'react-native';
+import { View, Text } from 'react-native';
 import CStatus from '../../Citizens/CitizenMenu/CitizenStatus/CStatus';
 import CNotifications from '../../Citizens/CitizenMenu/CitizenNotifications/CNotifications';
 import CMap from '../../Citizens/CitizenMenu/CitizenMap/CMap';
@@ -15,12 +15,27 @@ const TAB_COMPONENTS = [
   CProfile,
 ];
 
+const TAB_NAMES = [
+  'Notifications',
+  'Map',
+  'Status',
+  'Settings',
+  'Profile',
+];
 
 const CitizenScreen = () => {
   const [activeTab, setActiveTab] = useState(2); // Default to Status
   const ActiveComponent = TAB_COMPONENTS[activeTab];
+  
   return (
     <View className="flex-1 bg-white">
+      {/* Header with current section name */}
+      <View className="bg-white pt-12 pb-4 px-4 border-b border-gray-200">
+        <Text className="text-2xl font-bold text-gray-800 text-center">
+          {TAB_NAMES[activeTab]}
+        </Text>
+      </View>
+      
       <View className="flex-1 pb-20">
         <ActiveComponent />
       </View>
