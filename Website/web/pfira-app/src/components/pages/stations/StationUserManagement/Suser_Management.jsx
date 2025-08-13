@@ -12,7 +12,8 @@ const Suser_Management = () => {
     { id: 1, name: 'Sample Responder', email: 'responder@email.com', position: 'Firefighter', location: 'Lahug', active: true }
   ]);
   const [form, setForm] = useState({
-    name: '',
+    firstName: '',
+    lastName: '',
     email: '',
     password: '',
     position: '',
@@ -25,23 +26,27 @@ const Suser_Management = () => {
 
   const handleAddUser = (e) => {
     e.preventDefault();
-    if (!form.name || !form.email || (!editId && !form.password) || !form.position || !form.location) return;
+    if (!form.firstName || !form.lastName || !form.email || (!editId && !form.password) || !form.position || !form.location) return;
     if (editId) {
-      setResponders(responders.map(r => r.id === editId ? { ...r, ...form } : r));
+      setResponders(responders.map(r => r.id === editId ? { ...r, name: `${form.firstName} ${form.lastName}`, email: form.email, position: form.position, location: form.location } : r));
       setEditId(null);
     } else {
       setResponders([
         ...responders,
-        { id: responders.length + 1, name: form.name, email: form.email, position: form.position, location: form.location, active: true }
+        { id: responders.length + 1, name: `${form.firstName} ${form.lastName}`, email: form.email, position: form.position, location: form.location, active: true }
       ]);
     }
-    setForm({ name: '', email: '', password: '', position: '', location: '' });
+    setForm({ firstName: '', lastName: '', email: '', password: '', position: '', location: '' });
     setShowAddUser(false);
   };
 
   const handleEdit = (responder) => {
+    const nameParts = responder.name.split(' ');
+    const firstName = nameParts[0] || '';
+    const lastName = nameParts.slice(1).join(' ') || '';
     setForm({
-      name: responder.name,
+      firstName: firstName,
+      lastName: lastName,
       email: responder.email,
       password: '',
       position: responder.position,
@@ -58,36 +63,39 @@ const Suser_Management = () => {
   const handleCancel = () => {
     setShowAddUser(false);
     setEditId(null);
-    setForm({ name: '', email: '', password: '', position: '', location: '' });
+    setForm({ firstName: '', lastName: '', email: '', password: '', position: '', location: '' });
   };
 
   return (
     <div className="p-6 bg-gray-50 min-h-screen">
-      
-      {/* Add User Button */}
-      <div className="mb-4 flex justify-end">
-        <button
-          onClick={() => { setShowAddUser(true); setEditId(null); setForm({ name: '', email: '', password: '', position: '', location: '' }); }}
-          className="flex items-center px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 font-medium"
-        >
-          <FiUserPlus className="mr-2" /> Add User
-        </button>
-      </div>
       {/* Add/Edit User Form */}
       {showAddUser && (
         <div className="mb-6 bg-white rounded-lg shadow p-6 max-w-lg mx-auto">
           <h2 className="text-lg font-semibold mb-4">{editId ? 'Edit Responder' : 'Add Responder'}</h2>
           <form onSubmit={handleAddUser} className="space-y-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Name</label>
-              <input
-                type="text"
-                name="name"
-                value={form.name}
-                onChange={handleChange}
-                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:border-red-500"
-                required
-              />
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">First Name</label>
+                <input
+                  type="text"
+                  name="firstName"
+                  value={form.firstName}
+                  onChange={handleChange}
+                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:border-red-500"
+                  required
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Last Name</label>
+                <input
+                  type="text"
+                  name="lastName"
+                  value={form.lastName}
+                  onChange={handleChange}
+                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:border-red-500"
+                  required
+                />
+              </div>
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Email</label>
@@ -161,7 +169,10 @@ const Suser_Management = () => {
       <div className="bg-white rounded-xl shadow-sm p-8">
           <div className="flex justify-between items-center mb-6">
             <h2 className="text-2xl font-bold text-gray-900">Responders</h2>
-            <button className="bg-red-600 text-white px-6 py-3 rounded-lg hover:bg-red-700 transition-colors flex items-center gap-2">
+            <button 
+              onClick={() => { setShowAddUser(true); setEditId(null); setForm({ firstName: '', lastName: '', email: '', password: '', position: '', location: '' }); }}
+              className="bg-red-600 text-white px-6 py-3 rounded-lg hover:bg-red-700 transition-colors flex items-center gap-2"
+            >
               <FiUserPlus className="w-5 h-5" />
               Add User
             </button>
