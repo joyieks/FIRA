@@ -400,25 +400,13 @@ const Sfira_chat = () => {
               onClick={() => handleReaction(message.id, 'thumbsUp')}
               className={`text-xs px-2 py-1 rounded-full transition-colors flex items-center gap-1 ${
                 message.reactions.thumbsUp.users.includes(currentUserId)
-                  ? 'bg-blue-100 text-blue-600 border border-blue-200'
+                  ? 'bg-green-100 text-green-600 border border-green-200'
                   : 'bg-gray-100 hover:bg-gray-200 text-gray-600'
               }`}
               title={`${message.reactions.thumbsUp.count} user${message.reactions.thumbsUp.count !== 1 ? 's' : ''} reacted`}
             >
-              <span>👍</span>
+              <span>✅</span>
               {message.reactions.thumbsUp.count > 0 && <span>{message.reactions.thumbsUp.count}</span>}
-            </button>
-            <button
-              onClick={() => handleReaction(message.id, 'heart')}
-              className={`text-xs px-2 py-1 rounded-full transition-colors flex items-center gap-1 ${
-                message.reactions.heart.users.includes(currentUserId)
-                  ? 'bg-red-100 text-red-600 border border-red-200'
-                  : 'bg-gray-100 hover:bg-gray-200 text-gray-600'
-              }`}
-              title={`${message.reactions.heart.count} user${message.reactions.heart.count !== 1 ? 's' : ''} reacted`}
-            >
-              <span>❤️</span>
-              {message.reactions.heart.count > 0 && <span>{message.reactions.heart.count}</span>}
             </button>
           </div>
           
