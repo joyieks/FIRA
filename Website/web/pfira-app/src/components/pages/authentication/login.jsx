@@ -1,6 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { CiLock, CiUser } from 'react-icons/ci';
+import { signInWithEmailAndPassword } from 'firebase/auth';
+import { collection, query, where, getDocs } from 'firebase/firestore';
+import { auth, db } from '../../../config/firebase';
 
 const Login = () => {
   const navigate = useNavigate();
@@ -10,6 +13,7 @@ const Login = () => {
     password: ''
   });
   const [error, setError] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
 
   useEffect(() => {
     if (location.state?.error) {
@@ -23,6 +27,7 @@ const Login = () => {
       localStorage.removeItem('authToken');
       localStorage.removeItem('userType');
       localStorage.removeItem('loginTime');
+      localStorage.removeItem('userData');
     }
   }, [location.state]);
 
@@ -34,35 +39,134 @@ const Login = () => {
     setError('');
   };
 
+  const checkUserInCollection = async (email, collectionName) => {
+    try {
+      const cleanEmail = email.trim().toLowerCase();
+      console.log(`Checking ${collectionName} collection for email: ${cleanEmail}`);
+      
+      // First, let's get all documents in the collection to see what's there
+      const allDocs = await getDocs(collection(db, collectionName));
+      console.log(`All documents in ${collectionName}:`, allDocs.docs.map(doc => ({ id: doc.id, data: doc.data() })));
+      
+      // Now try the exact query
+      const q = query(collection(db, collectionName), where('email', '==', cleanEmail));
+      const querySnapshot = await getDocs(q);
+      
+      console.log(`${collectionName} query result:`, querySnapshot.size, 'documents found');
+      
+      if (!querySnapshot.empty) {
+        const userDoc = querySnapshot.docs[0];
+        console.log(`${collectionName} user found:`, userDoc.data());
+        return {
+          exists: true,
+          data: userDoc.data(),
+          docId: userDoc.id
+        };
+      }
+      
+      // If exact match fails, try case-insensitive search by checking all documents
+      const matchingDoc = allDocs.docs.find(doc => {
+        const docEmail = doc.data().email;
+        return docEmail && docEmail.toLowerCase() === cleanEmail;
+      });
+      
+      if (matchingDoc) {
+        console.log(`${collectionName} user found via case-insensitive search:`, matchingDoc.data());
+        return {
+          exists: true,
+          data: matchingDoc.data(),
+          docId: matchingDoc.id
+        };
+      }
+      
+      return { exists: false };
+    } catch (error) {
+      console.error(`Error checking ${collectionName}:`, error);
+      return { exists: false, error };
+    }
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
+    setIsLoading(true);
+    setError('');
 
     const email = formData.username;
     const password = formData.password;
 
-    // Check for admin credentials
-    const isAdminEmail = email === 'admin' || email === 'admin@' || email === 'admin@admin.com';
-    if (isAdminEmail && password === 'admin') {
-      localStorage.setItem('authToken', 'admin-token');
-      localStorage.setItem('userType', 'admin');
-      localStorage.setItem('loginTime', Date.now().toString());
-      
-      navigate('/admin-dashboard');
-      return;
-    }
+    try {
+      // Sign in with Firebase Auth
+      const userCredential = await signInWithEmailAndPassword(auth, email, password);
+      const user = userCredential.user;
 
-    // Check for stations credentials
-    if (email === 'stations@gmail.com' && password === 'stations') {
-      localStorage.setItem('authToken', 'stations-token');
-      localStorage.setItem('userType', 'stations');
-      localStorage.setItem('loginTime', Date.now().toString());
+      // Check if user exists in adminUser collection
+      const adminCheck = await checkUserInCollection(email, 'adminUser');
       
-      navigate('/station-dashboard');
-      return;
-    }
+      if (adminCheck.exists) {
+        // User is an admin
+        const userData = {
+          ...adminCheck.data,
+          docId: adminCheck.docId,
+          userType: 'admin'
+        };
+        
+        localStorage.setItem('authToken', user.uid);
+        localStorage.setItem('userType', 'admin');
+        localStorage.setItem('loginTime', Date.now().toString());
+        localStorage.setItem('userData', JSON.stringify(userData));
+        
+        navigate('/admin-dashboard');
+        return;
+      }
 
-    // Invalid credentials
-    setError('Invalid credentials. Use admin/admin or stations@gmail.com/stations');
+      // Check if user exists in stationUsers collection
+      console.log('Checking stationUsers collection...');
+      const stationCheck = await checkUserInCollection(email, 'stationUsers');
+      console.log('Station check result:', stationCheck);
+      
+      if (stationCheck.exists) {
+        // User is a station user
+        const userData = {
+          ...stationCheck.data,
+          docId: stationCheck.docId,
+          userType: 'station'
+        };
+        
+        localStorage.setItem('authToken', user.uid);
+        localStorage.setItem('userType', 'station');
+        localStorage.setItem('loginTime', Date.now().toString());
+        localStorage.setItem('userData', JSON.stringify(userData));
+        
+        navigate('/station-dashboard');
+        return;
+      }
+
+      // User authenticated but not found in either collection
+      setError('User not found in authorized collections. Please contact administrator.');
+      
+    } catch (error) {
+      console.error('Login error:', error);
+      
+      // Handle specific Firebase Auth errors
+      switch (error.code) {
+        case 'auth/user-not-found':
+          setError('No account found with this email address.');
+          break;
+        case 'auth/wrong-password':
+          setError('Incorrect password.');
+          break;
+        case 'auth/invalid-email':
+          setError('Invalid email address.');
+          break;
+        case 'auth/too-many-requests':
+          setError('Too many failed attempts. Please try again later.');
+          break;
+        default:
+          setError('Login failed. Please check your credentials and try again.');
+      }
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   return (
@@ -95,6 +199,7 @@ const Login = () => {
                   onChange={handleChange}
                   className="pl-10 w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:border-red-500 outline-none transition"
                   placeholder="Enter your email"
+                  disabled={isLoading}
                 />
               </div>
             </div>
@@ -116,6 +221,7 @@ const Login = () => {
                   onChange={handleChange}
                   className="pl-10 w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-700 focus:border-red-700 outline-none transition"
                   placeholder="Enter your password"
+                  disabled={isLoading}
                 />
               </div>
             </div>
@@ -127,6 +233,7 @@ const Login = () => {
                   name="remember-me"
                   type="checkbox"
                   className="h-4 w-4 text-red-700 focus:ring-red-500 border-gray-300 rounded"
+                  disabled={isLoading}
                 />
                 <label htmlFor="remember-me" className="ml-2 block text-sm text-gray-700">
                   Remember me
@@ -138,6 +245,7 @@ const Login = () => {
                   type="button"
                   onClick={() => navigate('/forgot-password')}
                   className="font-medium text-red-700 hover:text-red-700 hover:underline"
+                  disabled={isLoading}
                 >
                   Forgot password?
                 </button>
@@ -147,14 +255,21 @@ const Login = () => {
             <div>
               <button
                 type="submit"
-                className="w-full flex justify-center py-2 px-4 border border-transparent rounded-lg shadow-sm text-sm font-medium text-white bg-red-600 hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 transition"
+                disabled={isLoading}
+                className="w-full flex justify-center py-2 px-4 border border-transparent rounded-lg shadow-sm text-sm font-medium text-white bg-red-600 hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 transition disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                Sign in
+                {isLoading ? 'Signing in...' : 'Sign in'}
               </button>
             </div>
           </form>
 
-      
+          <div className="mt-6 text-center text-sm text-gray-600">
+            <p>Test Accounts:</p>
+            <p className="mt-2">
+              <strong>Admin:</strong> admin@gmail.com / admin123<br />
+              <strong>Station:</strong> stations@gmail.com / stations
+            </p>
+          </div>
         </div>
       </div>
 
