@@ -1,13 +1,32 @@
 import React, { useState } from 'react';
+import { signOut } from 'firebase/auth';
+import { auth } from '../../../../config/firebase';
 
 const Settings = () => {
   const [locationOn, setLocationOn] = useState(true);
   const [pushOn, setPushOn] = useState(true);
   const [soundOn, setSoundOn] = useState(true);
 
-  const handleLogout = () => {
-    alert('Log out successfully!');
-    window.location.href = '/login';
+  const handleLogout = async () => {
+    try {
+      // Sign out from Firebase Auth
+      await signOut(auth);
+      
+      // Clear all authentication data
+      localStorage.removeItem('authToken');
+      localStorage.removeItem('userType');
+      localStorage.removeItem('loginTime');
+      localStorage.removeItem('adminNotifications');
+      localStorage.removeItem('adminUser');
+      localStorage.removeItem('adminAuth');
+      localStorage.removeItem('userData');
+      
+      alert('Log out successfully!');
+      window.location.href = '/login';
+    } catch (error) {
+      console.error('Logout error:', error);
+      alert('Error during logout. Please try again.');
+    }
   };
 
   return (

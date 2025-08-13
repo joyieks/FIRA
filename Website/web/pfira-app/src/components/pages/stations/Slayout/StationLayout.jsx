@@ -4,6 +4,8 @@ import { GrOverview } from "react-icons/gr";
 import { FaMapLocationDot } from "react-icons/fa6";
 import { IoIosNotifications } from "react-icons/io";
 import { Link, useLocation, Outlet } from 'react-router-dom';
+import { signOut } from 'firebase/auth';
+import { auth } from '../../../../config/firebase';
 
 const StationLayout = ({ children }) => {
   const [sidebarOpen, setSidebarOpen] = useState(true);
@@ -18,20 +20,29 @@ const StationLayout = ({ children }) => {
   const toggleProfile = () => setProfileOpen(!profileOpen);
   const toggleNotifications = () => setNotificationsOpen(!notificationsOpen);
 
-  const handleLogout = () => {
-    // Clear all authentication data
-    localStorage.removeItem('authToken');
-    localStorage.removeItem('userType');
-    localStorage.removeItem('loginTime');
-    localStorage.removeItem('stationNotifications');
-    localStorage.removeItem('stationUser');
-    localStorage.removeItem('stationAuth');
-    
-    // Show logout message
-    alert('Logged out successfully!');
-    
-    // Redirect to login page
-    window.location.href = '/login';
+  const handleLogout = async () => {
+    try {
+      // Sign out from Firebase Auth
+      await signOut(auth);
+      
+      // Clear all authentication data
+      localStorage.removeItem('authToken');
+      localStorage.removeItem('userType');
+      localStorage.removeItem('loginTime');
+      localStorage.removeItem('stationNotifications');
+      localStorage.removeItem('stationUser');
+      localStorage.removeItem('stationAuth');
+      localStorage.removeItem('userData');
+      
+      // Show logout message
+      alert('Logged out successfully!');
+      
+      // Redirect to login page
+      window.location.href = '/login';
+    } catch (error) {
+      console.error('Logout error:', error);
+      alert('Error during logout. Please try again.');
+    }
   };
 
   // Load notifications from localStorage (station-specific)

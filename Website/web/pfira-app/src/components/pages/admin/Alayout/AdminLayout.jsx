@@ -6,6 +6,8 @@ import { IoIosNotifications } from "react-icons/io";
 import { LuMessageCircleMore } from "react-icons/lu";
 import { FaUserFriends } from "react-icons/fa";
 import { Link, useLocation, Outlet } from 'react-router-dom';
+import { signOut } from 'firebase/auth';
+import { auth } from '../../../../config/firebase';
 
 const AdminLayout = ({ children }) => {
   const [sidebarOpen, setSidebarOpen] = useState(true);
@@ -84,20 +86,29 @@ const AdminLayout = ({ children }) => {
     }
   };
 
-  const handleLogout = () => {
-    // Clear all authentication data
-    localStorage.removeItem('authToken');
-    localStorage.removeItem('userType');
-    localStorage.removeItem('loginTime');
-    localStorage.removeItem('adminNotifications');
-    localStorage.removeItem('adminUser');
-    localStorage.removeItem('adminAuth');
-    
-    // Show logout message
-    alert('Logged out successfully!');
-    
-    // Redirect to login page
-    window.location.href = '/login';
+  const handleLogout = async () => {
+    try {
+      // Sign out from Firebase Auth
+      await signOut(auth);
+      
+      // Clear all authentication data
+      localStorage.removeItem('authToken');
+      localStorage.removeItem('userType');
+      localStorage.removeItem('loginTime');
+      localStorage.removeItem('adminNotifications');
+      localStorage.removeItem('adminUser');
+      localStorage.removeItem('adminAuth');
+      localStorage.removeItem('userData');
+      
+      // Show logout message
+      alert('Logged out successfully!');
+      
+      // Redirect to login page
+      window.location.href = '/login';
+    } catch (error) {
+      console.error('Logout error:', error);
+      alert('Error during logout. Please try again.');
+    }
   };
 
   return (
