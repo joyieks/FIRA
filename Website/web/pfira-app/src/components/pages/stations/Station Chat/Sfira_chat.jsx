@@ -1,68 +1,73 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { FiSend, FiPaperclip, FiUser, FiAlertTriangle } from 'react-icons/fi';
-
+import { collection, addDoc, query, orderBy, onSnapshot, serverTimestamp, getDocs } from "firebase/firestore";
+import { db, auth } from '../../../../config/firebase';
 const Sfira_chat = () => {
-  const [messages, setMessages] = useState([
-    { id: 1, sender: 'DRRMO Operator', text: 'Emergency alert received. What is your situation?', timestamp: '10:30 AM', isEmergency: true },
-    { id: 2, sender: 'You', text: 'Fire outbreak in Barangay Lahug near UC campus!', timestamp: '10:31 AM', isEmergency: true },
-    { id: 3, sender: 'DRRMO Operator', text: 'Help is on the way. Can you share your exact location?', timestamp: '10:32 AM', isEmergency: true },
-  ]);
+  const [messages, setMessages] = useState([]);
   const [newMessage, setNewMessage] = useState('');
   const [isEmergencyMode, setIsEmergencyMode] = useState(false);
   const [activeTab, setActiveTab] = useState('chat');
   const messagesEndRef = useRef(null);
+  const [contacts, setContacts] = useState([]);
+  const [selectedContact, setSelectedContact] = useState(null);
+  const [currentUser, setCurrentUser] = useState(null);
 
-  // Sample emergency contacts
-  const emergencyContacts = [
-    { id: 1, name: 'DRRMO Central', status: 'Online', avatar: 'D' },
-    { id: 2, name: 'BFP Station 1', status: 'Online', avatar: 'B' },
-    { id: 3, name: 'CCPO Dispatch', status: 'Offline', avatar: 'C' },
-    { id: 4, name: 'Medical Response', status: 'Online', avatar: 'M' },
-  ];
+  useEffect(() => {
+    const unsubscribe = auth.onAuthStateChanged(user => {
+      setCurrentUser(user);
+    });
+    return () => unsubscribe();
+  }, []);
+
+  useEffect(() => {
+    // Fetch contacts from Firestore
+    const fetchContacts = async () => {
+      const adminSnap = await getDocs(collection(db, "adminUser"));
+      const stationSnap = await getDocs(collection(db, "stationUsers"));
+      const adminContacts = adminSnap.docs.map(doc => ({ id: doc.id, adminName: doc.data().adminName, ...doc.data(), type: 'admin' }));
+      const stationContacts = stationSnap.docs.map(doc => ({ id: doc.id, stationName: doc.data().stationName, ...doc.data(), type: 'station' }));
+      setContacts([...adminContacts, ...stationContacts]);
+    };
+    fetchContacts();
+  }, []);
+
+  useEffect(() => {
+    if (!selectedContact && contacts.length > 0) {
+      setSelectedContact(contacts[0]);
+    }
+  }, [contacts, selectedContact]);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   };
 
   useEffect(() => {
-    scrollToBottom();
-  }, [messages]);
+    if (!currentUser || !selectedContact) return;
+    const q = query(collection(db, "stationChats"), orderBy("createdAt"));
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const msgs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      // Only show messages between current user and selected contact
+      const filtered = msgs.filter(m =>
+        (m.senderId === currentUser.uid && m.receiverId === selectedContact.id) ||
+        (m.senderId === selectedContact.id && m.receiverId === currentUser.uid)
+      );
+      setMessages(filtered);
+      scrollToBottom();
+    });
+    return unsubscribe;
+  }, [currentUser, selectedContact]);
 
-  const handleSendMessage = () => {
-    if (newMessage.trim() === '') return;
-    
-    const newMsg = {
-      id: messages.length + 1,
-      sender: 'You',
+  const handleSendMessage = async () => {
+    if (newMessage.trim() === '' || !currentUser || !selectedContact) return;
+    await addDoc(collection(db, "stationChats"), {
+      senderId: currentUser.uid,
+      receiverId: selectedContact.id,
       text: newMessage,
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-      isEmergency: isEmergencyMode
-    };
-    
-    setMessages([...messages, newMsg]);
+      isEmergency: isEmergencyMode,
+      createdAt: serverTimestamp()
+    });
     setNewMessage('');
-    
-    // Simulate response after 1-2 seconds
-    setTimeout(() => {
-      const responses = [
-        "We've dispatched a team to your location.",
-        "Please stay in a safe area.",
-        "Can you provide more details about the situation?",
-        "Medical assistance is 5 minutes away.",
-        "How many people are affected?"
-      ];
-      const randomResponse = responses[Math.floor(Math.random() * responses.length)];
-      
-      const responseMsg = {
-        id: messages.length + 2,
-        sender: isEmergencyMode ? 'DRRMO Operator' : 'Support',
-        text: randomResponse,
-        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-        isEmergency: isEmergencyMode
-      };
-      
-      setMessages(prev => [...prev, responseMsg]);
-    }, 1000 + Math.random() * 1000);
   };
 
   const handleKeyPress = (e) => {
@@ -112,18 +117,34 @@ const Sfira_chat = () => {
         
         {activeTab === 'chat' ? (
           <div className="flex-1 overflow-y-auto">
-            {/* Chat list would go here */}
-            <div className="p-4 border-b border-gray-200 hover:bg-gray-50 cursor-pointer">
-              <div className="flex items-center">
-                <div className="w-10 h-10 rounded-full bg-red-100 flex items-center justify-center text-red-600 font-bold mr-3">
-                  D
-                </div>
-                <div>
-                  <h3 className="font-medium">DRRMO Central</h3>
-                  <p className="text-sm text-gray-500 truncate">Emergency response team</p>
-                </div>
+            {/* Hardcoded chat downlist, DRRMO Central always present */}
+            <div className="p-4 border-b border-gray-200 hover:bg-gray-50 cursor-pointer flex items-center bg-gray-200">
+              <div className="w-10 h-10 rounded-full bg-red-100 flex items-center justify-center text-red-600 font-bold mr-3">
+                D
+              </div>
+              <div>
+                <h3 className="font-medium">DRRMO Central</h3>
+                <p className="text-sm text-gray-500 truncate">Emergency response team</p>
               </div>
             </div>
+            {/* Dynamically add chatted contacts to chat downlist */}
+            {contacts
+              .filter(contact => contact.chatted)
+              .map(contact => (
+                <div
+                  key={contact.id}
+                  className={`p-4 border-b border-gray-200 hover:bg-gray-50 cursor-pointer flex items-center ${selectedContact && selectedContact.id === contact.id ? 'bg-gray-200' : ''}`}
+                  onClick={() => setSelectedContact(contact)}
+                >
+                  <div className={`w-10 h-10 rounded-full flex items-center justify-center font-bold mr-3 ${contact.type === 'admin' ? 'bg-blue-100 text-blue-600' : 'bg-green-100 text-green-600'}`}>
+                    <FiUser />
+                  </div>
+                  <div className="flex-1">
+                    <h3 className="font-medium">{contact.type === 'admin' ? contact.adminName : contact.stationName}</h3>
+                    <p className="text-sm text-gray-500">{contact.type === 'admin' ? 'Admin' : 'Station'}</p>
+                  </div>
+                </div>
+              ))}
           </div>
         ) : (
           <div className="flex-1 overflow-y-auto">
@@ -185,42 +206,57 @@ const Sfira_chat = () => {
         
         {/* Messages */}
         <div className="flex-1 overflow-y-auto p-4 bg-gray-50">
-          {messages.map((message) => (
-            <div 
-              key={message.id} 
-              className={`mb-4 flex ${
-                message.sender === 'You' ? 'justify-end' : 'justify-start'
-              }`}
-            >
-              <div className={`max-w-xs md:max-w-md rounded-lg px-4 py-2 ${
-                message.sender === 'You' 
-                  ? isEmergencyMode 
-                    ? 'bg-red-600 text-white' 
-                    : 'bg-blue-600 text-white'
-                  : message.isEmergency
-                    ? 'bg-red-100 border border-red-200'
-                    : 'bg-white border border-gray-200'
-              }`}>
-                {message.sender !== 'You' && (
-                  <div className={`text-xs font-medium mb-1 ${
-                    message.isEmergency ? 'text-red-600' : 'text-gray-500'
-                  }`}>
-                    {message.sender}
-                  </div>
-                )}
-                <p>{message.text}</p>
-                <div className={`text-xs mt-1 text-right ${
-                  message.sender === 'You' 
-                    ? 'text-white text-opacity-80' 
-                    : message.isEmergency 
-                      ? 'text-red-500' 
-                      : 'text-gray-500'
+          {messages.map((message) => {
+            // ...existing code...
+            const isLocal = message.sender !== undefined;
+            const isCurrentUser = isLocal
+              ? message.sender === 'You'
+              : message.senderId === currentUser?.uid;
+            const senderName = isLocal
+              ? message.sender
+              : contacts.find(c => c.id === message.senderId)?.adminName ||
+                contacts.find(c => c.id === message.senderId)?.stationName ||
+                'Unknown';
+            // Mark contact as chatted if message exists
+            if (!isLocal && !contacts.find(c => c.id === (isCurrentUser ? message.receiverId : message.senderId))?.chatted) {
+              const contactId = isCurrentUser ? message.receiverId : message.senderId;
+              setContacts(prev => prev.map(c => c.id === contactId ? { ...c, chatted: true } : c));
+            }
+            return (
+              <div
+                key={message.id}
+                className={`mb-4 flex ${isCurrentUser ? 'justify-end' : 'justify-start'}`}
+              >
+                <div className={`max-w-xs md:max-w-md rounded-lg px-4 py-2 ${
+                  isCurrentUser
+                    ? isEmergencyMode
+                      ? 'bg-red-600 text-white'
+                      : 'bg-blue-600 text-white'
+                    : message.isEmergency
+                      ? 'bg-red-100 border border-red-200'
+                      : 'bg-white border border-gray-200'
                 }`}>
-                  {message.timestamp}
+                  {!isCurrentUser && (
+                    <div className={`text-xs font-medium mb-1 ${
+                      message.isEmergency ? 'text-red-600' : 'text-gray-500'
+                    }`}>
+                      {senderName}
+                    </div>
+                  )}
+                  <p>{message.text}</p>
+                  <div className={`text-xs mt-1 text-right ${
+                    isCurrentUser
+                      ? 'text-white text-opacity-80'
+                      : message.isEmergency
+                        ? 'text-red-500'
+                        : 'text-gray-500'
+                  }`}>
+                    {message.timestamp}
+                  </div>
                 </div>
               </div>
-            </div>
-          ))}
+            );
+          })}
           <div ref={messagesEndRef} />
         </div>
         
