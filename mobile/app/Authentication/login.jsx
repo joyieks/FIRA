@@ -223,7 +223,12 @@ const LoginComponent = () => {
         </TouchableOpacity>
 
         <View className="items-center mb-12">
-          <Image source={require('../../assets/images/firemen.png')} className="w-24 h-24 mb-4" />
+          <Image 
+            source={require('../../assets/images/firemen.png')} 
+            className="w-32 h-32 mb-4"
+            resizeMode="contain"
+            style={{ width: 128, height: 128 }}
+          />
           <Text className="text-3xl font-bold text-fire">Project FIRA</Text>
         </View>
 
