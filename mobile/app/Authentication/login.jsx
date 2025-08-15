@@ -77,8 +77,8 @@ const login = () => {
       const userCredential = await signInWithEmailAndPassword(auth, email, password);
       const user = userCredential.user;
 
-      // Check if this user exists in 'mobileUsers' Firestore
-      const q = query(collection(db, 'mobileUsers'), where('email', '==', email));
+      // Check if this user exists in 'citizenUsers' Firestore
+      const q = query(collection(db, 'citizenUsers'), where('email', '==', email));
       const snapshot = await getDocs(q);
 
       if (!snapshot.empty) {
@@ -88,7 +88,7 @@ const login = () => {
           router.replace('/Screens/CitizenScreen');
         }, 1000);
       } else {
-        displayToast('No user record found in mobileUsers collection.', 'error');
+        displayToast('No user record found in citizenUsers collection.', 'error');
       }
     } catch (error) {
       console.error('Login error:', error);
@@ -131,7 +131,7 @@ const login = () => {
           const user = userCredential.user;
 
           // Check if user exists in Firestore
-          const q = query(collection(db, 'mobileUsers'), where('email', '==', user.email));
+          const q = query(collection(db, 'citizenUsers'), where('email', '==', user.email));
           const snapshot = await getDocs(q);
 
           if (snapshot.empty) {
@@ -147,7 +147,7 @@ const login = () => {
               googleSignIn: true,
             };
 
-            await setDoc(doc(db, 'mobileUsers', user.uid), userData);
+            await setDoc(doc(db, 'citizenUsers', user.uid), userData);
             displayToast(`Welcome, ${userData.firstName}! Your Google account has been registered.`, 'success');
           } else {
             // User exists, just sign in

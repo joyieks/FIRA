@@ -62,7 +62,7 @@ const registration = () => {
         createdAt: new Date().toISOString(),
       };
 
-      await setDoc(doc(db, 'mobileUsers', user.uid), userData);
+      await setDoc(doc(db, 'citizenUsers', user.uid), userData);
 
       Alert.alert(
         'Registration Successful',
@@ -122,7 +122,7 @@ const registration = () => {
           };
 
           // Save to Firestore
-          await setDoc(doc(db, 'mobileUsers', user.uid), userData);
+          await setDoc(doc(db, 'citizenUsers', user.uid), userData);
 
           Alert.alert(
             'Registration Successful! 🎉',
