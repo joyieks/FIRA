@@ -1,291 +1,320 @@
 import React, { useState, useEffect } from 'react';
 import { FiUsers, FiHome, FiUserCheck, FiUserX, FiEdit2, FiTrash2, FiSearch, FiChevronDown, FiEye, FiFileText, FiX, FiPlus, FiClock, FiUser } from 'react-icons/fi';
+import { 
+  collection, 
+  addDoc, 
+  updateDoc, 
+  deleteDoc, 
+  onSnapshot, 
+  doc,
+  query,
+  orderBy
+} from 'firebase/firestore';
+import { db } from '../../../../firebase/config';
 
 const Auser_management = () => {
-  const [activeTab, setActiveTab] = useState('citizens');
-  const [editUser, setEditUser] = useState(null);
-  const [showAddStationModal, setShowAddStationModal] = useState(false);
-  const [showAddCitizenModal, setShowAddCitizenModal] = useState(false);
-  const [showCitizenProfileModal, setShowCitizenProfileModal] = useState(false);
-  const [selectedCitizen, setSelectedCitizen] = useState(null);
-  const [showEditProfileModal, setShowEditProfileModal] = useState(false);
-  const [showHistoryModal, setShowHistoryModal] = useState(false);
-  const [showRespondersModal, setShowRespondersModal] = useState(false);
-  const [showResponderProfileModal, setShowResponderProfileModal] = useState(false);
+  // State for stations data
+  const [stations, setStations] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [searchTerm, setSearchTerm] = useState('');
 
-  const [selectedUser, setSelectedUser] = useState(null);
-  const [selectedResponder, setSelectedResponder] = useState(null);
-  const [newStation, setNewStation] = useState({
-    name: '',
-    stationId: '',
+  // Modal states
+  const [showAddModal, setShowAddModal] = useState(false);
+  const [showEditModal, setShowEditModal] = useState(false);
+  const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [selectedStation, setSelectedStation] = useState(null);
+
+  // Form states
+  const [formData, setFormData] = useState({
     email: '',
-    phone: ''
-  });
-  const [newCitizen, setNewCitizen] = useState({
-    firstName: '',
-    lastName: '',
-    email: '',
-    phone: ''
+    role: '',
+    stationName: '',
+    status: 'Active',
+    username: '',
+    users: ''
   });
 
-  // Sample data matching the mobile interface
-  const [users, setUsers] = useState({
-    stations: [
-      { 
-        id: 1, 
-        name: 'Central Fire Station', 
-        email: 'central@fira.com', 
-        lastUpdate: '1 min ago',
-        responders: 15,
-        status: 'active' 
-      },
-      { 
-        id: 2, 
-        name: 'North Station', 
-        email: 'north@fira.com', 
-        lastUpdate: '3 min ago',
-        responders: 12,
-        status: 'active' 
-      },
-      { 
-        id: 3, 
-        name: 'South Station', 
-        email: 'south@fira.com', 
-        lastUpdate: '2 hours ago',
-        responders: 8,
-        status: 'inactive' 
-      }
-    ],
-    citizens: [
-      { 
-        id: 201, 
-        name: 'John Doe', 
-        email: 'john@fira.com', 
-        phone: '+1234567890',
-        address: '123 Main St, City',
-        lastActivity: '2 min ago',
-        reports: 5,
-        status: 'active' 
-      },
-      { 
-        id: 202, 
-        name: 'Jane Smith', 
-        email: 'jane@fira.com', 
-        phone: '+1234567891',
-        address: '456 Oak Ave, Town',
-        lastActivity: '1 hour ago',
-        reports: 2,
-        status: 'inactive' 
-      },
-      { 
-        id: 203, 
-        name: 'Mike Johnson', 
-        email: 'mike@fira.com', 
-        phone: '+1234567892',
-        address: '789 Pine Rd, Village',
-        lastActivity: '5 min ago',
-        reports: 8,
-        status: 'active' 
-      }
-    ]
-  });
+  // Validation states
+  const [errors, setErrors] = useState({});
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
-  const toggleStatus = (type, id) => {
-    setUsers(prev => ({
-      ...prev,
-      [type]: prev[type].map(user => 
-        user.id === id ? { ...user, status: user.status === 'active' ? 'inactive' : 'active' } : user
-      )
-    }));
-  };
+  // Success/Error messages
+  const [message, setMessage] = useState({ type: '', text: '' });
 
-  const handleDelete = (type, id) => {
-    if (window.confirm('Are you sure you want to delete this user?')) {
-      setUsers(prev => ({
-        ...prev,
-        [type]: prev[type].filter(user => user.id !== id)
+  // Fetch stations data with real-time listener
+  useEffect(() => {
+    const stationsRef = collection(db, 'stationUsers');
+    const q = query(stationsRef, orderBy('stationName'));
+    
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const stationsData = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
       }));
-    }
-  };
-
-  const handleViewCitizenProfile = (citizen) => {
-    setSelectedCitizen(citizen);
-    setShowCitizenProfileModal(true);
-  };
-
-  const handleViewStationProfile = (station) => {
-    setSelectedCitizen(station); // Reuse the same modal state
-    setShowCitizenProfileModal(true);
-  };
-
-  const handleEditProfile = (user) => {
-    setSelectedUser(user);
-    setShowEditProfileModal(true);
-  };
-
-  const handleViewHistory = (user) => {
-    setSelectedUser(user);
-    setShowHistoryModal(true);
-  };
-
-  const handleViewResponders = (station) => {
-    setSelectedUser(station);
-    setShowRespondersModal(true);
-  };
-
-  const handleToggleStatus = (type, id) => {
-    const action = users[type].find(user => user.id === id)?.status === 'active' ? 'disable' : 'enable';
-    if (window.confirm(`Are you sure you want to ${action} this ${type === 'citizens' ? 'citizen' : 'station'}?`)) {
-      toggleStatus(type, id);
-    }
-  };
-
-  const handleViewResponderProfile = (responderIndex) => {
-    setSelectedResponder({
-      id: responderIndex + 1,
-      name: `Responder ${responderIndex + 1}`,
-      position: 'Firefighter',
-      address: '123 Fire Station St, City',
-      phone: `+1-555-012${responderIndex + 1}`,
-      status: 'Active',
-      experience: '5 years',
-      specializations: ['Fire Suppression', 'Rescue Operations', 'Hazmat'],
-      email: `responder${responderIndex + 1}@fira.com`
+      setStations(stationsData);
+      setLoading(false);
+    }, (error) => {
+      console.error('Error fetching stations:', error);
+      setMessage({ type: 'error', text: 'Error fetching stations data' });
+      setLoading(false);
     });
-    setShowResponderProfileModal(true);
+
+    return () => unsubscribe();
+  }, []);
+
+  // Filter stations based on search term
+  const filteredStations = stations.filter(station =>
+    station.stationName.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    station.email.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    station.username.toLowerCase().includes(searchTerm.toLowerCase())
+  );
+
+  // Validation functions
+  const validateEmail = (email) => {
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    return emailRegex.test(email);
   };
 
+  const validateForm = () => {
+    const newErrors = {};
 
-
-  const handleDisableResponder = (responderIndex) => {
-    if (window.confirm(`Are you sure you want to disable Responder ${responderIndex + 1}?`)) {
-      alert(`Responder ${responderIndex + 1} has been disabled successfully!`);
+    if (!formData.email.trim()) {
+      newErrors.email = 'Email is required';
+    } else if (!validateEmail(formData.email)) {
+      newErrors.email = 'Please enter a valid email address';
     }
+
+    if (!formData.role.trim()) {
+      newErrors.role = 'Role is required';
+    }
+
+    if (!formData.stationName.trim()) {
+      newErrors.stationName = 'Station name is required';
+    }
+
+    if (!formData.username.trim()) {
+      newErrors.username = 'Username is required';
+    }
+
+    if (!formData.users.trim()) {
+      newErrors.users = 'Number of users is required';
+    } else if (isNaN(formData.users) || parseInt(formData.users) < 0) {
+      newErrors.users = 'Users must be a valid number';
+    }
+
+    setErrors(newErrors);
+    return Object.keys(newErrors).length === 0;
   };
 
-  const handleAddStation = () => {
-    if (newStation.name && newStation.stationId && newStation.email) {
-      const station = {
-        id: Date.now(),
-        name: newStation.name,
-        stationId: newStation.stationId,
-        email: newStation.email,
-        phone: newStation.phone,
-        lastUpdate: 'Just now',
-        responders: 0,
-        status: 'active'
-      };
-      
-      setUsers(prev => ({
+  // Reset form
+  const resetForm = () => {
+    setFormData({
+      email: '',
+      role: '',
+      stationName: '',
+      status: 'Active',
+      username: '',
+      users: ''
+    });
+    setErrors({});
+  };
+
+  // Handle form input changes
+  const handleInputChange = (e) => {
+    const { name, value } = e.target;
+    setFormData(prev => ({
+      ...prev,
+      [name]: value
+    }));
+    
+    // Clear error when user starts typing
+    if (errors[name]) {
+      setErrors(prev => ({
         ...prev,
-        stations: [...prev.stations, station]
+        [name]: ''
       }));
-      
-      setNewStation({
-        name: '',
-        stationId: '',
-        email: '',
-        phone: ''
-      });
-      
-      setShowAddStationModal(false);
     }
   };
 
-  const handleAddCitizen = () => {
-    if (newCitizen.firstName && newCitizen.lastName && newCitizen.email) {
-      const citizen = {
-        id: Date.now(),
-        name: `${newCitizen.firstName} ${newCitizen.lastName}`,
-        email: newCitizen.email,
-        phone: newCitizen.phone,
-        lastActivity: 'Just now',
-        reports: 0,
-        status: 'active'
+  // Add new station
+  const handleAddStation = async () => {
+    if (!validateForm()) return;
+
+    setIsSubmitting(true);
+    try {
+      const stationData = {
+        ...formData,
+        users: parseInt(formData.users),
+        createdAt: new Date()
       };
+
+      await addDoc(collection(db, 'stationUsers'), stationData);
       
-      setUsers(prev => ({
-        ...prev,
-        citizens: [...prev.citizens, citizen]
-      }));
-      
-      setNewCitizen({
-        firstName: '',
-        lastName: '',
-        email: '',
-        phone: ''
-      });
-      
-      setShowAddCitizenModal(false);
+      setMessage({ type: 'success', text: 'Station added successfully!' });
+      setShowAddModal(false);
+      resetForm();
+    } catch (error) {
+      console.error('Error adding station:', error);
+      setMessage({ type: 'error', text: 'Error adding station. Please try again.' });
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
-  // Calculate statistics
-  const totalUsers = users.citizens.length + users.stations.length;
-  const activeUsers = users.citizens.filter(u => u.status === 'active').length + 
-                     users.stations.filter(u => u.status === 'active').length;
+  // Edit station
+  const handleEditStation = async () => {
+    if (!validateForm()) return;
+
+    setIsSubmitting(true);
+    try {
+      const stationData = {
+        ...formData,
+        users: parseInt(formData.users),
+        updatedAt: new Date()
+      };
+
+      const stationRef = doc(db, 'stationUsers', selectedStation.id);
+      await updateDoc(stationRef, stationData);
+      
+      setMessage({ type: 'success', text: 'Station updated successfully!' });
+      setShowEditModal(false);
+      setSelectedStation(null);
+      resetForm();
+    } catch (error) {
+      console.error('Error updating station:', error);
+      setMessage({ type: 'error', text: 'Error updating station. Please try again.' });
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  // Delete station
+  const handleDeleteStation = async () => {
+    try {
+      const stationRef = doc(db, 'stationUsers', selectedStation.id);
+      await deleteDoc(stationRef);
+      
+      setMessage({ type: 'success', text: 'Station deleted successfully!' });
+      setShowDeleteModal(false);
+      setSelectedStation(null);
+    } catch (error) {
+      console.error('Error deleting station:', error);
+      setMessage({ type: 'error', text: 'Error deleting station. Please try again.' });
+    }
+  };
+
+  // Open edit modal
+  const openEditModal = (station) => {
+    setSelectedStation(station);
+    setFormData({
+      email: station.email,
+      role: station.role,
+      stationName: station.stationName,
+      status: station.status,
+      username: station.username,
+      users: station.users.toString()
+    });
+    setShowEditModal(true);
+  };
+
+  // Open delete modal
+  const openDeleteModal = (station) => {
+    setSelectedStation(station);
+    setShowDeleteModal(true);
+  };
+
+  // Close modals
+  const closeModals = () => {
+    setShowAddModal(false);
+    setShowEditModal(false);
+    setShowDeleteModal(false);
+    setSelectedStation(null);
+    resetForm();
+  };
+
+  // Clear message after 3 seconds
+  useEffect(() => {
+    if (message.text) {
+      const timer = setTimeout(() => {
+        setMessage({ type: '', text: '' });
+      }, 3000);
+      return () => clearTimeout(timer);
+    }
+  }, [message]);
+
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-red-600 mx-auto"></div>
+          <p className="mt-4 text-gray-600">Loading stations...</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-gray-50">
-      
-
       <div className="w-full px-4 sm:px-6 lg:px-8 py-6">
+        {/* Header */}
+        <div className="mb-8">
+          <h1 className="text-3xl font-bold text-gray-900">Station User Management</h1>
+          <p className="mt-2 text-gray-600">Manage station users and their information</p>
+        </div>
+
         {/* Statistics Cards */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
           <div className="bg-white rounded-lg shadow p-6">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-sm font-medium text-gray-600">Total Users</p>
-                <p className="text-3xl font-bold text-gray-900">{totalUsers}</p>
+                <p className="text-sm font-medium text-gray-600">Total Stations</p>
+                <p className="text-3xl font-bold text-gray-900">{stations.length}</p>
               </div>
               <div className="p-3 bg-blue-100 rounded-full">
-                <FiUsers className="w-6 h-6 text-blue-600" />
+                <FiHome className="w-6 h-6 text-blue-600" />
               </div>
             </div>
-      </div>
+          </div>
 
           <div className="bg-white rounded-lg shadow p-6">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-sm font-medium text-gray-600">Active Users</p>
-                <p className="text-3xl font-bold text-green-600">{activeUsers}</p>
+                <p className="text-sm font-medium text-gray-600">Active Stations</p>
+                <p className="text-3xl font-bold text-green-600">
+                  {stations.filter(s => s.status === 'Active').length}
+                </p>
               </div>
               <div className="p-3 bg-green-100 rounded-full">
                 <FiUserCheck className="w-6 h-6 text-green-600" />
               </div>
+            </div>
+          </div>
+
+          <div className="bg-white rounded-lg shadow p-6">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm font-medium text-gray-600">Total Users</p>
+                <p className="text-3xl font-bold text-purple-600">
+                  {stations.reduce((total, station) => total + (station.users || 0), 0)}
+                </p>
+              </div>
+              <div className="p-3 bg-purple-100 rounded-full">
+                <FiUsers className="w-6 h-6 text-purple-600" />
               </div>
             </div>
           </div>
-          
-        {/* Tabs */}
-        <div className="bg-white rounded-lg shadow mb-6">
-          <div className="flex border-b">
-                      <button
-              onClick={() => setActiveTab('citizens')}
-              className={`flex-1 py-4 px-6 text-center font-medium text-sm ${
-                activeTab === 'citizens' 
-                  ? 'text-red-600 border-b-2 border-red-600' 
-                  : 'text-gray-500 hover:text-gray-700'
-              }`}
-            >
-              Citizens ({users.citizens.length})
-                      </button>
-                      <button
-              onClick={() => setActiveTab('stations')}
-              className={`flex-1 py-4 px-6 text-center font-medium text-sm ${
-                activeTab === 'stations' 
-                  ? 'text-red-600 border-b-2 border-red-600' 
-                  : 'text-gray-500 hover:text-gray-700'
-              }`}
-            >
-              Stations ({users.stations.length})
-                      </button>
-          </div>
         </div>
 
-
-
-        
+        {/* Message Display */}
+        {message.text && (
+          <div className={`mb-6 p-4 rounded-lg ${
+            message.type === 'success' 
+              ? 'bg-green-100 text-green-800 border border-green-200' 
+              : 'bg-red-100 text-red-800 border border-red-200'
+          }`}>
+            {message.text}
+          </div>
+        )}
 
         {/* Search and Add Button */}
         <div className="bg-white rounded-lg shadow p-6 mb-6">
@@ -294,267 +323,263 @@ const Auser_management = () => {
               <FiSearch className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" />
               <input
                 type="text"
-                placeholder={activeTab === 'citizens' ? 'Search citizens...' : 'Search stations...'}
+                placeholder="Search stations..."
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
                 className="pl-10 pr-4 py-3 w-full border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:border-red-500"
               />
             </div>
             <button
-              onClick={() => activeTab === 'citizens' ? setShowAddCitizenModal(true) : setShowAddStationModal(true)}
+              onClick={() => setShowAddModal(true)}
               className="flex items-center justify-center px-6 py-3 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors"
             >
               <FiPlus className="mr-2" />
-              Add New {activeTab === 'citizens' ? 'Citizen' : 'Station'}
+              Add New Station
             </button>
           </div>
         </div>
-          
-        {/* Users List */}
-        <div className="bg-white rounded-lg shadow">
-          <div className="p-6 border-b">
-            <h2 className="text-lg font-semibold text-gray-900">
-              {activeTab === 'citizens' ? 'Citizens' : 'Stations'} ({users[activeTab].length})
-            </h2>
-                </div>
-                
-          <div className="divide-y divide-gray-200">
-            {users[activeTab].map(user => (
-              <div key={user.id} className="p-6 hover:bg-gray-50">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center space-x-4">
-                    <div className="w-12 h-12 bg-gray-200 rounded-full flex items-center justify-center">
-                      <FiUser className="w-6 h-6 text-gray-500" />
-                </div>
-                    <div className="flex-1">
-                      <h3 className="text-lg font-semibold text-gray-900">{user.name}</h3>
-                      <p className="text-sm text-gray-600">{user.email}</p>
-                      <div className="flex items-center space-x-4 mt-1">
-                        <span className="text-sm text-gray-500">
-                          {activeTab === 'citizens' ? `Last activity: ${user.lastActivity}` : `Last update: ${user.lastUpdate}`}
-                        </span>
-                        <span className="text-sm text-blue-600">
-                          {activeTab === 'citizens' ? (
-                            `Reports: ${user.reports}`
-                          ) : (
-                            <button 
-                              onClick={() => handleViewResponders(user)}
-                              className="hover:underline cursor-pointer"
-                              title="Click to view responders"
-                            >
-                              Responders: {user.responders}
-                            </button>
-                          )}
-                        </span>
-                  </div>
-                </div>
-              </div>
-              
-                  <div className="flex items-center space-x-4">
-                    <span className={`px-3 py-1 rounded-full text-xs font-medium ${
-                      user.status === 'active' 
-                        ? 'bg-green-100 text-green-800' 
-                        : 'bg-red-100 text-red-800'
-                    }`}>
-                      {user.status === 'active' ? 'Active' : 'Inactive'}
-                    </span>
-                    
-                    <div className="flex items-center space-x-2">
-                      <button 
-                        onClick={() => activeTab === 'citizens' ? handleViewCitizenProfile(user) : handleViewStationProfile(user)}
-                        className="p-2 text-blue-600 hover:bg-blue-50 rounded-full"
-                        title={activeTab === 'citizens' ? 'View Citizen Profile' : 'View Station Profile'}
-                      >
-                        <FiEye className="w-4 h-4" />
-                      </button>
-                      <button 
-                        onClick={() => handleViewHistory(user)}
-                        className="p-2 text-green-600 hover:bg-green-50 rounded-full"
-                        title="View History"
-                      >
-                        <FiClock className="w-4 h-4" />
-                      </button>
-                      <button 
-                        onClick={() => handleEditProfile(user)}
-                        className="p-2 text-yellow-600 hover:bg-yellow-50 rounded-full"
-                        title="Edit Profile"
-                      >
-                        <FiEdit2 className="w-4 h-4" />
-                      </button>
-                      <button
-                        onClick={() => handleToggleStatus(activeTab, user.id)}
-                        className={`p-2 rounded-full ${
-                          user.status === 'active' 
-                            ? 'text-red-600 hover:bg-red-50' 
-                            : 'text-green-600 hover:bg-green-50'
-                        }`}
-                        title={user.status === 'active' ? 'Disable' : 'Enable'}
-                      >
-                        {user.status === 'active' ? <FiUserX className="w-4 h-4" /> : <FiUserCheck className="w-4 h-4" />}
-                      </button>
-              </div>
-            </div>
-          </div>
-        </div>
-            ))}
-            </div>
-          </div>
-        </div>
 
-      {/* Add Citizen Modal */}
-      {showAddCitizenModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-lg shadow-xl max-w-md w-full">
-            <div className="p-6">
-              <div className="flex justify-between items-center mb-4">
-                <h3 className="text-lg font-medium text-gray-900">Add New Citizen</h3>
-                <button
-                  onClick={() => setShowAddCitizenModal(false)}
-                  className="text-gray-400 hover:text-gray-600"
-                >
-                  <FiX size={24} />
-                </button>
+        {/* Stations Table */}
+        <div className="bg-white rounded-lg shadow overflow-hidden">
+          <div className="px-6 py-4 border-b border-gray-200">
+            <h2 className="text-lg font-semibold text-gray-900">
+              Stations ({filteredStations.length})
+            </h2>
+          </div>
+          
+          <div className="overflow-x-auto">
+            <table className="min-w-full divide-y divide-gray-200">
+              <thead className="bg-gray-50">
+                <tr>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Station Name
+                  </th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Username
+                  </th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Email
+                  </th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Role
+                  </th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Users
+                  </th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Status
+                  </th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Actions
+                  </th>
+                </tr>
+              </thead>
+              <tbody className="bg-white divide-y divide-gray-200">
+                {filteredStations.map((station) => (
+                  <tr key={station.id} className="hover:bg-gray-50">
+                    <td className="px-6 py-4 whitespace-nowrap">
+                      <div className="text-sm font-medium text-gray-900">
+                        {station.stationName}
+                      </div>
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap">
+                      <div className="text-sm text-gray-900">{station.username}</div>
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap">
+                      <div className="text-sm text-gray-900">{station.email}</div>
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap">
+                      <div className="text-sm text-gray-900">{station.role}</div>
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap">
+                      <div className="text-sm text-gray-900">{station.users}</div>
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap">
+                      <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${
+                        station.status === 'Active' 
+                          ? 'bg-green-100 text-green-800' 
+                          : 'bg-red-100 text-red-800'
+                      }`}>
+                        {station.status}
+                      </span>
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
+                      <div className="flex items-center space-x-2">
+                        <button
+                          onClick={() => openEditModal(station)}
+                          className="text-indigo-600 hover:text-indigo-900 p-1"
+                          title="Edit"
+                        >
+                          <FiEdit2 className="w-4 h-4" />
+                        </button>
+                        <button
+                          onClick={() => openDeleteModal(station)}
+                          className="text-red-600 hover:text-red-900 p-1"
+                          title="Delete"
+                        >
+                          <FiTrash2 className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            
+            {filteredStations.length === 0 && (
+              <div className="text-center py-12">
+                <FiUsers className="mx-auto h-12 w-12 text-gray-400" />
+                <h3 className="mt-2 text-sm font-medium text-gray-900">No stations found</h3>
+                <p className="mt-1 text-sm text-gray-500">
+                  {searchTerm ? 'Try adjusting your search terms.' : 'Get started by adding a new station.'}
+                </p>
               </div>
-              
-              <div className="space-y-4">
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">First Name *</label>
-                    <input
-                      type="text"
-                      value={newCitizen.firstName}
-                      onChange={(e) => setNewCitizen({...newCitizen, firstName: e.target.value})}
-                      placeholder="Enter first name"
-                      className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-red-500 focus:border-red-500"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Last Name *</label>
-                    <input
-                      type="text"
-                      value={newCitizen.lastName}
-                      onChange={(e) => setNewCitizen({...newCitizen, lastName: e.target.value})}
-                      placeholder="Enter last name"
-                      className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-red-500 focus:border-red-500"
-                    />
-                  </div>
-                </div>
-                
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Phone Number</label>
-                  <input
-                    type="tel"
-                    value={newCitizen.phone}
-                    onChange={(e) => setNewCitizen({...newCitizen, phone: e.target.value})}
-                    placeholder="Enter phone number"
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-red-500 focus:border-red-500"
-                  />
-                </div>
-                
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Email Address *</label>
-                  <input
-                    type="email"
-                    value={newCitizen.email}
-                    onChange={(e) => setNewCitizen({...newCitizen, email: e.target.value})}
-                    placeholder="Enter email address"
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-red-500 focus:border-red-500"
-                  />
-                </div>
-              </div>
-              
-              <div className="mt-6 flex justify-end space-x-3">
-                <button
-                  onClick={() => setShowAddCitizenModal(false)}
-                  className="px-4 py-2 border border-gray-300 rounded-md shadow-sm text-sm font-medium text-gray-700 bg-white hover:bg-gray-50"
-                >
-                  Cancel
-                </button>
-                <button
-                  onClick={handleAddCitizen}
-                  disabled={!newCitizen.firstName || !newCitizen.lastName || !newCitizen.email}
-                  className="px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-red-600 hover:bg-red-700 disabled:bg-gray-400 disabled:cursor-not-allowed"
-                >
-                  Add Citizen
-                </button>
-              </div>
-            </div>
+            )}
           </div>
         </div>
-      )}
+      </div>
 
       {/* Add Station Modal */}
-      {showAddStationModal && (
+      {showAddModal && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
           <div className="bg-white rounded-lg shadow-xl max-w-md w-full">
             <div className="p-6">
               <div className="flex justify-between items-center mb-4">
                 <h3 className="text-lg font-medium text-gray-900">Add New Station</h3>
                 <button
-                  onClick={() => setShowAddStationModal(false)}
+                  onClick={closeModals}
                   className="text-gray-400 hover:text-gray-600"
                 >
                   <FiX size={24} />
                 </button>
-                </div>
-                
+              </div>
+              
               <div className="space-y-4">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Name of Station *</label>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Station Name *
+                  </label>
                   <input
                     type="text"
-                    value={newStation.name}
-                    onChange={(e) => setNewStation({...newStation, name: e.target.value})}
+                    name="stationName"
+                    value={formData.stationName}
+                    onChange={handleInputChange}
                     placeholder="Enter station name"
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-red-500 focus:border-red-500"
+                    className={`w-full px-3 py-2 border rounded-md shadow-sm focus:outline-none focus:ring-red-500 focus:border-red-500 ${
+                      errors.stationName ? 'border-red-500' : 'border-gray-300'
+                    }`}
                   />
+                  {errors.stationName && (
+                    <p className="mt-1 text-sm text-red-600">{errors.stationName}</p>
+                  )}
                 </div>
                 
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Station ID *</label>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Username *
+                  </label>
                   <input
                     type="text"
-                    value={newStation.stationId}
-                    onChange={(e) => setNewStation({...newStation, stationId: e.target.value})}
-                    placeholder="Enter station ID"
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-red-500 focus:border-red-500"
+                    name="username"
+                    value={formData.username}
+                    onChange={handleInputChange}
+                    placeholder="Enter username"
+                    className={`w-full px-3 py-2 border rounded-md shadow-sm focus:outline-none focus:ring-red-500 focus:border-red-500 ${
+                      errors.username ? 'border-red-500' : 'border-gray-300'
+                    }`}
                   />
+                  {errors.username && (
+                    <p className="mt-1 text-sm text-red-600">{errors.username}</p>
+                  )}
                 </div>
                 
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Phone Number</label>
-                  <input
-                    type="tel"
-                    value={newStation.phone}
-                    onChange={(e) => setNewStation({...newStation, phone: e.target.value})}
-                    placeholder="Enter phone number"
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-red-500 focus:border-red-500"
-                  />
-                </div>
-                
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Email Address *</label>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Email Address *
+                  </label>
                   <input
                     type="email"
-                    value={newStation.email}
-                    onChange={(e) => setNewStation({...newStation, email: e.target.value})}
+                    name="email"
+                    value={formData.email}
+                    onChange={handleInputChange}
                     placeholder="Enter email address"
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-red-500 focus:border-red-500"
+                    className={`w-full px-3 py-2 border rounded-md shadow-sm focus:outline-none focus:ring-red-500 focus:border-red-500 ${
+                      errors.email ? 'border-red-500' : 'border-gray-300'
+                    }`}
                   />
+                  {errors.email && (
+                    <p className="mt-1 text-sm text-red-600">{errors.email}</p>
+                  )}
+                </div>
+                
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Role *
+                  </label>
+                  <input
+                    type="text"
+                    name="role"
+                    value={formData.role}
+                    onChange={handleInputChange}
+                    placeholder="Enter role"
+                    className={`w-full px-3 py-2 border rounded-md shadow-sm focus:outline-none focus:ring-red-500 focus:border-red-500 ${
+                      errors.role ? 'border-red-500' : 'border-gray-300'
+                    }`}
+                  />
+                  {errors.role && (
+                    <p className="mt-1 text-sm text-red-600">{errors.role}</p>
+                  )}
+                </div>
+                
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Number of Users *
+                  </label>
+                  <input
+                    type="number"
+                    name="users"
+                    value={formData.users}
+                    onChange={handleInputChange}
+                    placeholder="Enter number of users"
+                    min="0"
+                    className={`w-full px-3 py-2 border rounded-md shadow-sm focus:outline-none focus:ring-red-500 focus:border-red-500 ${
+                      errors.users ? 'border-red-500' : 'border-gray-300'
+                    }`}
+                  />
+                  {errors.users && (
+                    <p className="mt-1 text-sm text-red-600">{errors.users}</p>
+                  )}
+                </div>
+                
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Status
+                  </label>
+                  <select
+                    name="status"
+                    value={formData.status}
+                    onChange={handleInputChange}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-red-500 focus:border-red-500"
+                  >
+                    <option value="Active">Active</option>
+                    <option value="Inactive">Inactive</option>
+                  </select>
                 </div>
               </div>
               
               <div className="mt-6 flex justify-end space-x-3">
                 <button
-                  onClick={() => setShowAddStationModal(false)}
+                  onClick={closeModals}
                   className="px-4 py-2 border border-gray-300 rounded-md shadow-sm text-sm font-medium text-gray-700 bg-white hover:bg-gray-50"
                 >
                   Cancel
                 </button>
                 <button
                   onClick={handleAddStation}
-                  disabled={!newStation.name || !newStation.stationId || !newStation.email}
+                  disabled={isSubmitting}
                   className="px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-red-600 hover:bg-red-700 disabled:bg-gray-400 disabled:cursor-not-allowed"
                 >
-                  Add Station
+                  {isSubmitting ? 'Adding...' : 'Add Station'}
                 </button>
               </div>
             </div>
@@ -562,84 +587,15 @@ const Auser_management = () => {
         </div>
       )}
 
-      {/* Citizen Profile Modal */}
-      {showCitizenProfileModal && selectedCitizen && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-[9999]">
-          <div className="bg-white rounded-lg shadow-xl max-w-md w-full max-h-[90vh] overflow-y-auto">
-            <div className="p-6">
-              <div className="flex justify-between items-center mb-6">
-                <h3 className="text-xl font-bold text-gray-900">
-                  {activeTab === 'citizens' ? 'Citizen' : 'Station'} Profile
-                </h3>
-                <button
-                  onClick={() => setShowCitizenProfileModal(false)}
-                  className="text-gray-400 hover:text-gray-600"
-                >
-                  <FiX size={24} />
-                </button>
-              </div>
-              
-              <div className="space-y-6">
-                <div className="border-b pb-4">
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Name</label>
-                  <p className="text-lg font-bold text-gray-900">{selectedCitizen.name}</p>
-                </div>
-                
-                <div className="border-b pb-4">
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Email</label>
-                  <p className="text-lg font-bold text-gray-900">{selectedCitizen.email}</p>
-                </div>
-                
-                <div className="border-b pb-4">
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Phone</label>
-                  <p className="text-lg font-bold text-gray-900">{selectedCitizen.phone}</p>
-                </div>
-                
-                <div className="border-b pb-4">
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Address</label>
-                  <p className="text-lg font-bold text-gray-900">{selectedCitizen.address}</p>
-                </div>
-                
-                <div className="border-b pb-4">
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Status</label>
-                  <p className="text-lg font-bold text-gray-900">{selectedCitizen.status === 'active' ? 'Active' : 'Inactive'}</p>
-                </div>
-                
-                {activeTab === 'citizens' ? (
-                  <div className="border-b pb-4">
-                    <label className="block text-sm font-medium text-gray-700 mb-2">Last Active</label>
-                    <p className="text-lg font-bold text-gray-900 text-red-600">{selectedCitizen.lastActivity}</p>
-                  </div>
-                ) : (
-                  <div className="border-b pb-4">
-                    <label className="block text-sm font-medium text-gray-700 mb-2">Last Update</label>
-                    <p className="text-lg font-bold text-gray-900 text-red-600">{selectedCitizen.lastUpdate}</p>
-                  </div>
-                )}
-              </div>
-              
-              <div className="mt-8 flex justify-center">
-                <button
-                  onClick={() => setShowCitizenProfileModal(false)}
-                  className="px-6 py-3 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors font-medium"
-                >
-                  Close
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Edit Profile Modal */}
-      {showEditProfileModal && selectedUser && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-[9999]">
+      {/* Edit Station Modal */}
+      {showEditModal && selectedStation && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
           <div className="bg-white rounded-lg shadow-xl max-w-md w-full">
             <div className="p-6">
-              <div className="flex justify-between items-center mb-6">
-                <h3 className="text-xl font-bold text-gray-900">Edit Profile</h3>
+              <div className="flex justify-between items-center mb-4">
+                <h3 className="text-lg font-medium text-gray-900">Edit Station</h3>
                 <button
-                  onClick={() => setShowEditProfileModal(false)}
+                  onClick={closeModals}
                   className="text-gray-400 hover:text-gray-600"
                 >
                   <FiX size={24} />
@@ -648,45 +604,130 @@ const Auser_management = () => {
               
               <div className="space-y-4">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Name</label>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Station Name *
+                  </label>
                   <input
                     type="text"
-                    defaultValue={selectedUser.name}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-red-500 focus:border-red-500"
+                    name="stationName"
+                    value={formData.stationName}
+                    onChange={handleInputChange}
+                    placeholder="Enter station name"
+                    className={`w-full px-3 py-2 border rounded-md shadow-sm focus:outline-none focus:ring-red-500 focus:border-red-500 ${
+                      errors.stationName ? 'border-red-500' : 'border-gray-300'
+                    }`}
                   />
+                  {errors.stationName && (
+                    <p className="mt-1 text-sm text-red-600">{errors.stationName}</p>
+                  )}
                 </div>
                 
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Email</label>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Username *
+                  </label>
+                  <input
+                    type="text"
+                    name="username"
+                    value={formData.username}
+                    onChange={handleInputChange}
+                    placeholder="Enter username"
+                    className={`w-full px-3 py-2 border rounded-md shadow-sm focus:outline-none focus:ring-red-500 focus:border-red-500 ${
+                      errors.username ? 'border-red-500' : 'border-gray-300'
+                    }`}
+                  />
+                  {errors.username && (
+                    <p className="mt-1 text-sm text-red-600">{errors.username}</p>
+                  )}
+                </div>
+                
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Email Address *
+                  </label>
                   <input
                     type="email"
-                    defaultValue={selectedUser.email}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-red-500 focus:border-red-500"
+                    name="email"
+                    value={formData.email}
+                    onChange={handleInputChange}
+                    placeholder="Enter email address"
+                    className={`w-full px-3 py-2 border rounded-md shadow-sm focus:outline-none focus:ring-red-500 focus:border-red-500 ${
+                      errors.email ? 'border-red-500' : 'border-gray-300'
+                    }`}
                   />
+                  {errors.email && (
+                    <p className="mt-1 text-sm text-red-600">{errors.email}</p>
+                  )}
                 </div>
                 
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Phone</label>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Role *
+                  </label>
                   <input
-                    type="tel"
-                    defaultValue={selectedUser.phone || ''}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-red-500 focus:border-red-500"
+                    type="text"
+                    name="role"
+                    value={formData.role}
+                    onChange={handleInputChange}
+                    placeholder="Enter role"
+                    className={`w-full px-3 py-2 border rounded-md shadow-sm focus:outline-none focus:ring-red-500 focus:border-red-500 ${
+                      errors.role ? 'border-red-500' : 'border-gray-300'
+                    }`}
                   />
+                  {errors.role && (
+                    <p className="mt-1 text-sm text-red-600">{errors.role}</p>
+                  )}
+                </div>
+                
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Number of Users *
+                  </label>
+                  <input
+                    type="number"
+                    name="users"
+                    value={formData.users}
+                    onChange={handleInputChange}
+                    placeholder="Enter number of users"
+                    min="0"
+                    className={`w-full px-3 py-2 border rounded-md shadow-sm focus:outline-none focus:ring-red-500 focus:border-red-500 ${
+                      errors.users ? 'border-red-500' : 'border-gray-300'
+                    }`}
+                  />
+                  {errors.users && (
+                    <p className="mt-1 text-sm text-red-600">{errors.users}</p>
+                  )}
+                </div>
+                
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Status
+                  </label>
+                  <select
+                    name="status"
+                    value={formData.status}
+                    onChange={handleInputChange}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-red-500 focus:border-red-500"
+                  >
+                    <option value="Active">Active</option>
+                    <option value="Inactive">Inactive</option>
+                  </select>
                 </div>
               </div>
               
               <div className="mt-6 flex justify-end space-x-3">
                 <button
-                  onClick={() => setShowEditProfileModal(false)}
-                  className="px-4 py-2 border border-gray-300 rounded-md text-sm font-medium text-gray-700 bg-white hover:bg-gray-50"
+                  onClick={closeModals}
+                  className="px-4 py-2 border border-gray-300 rounded-md shadow-sm text-sm font-medium text-gray-700 bg-white hover:bg-gray-50"
                 >
                   Cancel
                 </button>
                 <button
-                  onClick={() => setShowEditProfileModal(false)}
-                  className="px-4 py-2 bg-red-600 text-white rounded-md text-sm font-medium hover:bg-red-700"
+                  onClick={handleEditStation}
+                  disabled={isSubmitting}
+                  className="px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-red-600 hover:bg-red-700 disabled:bg-gray-400 disabled:cursor-not-allowed"
                 >
-                  Save Changes
+                  {isSubmitting ? 'Updating...' : 'Update Station'}
                 </button>
               </div>
             </div>
@@ -694,231 +735,46 @@ const Auser_management = () => {
         </div>
       )}
 
-      {/* History Modal */}
-      {showHistoryModal && selectedUser && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-[9999]">
-          <div className="bg-white rounded-lg shadow-xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
+      {/* Delete Confirmation Modal */}
+      {showDeleteModal && selectedStation && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-lg shadow-xl max-w-md w-full">
             <div className="p-6">
-              <div className="flex justify-between items-center mb-6">
-                <h3 className="text-xl font-bold text-gray-900">
-                  {activeTab === 'citizens' ? 'Report History' : 'Response History'} - {selectedUser.name}
-                </h3>
+              <div className="flex justify-between items-center mb-4">
+                <h3 className="text-lg font-medium text-gray-900">Delete Station</h3>
                 <button
-                  onClick={() => setShowHistoryModal(false)}
+                  onClick={closeModals}
                   className="text-gray-400 hover:text-gray-600"
                 >
                   <FiX size={24} />
                 </button>
               </div>
               
-              <div className="space-y-4">
-                {activeTab === 'citizens' ? (
-                  // Citizen Report History
-                  <div className="space-y-3">
-                    {selectedUser.reports > 0 ? (
-                      Array.from({ length: selectedUser.reports }, (_, i) => (
-                        <div key={i} className="bg-gray-50 p-4 rounded-lg border-l-4 border-l-red-600">
-                          <div className="flex justify-between items-start">
-                            <div>
-                              <h4 className="font-medium text-gray-900">Emergency Report #{i + 1}</h4>
-                              <p className="text-sm text-gray-600 mt-1">Fire outbreak in residential area</p>
-                              <p className="text-xs text-gray-500 mt-2">Location: 123 Main St, City</p>
-                              <p className="text-xs text-gray-500">Status: Resolved</p>
-                            </div>
-                            <span className="text-xs text-gray-500">2 days ago</span>
-                          </div>
-                        </div>
-                      ))
-                    ) : (
-                      <p className="text-gray-500 text-center py-8">No reports found</p>
-                    )}
-                  </div>
-                ) : (
-                  // Station Response History
-                  <div className="space-y-3">
-                    {selectedUser.responders > 0 ? (
-                      Array.from({ length: Math.min(selectedUser.responders, 10) }, (_, i) => (
-                        <div key={i} className="bg-gray-50 p-4 rounded-lg border-l-4 border-l-green-600">
-                          <div className="flex justify-between items-start">
-                            <div>
-                              <h4 className="font-medium text-gray-900">Emergency Response #{i + 1}</h4>
-                              <p className="text-sm text-gray-600 mt-1">Fire suppression and rescue operation</p>
-                              <p className="text-xs text-gray-500 mt-2">Location: 456 Oak Ave, Town</p>
-                              <p className="text-xs text-gray-500">Response Time: 5 minutes</p>
-                              <p className="text-xs text-gray-500">Status: Completed</p>
-                            </div>
-                            <span className="text-xs text-gray-500">1 day ago</span>
-                          </div>
-                        </div>
-                      ))
-                    ) : (
-                      <p className="text-gray-500 text-center py-8">No response history found</p>
-                    )}
-                  </div>
-                )}
+              <div className="mb-6">
+                <p className="text-sm text-gray-600">
+                  Are you sure you want to delete the station <strong>{selectedStation.stationName}</strong>? 
+                  This action cannot be undone.
+                </p>
               </div>
               
-              <div className="mt-6 flex justify-center">
+              <div className="flex justify-end space-x-3">
                 <button
-                  onClick={() => setShowHistoryModal(false)}
-                  className="px-6 py-3 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors font-medium"
+                  onClick={closeModals}
+                  className="px-4 py-2 border border-gray-300 rounded-md shadow-sm text-sm font-medium text-gray-700 bg-white hover:bg-gray-50"
                 >
-                  Close
+                  Cancel
+                </button>
+                <button
+                  onClick={handleDeleteStation}
+                  className="px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-red-600 hover:bg-red-700"
+                >
+                  Delete Station
                 </button>
               </div>
             </div>
           </div>
         </div>
       )}
-
-      {/* Responders Modal */}
-      {showRespondersModal && selectedUser && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-[9999]">
-          <div className="bg-white rounded-lg shadow-xl max-w-4xl w-full max-h-[90vh] overflow-y-auto">
-            <div className="p-6">
-              <div className="flex justify-between items-center mb-6">
-                <h3 className="text-xl font-bold text-gray-900">Responders - {selectedUser.name}</h3>
-                <button
-                  onClick={() => setShowRespondersModal(false)}
-                  className="text-gray-400 hover:text-gray-600"
-                >
-                  <FiX size={24} />
-                </button>
-              </div>
-              
-              <div className="space-y-4">
-                {Array.from({ length: selectedUser.responders }, (_, i) => (
-                  <div key={i} className="bg-gray-50 p-4 rounded-lg border border-gray-200">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center space-x-4">
-                        <div className="w-12 h-12 bg-red-100 rounded-full flex items-center justify-center">
-                          <FiUser className="w-6 h-6 text-red-600" />
-                        </div>
-                        <div>
-                          <h4 className="font-medium text-gray-900">Responder {i + 1}</h4>
-                          <p className="text-sm text-gray-600">Firefighter</p>
-                          <p className="text-xs text-gray-500">ID: RSP-{String(i + 1).padStart(3, '0')}</p>
-                        </div>
-                      </div>
-                      
-                      <div className="flex items-center space-x-2">
-                        <button 
-                          onClick={() => handleViewResponderProfile(i)}
-                          className="p-2 text-blue-600 hover:bg-blue-50 rounded-full" 
-                          title="View Profile"
-                        >
-                          <FiEye className="w-4 h-4" />
-                        </button>
-
-                        <button 
-                          onClick={() => handleDisableResponder(i)}
-                          className="p-2 text-red-600 hover:bg-red-50 rounded-full" 
-                          title="Disable"
-                        >
-                          <FiUserX className="w-4 h-4" />
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-              
-              <div className="mt-6 flex justify-center">
-                <button
-                  onClick={() => setShowRespondersModal(false)}
-                  className="px-6 py-3 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors font-medium"
-                >
-                  Close
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Responder Profile Modal */}
-      {showResponderProfileModal && selectedResponder && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-[9999]">
-          <div className="bg-white rounded-lg shadow-xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
-            <div className="p-6">
-              <div className="flex justify-between items-center mb-6">
-                <h3 className="text-xl font-bold text-gray-900">Responder Profile - {selectedResponder.name}</h3>
-                <button
-                  onClick={() => setShowResponderProfileModal(false)}
-                  className="text-gray-400 hover:text-gray-600"
-                >
-                  <FiX size={24} />
-                </button>
-              </div>
-              
-              <div className="space-y-6">
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                  <div className="space-y-4">
-                    <div className="bg-gray-50 p-4 rounded-lg">
-                      <label className="block text-sm font-medium text-gray-700 mb-2">Name</label>
-                      <p className="text-lg font-bold text-gray-900">{selectedResponder.name}</p>
-                    </div>
-                    
-                    <div className="bg-gray-50 p-4 rounded-lg">
-                      <label className="block text-sm font-medium text-gray-700 mb-2">Position</label>
-                      <p className="text-lg font-bold text-gray-900">{selectedResponder.position}</p>
-                    </div>
-                    
-                    <div className="bg-gray-50 p-4 rounded-lg">
-                      <label className="block text-sm font-medium text-gray-700 mb-2">Email</label>
-                      <p className="text-lg font-bold text-gray-900">{selectedResponder.email}</p>
-                    </div>
-                    
-                    <div className="bg-gray-50 p-4 rounded-lg">
-                      <label className="block text-sm font-medium text-gray-700 mb-2">Phone</label>
-                      <p className="text-lg font-bold text-gray-900">{selectedResponder.phone}</p>
-                    </div>
-                  </div>
-                  
-                  <div className="space-y-4">
-                    <div className="bg-gray-50 p-4 rounded-lg">
-                      <label className="block text-sm font-medium text-gray-700 mb-2">Address</label>
-                      <p className="text-lg font-bold text-gray-900">{selectedResponder.address}</p>
-                    </div>
-                    
-                    <div className="bg-gray-50 p-4 rounded-lg">
-                      <label className="block text-sm font-medium text-gray-700 mb-2">Status</label>
-                      <p className="text-lg font-bold text-green-600">{selectedResponder.status}</p>
-                    </div>
-                    
-                    <div className="bg-gray-50 p-4 rounded-lg">
-                      <label className="block text-sm font-medium text-gray-700 mb-2">Experience</label>
-                      <p className="text-lg font-bold text-gray-900">{selectedResponder.experience}</p>
-                    </div>
-                    
-                    <div className="bg-gray-50 p-4 rounded-lg">
-                      <label className="block text-sm font-medium text-gray-700 mb-2">Specializations</label>
-                      <div className="flex flex-wrap gap-2 mt-2">
-                        {selectedResponder.specializations.map((spec, index) => (
-                          <span key={index} className="bg-blue-100 text-blue-800 px-3 py-1 rounded-full text-sm font-medium">
-                            {spec}
-                          </span>
-                        ))}
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-              
-              <div className="mt-6 flex justify-center">
-                <button
-                  onClick={() => setShowResponderProfileModal(false)}
-                  className="px-6 py-3 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors font-medium"
-                >
-                  Close
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-
     </div>
   );
 };
