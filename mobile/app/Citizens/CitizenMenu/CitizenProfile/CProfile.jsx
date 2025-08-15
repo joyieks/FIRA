@@ -1,15 +1,19 @@
 import React, { useState } from 'react';
-import { View, Text, Image, ScrollView, TouchableOpacity } from 'react-native';
+import { View, Text, Image, ScrollView, TouchableOpacity, Alert } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
+import { useAuth } from '../../../config/AuthContext';
 
 const CProfile = () => {
   const router = useRouter();
+  const { logout, userData } = useAuth();
   const [showDeactivate, setShowDeactivate] = useState(false);
+  
+  // Use actual user data from AuthContext if available, otherwise use default
   const profile = {
-    name: 'John Doe',
-    email: 'john.doe@example.com',
-    phone: '+1 (555) 123-4567',
+    name: userData?.firstName && userData?.lastName ? `${userData.firstName} ${userData.lastName}` : 'John Doe',
+    email: userData?.email || 'john.doe@example.com',
+    phone: userData?.phoneNumber || '+1 (555) 123-4567',
     address: '123 Safety St, Firetown, FT 12345',
     barangay: 'Guadalupe',
     birthdate: '1995-08-15',
@@ -30,6 +34,33 @@ const CProfile = () => {
       return age.toString();
     }
     return '';
+  };
+
+  const handleLogout = async () => {
+    Alert.alert(
+      'Logout',
+      'Are you sure you want to logout?',
+      [
+        {
+          text: 'Cancel',
+          style: 'cancel',
+        },
+        {
+          text: 'Logout',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await logout();
+              // Navigate to login screen
+              router.replace('/Authentication/login');
+            } catch (error) {
+              console.error('Logout error:', error);
+              Alert.alert('Error', 'Failed to logout. Please try again.');
+            }
+          },
+        },
+      ]
+    );
   };
 
   return (
@@ -73,7 +104,7 @@ const CProfile = () => {
           <MaterialIcons name="warning" size={20} color="#ef4444" />
           <Text className="ml-2 text-base font-semibold text-red-500">Deactivate Account</Text>
         </TouchableOpacity>
-        <TouchableOpacity className="flex-row items-center justify-center bg-fire rounded-xl py-3" onPress={() => {}}>
+        <TouchableOpacity className="flex-row items-center justify-center bg-fire rounded-xl py-3" onPress={handleLogout}>
           <MaterialIcons name="logout" size={20} color="#fff" />
           <Text className="ml-2 text-base font-semibold text-white">Log Out</Text>
         </TouchableOpacity>

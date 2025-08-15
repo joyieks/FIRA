@@ -58,7 +58,8 @@ export const AuthProvider = ({ children }) => {
         userType = 'responder';
         userData = { email, userType };
       } else {
-        // For other users, you can add more logic here
+        // For citizen users, we'll handle them in the login component
+        // and they'll be authenticated through Firebase Auth
         throw new Error('Invalid credentials');
       }
 
@@ -75,6 +76,34 @@ export const AuthProvider = ({ children }) => {
       return { success: true, userType };
     } catch (error) {
       console.error('Login error:', error);
+      throw error;
+    }
+  };
+
+  // Add a method to handle citizen login
+  const loginCitizen = async (userData) => {
+    try {
+      const userType = 'citizen';
+      const authData = { ...userData, userType };
+
+      console.log('🔐 loginCitizen called with:', { userType, userData });
+
+      // Store authentication data first
+      await AsyncStorage.setItem('authToken', 'citizen-token');
+      await AsyncStorage.setItem('userType', userType);
+      await AsyncStorage.setItem('userData', JSON.stringify(authData));
+      await AsyncStorage.setItem('loginTime', Date.now().toString());
+
+      // Update state in a single batch to prevent multiple re-renders
+      setIsAuthenticated(true);
+      setUserType(userType);
+      setUserData(authData);
+
+      console.log('✅ Citizen authentication set:', { isAuthenticated: true, userType, userData: authData });
+
+      return { success: true, userType };
+    } catch (error) {
+      console.error('❌ Citizen login error:', error);
       throw error;
     }
   };
@@ -103,6 +132,7 @@ export const AuthProvider = ({ children }) => {
     userData,
     isLoading,
     login,
+    loginCitizen,
     logout,
     checkAuthStatus
   };

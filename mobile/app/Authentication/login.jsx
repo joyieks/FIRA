@@ -20,7 +20,7 @@ const LoginComponent = () => {
   const [toastMessage, setToastMessage] = useState('');
   const [toastType, setToastType] = useState('success'); // 'success' or 'error'
   const router = useRouter();
-  const { login: authLogin } = useAuth();
+  const { login: authLogin, loginCitizen } = useAuth();
 
   const validateEmail = (text) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(text);
 
@@ -59,28 +59,31 @@ const LoginComponent = () => {
     if (!isValid) return;
 
     try {
-      // Use the auth context for login
-      const result = await authLogin(email, password);
-      
-      if (result.userType === 'station') {
-        displayToast('Welcome to Project FIRA! 🚒', 'success');
-        setTimeout(() => {
-          router.replace('/Screens/StationScreen');
-        }, 1500);
-        return;
-      }
-
-      if (result.userType === 'admin') {
+      // First check if it's a hardcoded user (admin, station, responder)
+      if (email === 'admin@gmail.com' && password === 'admin') {
+        const result = await authLogin(email, password);
         displayToast('Welcome to Project FIRA! 🔥', 'success');
-        setTimeout(() => {
-          router.replace('/Screens/AdminScreen');
-        }, 1500);
+        return;
+      }
+      
+      if (email === 'stations@gmail.com' && password === 'stations') {
+        const result = await authLogin(email, password);
+        displayToast('Welcome to Project FIRA! 🚒', 'success');
+        return;
+      }
+      
+      if (email === 'responder@gmail.com' && password === 'responder') {
+        const result = await authLogin(email, password);
+        displayToast('Welcome to Project FIRA! 🚑', 'success');
         return;
       }
 
-      // For other users, try Firebase Auth
+      // For all other emails, try Firebase Auth (citizens)
+      console.log('🔍 Trying Firebase Auth for citizen login:', email);
       const userCredential = await signInWithEmailAndPassword(auth, email, password);
       const user = userCredential.user;
+
+      console.log('✅ Firebase Auth successful, checking Firestore...');
 
       // Check if this user exists in 'citizenUsers' Firestore
       const q = query(collection(db, 'citizenUsers'), where('email', '==', email));
@@ -88,16 +91,44 @@ const LoginComponent = () => {
 
       if (!snapshot.empty) {
         const userData = snapshot.docs[0].data();
+        console.log('✅ User found in Firestore:', userData);
         displayToast(`Welcome to Project FIRA, ${userData.firstName || 'User'}! 👋`, 'success');
-        setTimeout(() => {
-          router.replace('/Screens/CitizenScreen');
-        }, 1500);
+        // Store citizen authentication
+        await loginCitizen(userData);
+        
+        // Let AuthGuard handle the navigation - no manual navigation needed
+        // This prevents the glitching/refreshing effect
       } else {
+        console.log('❌ User not found in Firestore');
         displayToast('No user record found in citizenUsers collection.', 'error');
       }
     } catch (error) {
-      console.error('Login error:', error);
-      displayToast(error.message, 'error');
+      console.error('❌ Login error:', error);
+      
+      // Handle specific Firebase Auth errors
+      let errorMessage = 'Login failed. Please check your credentials.';
+      
+      switch (error.code) {
+        case 'auth/user-not-found':
+          errorMessage = 'No account found with this email address.';
+          break;
+        case 'auth/wrong-password':
+          errorMessage = 'Incorrect password. Please try again.';
+          break;
+        case 'auth/invalid-email':
+          errorMessage = 'Please enter a valid email address.';
+          break;
+        case 'auth/too-many-requests':
+          errorMessage = 'Too many failed attempts. Please try again later.';
+          break;
+        case 'auth/user-disabled':
+          errorMessage = 'This account has been disabled.';
+          break;
+        default:
+          errorMessage = error.message || errorMessage;
+      }
+      
+      displayToast(errorMessage, 'error');
     }
   };
 
@@ -135,34 +166,38 @@ const LoginComponent = () => {
           const userCredential = await signInWithCredential(auth, credential);
           const user = userCredential.user;
 
-          // Check if user exists in Firestore
-          const q = query(collection(db, 'citizenUsers'), where('email', '==', user.email));
-          const snapshot = await getDocs(q);
+                     // Check if user exists in Firestore
+           const q = query(collection(db, 'citizenUsers'), where('email', '==', user.email));
+           const snapshot = await getDocs(q);
 
-          if (snapshot.empty) {
-            // User doesn't exist, create new account
-            const userData = {
-              uid: user.uid,
-              firstName: user.displayName?.split(' ')[0] || 'Google',
-              lastName: user.displayName?.split(' ').slice(1).join(' ') || 'User',
-              email: user.email,
-              phoneNumber: user.phoneNumber || '',
-              userType: 'citizen',
-              createdAt: new Date().toISOString(),
-              googleSignIn: true,
-            };
+           if (snapshot.empty) {
+             // User doesn't exist, create new account
+             const userData = {
+               uid: user.uid,
+               firstName: user.displayName?.split(' ')[0] || 'Google',
+               lastName: user.displayName?.split(' ').slice(1).join(' ') || 'User',
+               email: user.email,
+               phoneNumber: user.phoneNumber || '',
+               userType: 'citizen',
+               createdAt: new Date().toISOString(),
+               googleSignIn: true,
+             };
 
-            await setDoc(doc(db, 'mobileUsers', user.uid), userData);
-            displayToast(`Welcome, ${userData.firstName}! Your Google account has been registered.`, 'success');
-          } else {
-            // User exists, just sign in
-            const userData = snapshot.docs[0].data();
-            displayToast(`Welcome back to Project FIRA, ${userData.firstName || 'User'}! 👋`, 'success');
-          }
-
-          setTimeout(() => {
-            router.replace('/Screens/CitizenScreen');
-          }, 1500);
+             await setDoc(doc(db, 'citizenUsers', user.uid), userData);
+             displayToast(`Welcome to Project FIRA, ${userData.firstName}! Your Google account has been registered. 🎉`, 'success');
+             // Store citizen authentication
+             await loginCitizen(userData);
+             
+             // Let AuthGuard handle the navigation - no manual navigation needed
+           } else {
+             // User exists, just sign in
+             const userData = snapshot.docs[0].data();
+             displayToast(`Welcome back to Project FIRA, ${userData.firstName || 'User'}! 👋`, 'success');
+             // Store citizen authentication
+             await loginCitizen(userData);
+             
+             // Let AuthGuard handle the navigation - no manual navigation needed
+           }
         } else {
           displayToast('No ID token received from Google.', 'error');
         }
@@ -270,9 +305,12 @@ const LoginComponent = () => {
           </Text>
         </TouchableOpacity>
 
-        <TouchableOpacity className="items-center mb-6">
-          <Text className="text-fire font-medium">Forgot Password?</Text>
-        </TouchableOpacity>
+                 <TouchableOpacity 
+           className="items-center mb-6"
+           onPress={() => router.push('/Authentication/ForgotPassword/forgotpassword')}
+         >
+           <Text className="text-fire font-medium">Forgot Password?</Text>
+         </TouchableOpacity>
 
         <View className="flex-row justify-center">
           <Text className="text-gray-600">Don't have an account? </Text>

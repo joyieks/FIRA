@@ -8,25 +8,35 @@ export default function AuthGuard({ children }) {
   const router = useRouter();
 
   useEffect(() => {
+    console.log('🔄 AuthGuard useEffect triggered:', { isAuthenticated, userType, isLoading });
+    
     if (!isLoading && isAuthenticated) {
-      // Redirect authenticated users to their appropriate screen
-      switch (userType) {
-        case 'admin':
-          router.replace('/Screens/AdminScreen');
-          break;
-        case 'station':
-          router.replace('/Screens/StationScreen');
-          break;
-        case 'responder':
-          router.replace('/Screens/RespondersScreen');
-          break;
-        case 'citizen':
-          router.replace('/Screens/CitizenScreen');
-          break;
-        default:
-          // If userType is not recognized, redirect to get-started
-          router.replace('/get-started/getstarted');
-      }
+      console.log('🎯 AuthGuard: User is authenticated, redirecting to:', userType);
+      
+      // Add a small delay to ensure smooth navigation and prevent glitching
+      const navigationTimeout = setTimeout(() => {
+        // Redirect authenticated users to their appropriate screen
+        switch (userType) {
+          case 'admin':
+            router.replace('/Screens/AdminScreen');
+            break;
+          case 'station':
+            router.replace('/Screens/StationScreen');
+            break;
+          case 'responder':
+            router.replace('/Screens/RespondersScreen');
+            break;
+          case 'citizen':
+            router.replace('/Screens/CitizenScreen');
+            break;
+          default:
+            console.log('⚠️ AuthGuard: Unknown userType:', userType);
+            // If userType is not recognized, redirect to get-started
+            router.replace('/get-started/getstarted');
+        }
+      }, 100); // Small delay to prevent glitching
+
+      return () => clearTimeout(navigationTimeout);
     }
   }, [isAuthenticated, userType, isLoading, router]);
 
