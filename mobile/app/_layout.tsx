@@ -2,10 +2,14 @@ import { Stack } from "expo-router";
 import "./global.css";
 import { MaterialIcons } from '@expo/vector-icons';
 import { TouchableOpacity } from 'react-native';
+import { AuthProvider } from './config/AuthContext';
+import BackButtonHandler from './components/BackButtonHandler';
 
 export default function RootLayout() {
   return (
-    <Stack screenOptions={{ headerShown: false }}>
+    <AuthProvider>
+      <BackButtonHandler />
+      <Stack screenOptions={{ headerShown: false }}>
       {/* ...existing code for Stack.Screen definitions... */}
       <Stack.Screen name="index" />
       <Stack.Screen name="get-started/getstarted" />
@@ -20,7 +24,8 @@ export default function RootLayout() {
       <Stack.Screen name="Screens/StationScreen" />
       <Stack.Screen name="Screens/*" />
       <Stack.Screen name="Citizens/CNavBarMenu/CNavbarMenu" />
-    </Stack>
+      </Stack>
+    </AuthProvider>
   );
 }
 

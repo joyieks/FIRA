@@ -7,8 +7,10 @@ import { signInWithEmailAndPassword, signInWithCredential, GoogleAuthProvider } 
 import { auth, db } from '../config/firebase';
 import { collection, query, where, getDocs, setDoc, doc } from 'firebase/firestore';
 import { WebBrowser, Crypto, googleSignInConfig } from '../config/googleSignIn';
+import { useAuth } from '../config/AuthContext';
+import AuthGuard from '../components/AuthGuard';
 
-const login = () => {
+const LoginComponent = () => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
@@ -18,6 +20,7 @@ const login = () => {
   const [toastMessage, setToastMessage] = useState('');
   const [toastType, setToastType] = useState('success'); // 'success' or 'error'
   const router = useRouter();
+  const { login: authLogin } = useAuth();
 
   const validateEmail = (text) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(text);
 
@@ -27,7 +30,7 @@ const login = () => {
     setShowToast(true);
     setTimeout(() => {
       setShowToast(false);
-    }, 3000);
+    }, 4000); // Show for 4 seconds for welcome messages
   };
 
   const handleLogin = async () => {
@@ -56,20 +59,22 @@ const login = () => {
     if (!isValid) return;
 
     try {
-      // Check for specific credentials first
-      if (email === 'stations@gmail.com' && password === 'stations') {
-        displayToast('Welcome to Station Dashboard!', 'success');
+      // Use the auth context for login
+      const result = await authLogin(email, password);
+      
+      if (result.userType === 'station') {
+        displayToast('Welcome to Project FIRA! 🚒', 'success');
         setTimeout(() => {
           router.replace('/Screens/StationScreen');
-        }, 1000);
+        }, 1500);
         return;
       }
 
-      if (email === 'admin@gmail.com' && password === 'admin') {
-        displayToast('Welcome to Admin Dashboard!', 'success');
+      if (result.userType === 'admin') {
+        displayToast('Welcome to Project FIRA! 🔥', 'success');
         setTimeout(() => {
           router.replace('/Screens/AdminScreen');
-        }, 1000);
+        }, 1500);
         return;
       }
 
@@ -83,10 +88,10 @@ const login = () => {
 
       if (!snapshot.empty) {
         const userData = snapshot.docs[0].data();
-        displayToast(`Welcome, ${userData.firstName || 'User'}!`, 'success');
+        displayToast(`Welcome to Project FIRA, ${userData.firstName || 'User'}! 👋`, 'success');
         setTimeout(() => {
           router.replace('/Screens/CitizenScreen');
-        }, 1000);
+        }, 1500);
       } else {
         displayToast('No user record found in mobileUsers collection.', 'error');
       }
@@ -148,16 +153,16 @@ const login = () => {
             };
 
             await setDoc(doc(db, 'mobileUsers', user.uid), userData);
-            displayToast(`Welcome, ${userData.firstName}! Your Google account has been registered.`, 'success');
+            displayToast(`Welcome to Project FIRA, ${userData.firstName}! Your Google account has been registered. 🎉`, 'success');
           } else {
             // User exists, just sign in
             const userData = snapshot.docs[0].data();
-            displayToast(`Welcome back, ${userData.firstName || 'User'}!`, 'success');
+            displayToast(`Welcome back to Project FIRA, ${userData.firstName || 'User'}! 👋`, 'success');
           }
 
           setTimeout(() => {
             router.replace('/Screens/CitizenScreen');
-          }, 1000);
+          }, 1500);
         } else {
           displayToast('No ID token received from Google.', 'error');
         }
@@ -280,21 +285,29 @@ const login = () => {
       {/* Toast Notification */}
       {showToast && (
         <View className="absolute top-20 left-4 right-4 z-50">
-          <View className={`rounded-lg p-4 flex-row items-center shadow-lg ${
-            toastType === 'success' ? 'bg-green-500' : 'bg-red-500'
+          <View className={`rounded-xl p-4 flex-row items-center shadow-xl ${
+            toastType === 'success' ? 'bg-gradient-to-r from-green-500 to-green-600' : 'bg-red-500'
           }`}>
             <MaterialIcons 
-              name={toastType === 'success' ? 'check-circle' : 'error'} 
-              size={24} 
+              name={toastType === 'success' ? 'celebration' : 'error'} 
+              size={28} 
               color="#ffffff" 
             />
-            <Text className="text-white font-semibold ml-3 flex-1">
+            <Text className="text-white font-bold ml-3 flex-1 text-base">
               {toastMessage}
             </Text>
           </View>
         </View>
       )}
     </KeyboardAvoidingView>
+  );
+};
+
+const login = () => {
+  return (
+    <AuthGuard>
+      <LoginComponent />
+    </AuthGuard>
   );
 };
 

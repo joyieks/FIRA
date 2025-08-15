@@ -7,16 +7,17 @@ import RMap from '../../Responders/RespondersMenu/RespondersMap/RMap';
 import RFiraChat from '../../Responders/RespondersMenu/RespondersChat/RFiraChat';
 import RProfile from '../../Responders/RespondersProfile/RProfile';
 
-const TABS = [
-  { component: <RNotifications /> },
-  { component: <RMap /> },
-  { component: <RStatus /> },
-  { component: <RFiraChat /> },
-  { component: <RProfile /> },
-];
-
 export default function RespondersScreen() {
   const [activeTab, setActiveTab] = useState(2); // Default to Status
+  const [selectedContact, setSelectedContact] = useState(null);
+
+  const TABS = [
+    { component: <RNotifications /> },
+    { component: <RMap /> },
+    { component: <RStatus /> },
+    { component: <RFiraChat onContactSelect={setSelectedContact} /> },
+    { component: <RProfile /> },
+  ];
 
   return (
     <View className="flex-1 bg-gray-100">

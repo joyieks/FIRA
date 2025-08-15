@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { View, TouchableOpacity, Text, Image, Animated, Dimensions, Alert } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
+import { useAuth } from '../../config/AuthContext';
 
 const { width, height } = Dimensions.get('window');
 
@@ -18,6 +19,7 @@ const MENU_ITEMS = [
 
 const ASidebarMenu = ({ activeTab, setActiveTab, isOpen, onToggle }) => {
   const router = useRouter();
+  const { logout } = useAuth();
   const slideAnim = React.useRef(new Animated.Value(isOpen ? 0 : -width * 0.8)).current;
   const overlayOpacity = React.useRef(new Animated.Value(isOpen ? 0.5 : 0)).current;
 
@@ -53,8 +55,9 @@ const ASidebarMenu = ({ activeTab, setActiveTab, isOpen, onToggle }) => {
         {
           text: 'Logout',
           style: 'destructive',
-          onPress: () => {
+          onPress: async () => {
             onToggle(); // Close sidebar
+            await logout(); // Clear authentication data
             router.replace('/Authentication/login');
           },
         },

@@ -6,8 +6,9 @@ import { createUserWithEmailAndPassword, signInWithCredential, GoogleAuthProvide
 import { auth, db } from '../config/firebase';
 import { doc, setDoc } from 'firebase/firestore';
 import { WebBrowser, Crypto, googleSignInConfig } from '../config/googleSignIn';
+import AuthGuard from '../components/AuthGuard';
 
-const registration = () => {
+const RegistrationComponent = () => {
   const router = useRouter();
   const [formData, setFormData] = useState({
     firstName: '',
@@ -252,6 +253,14 @@ const registration = () => {
         </TouchableOpacity>
       </View>
     </ScrollView>
+  );
+};
+
+const registration = () => {
+  return (
+    <AuthGuard>
+      <RegistrationComponent />
+    </AuthGuard>
   );
 };
 
