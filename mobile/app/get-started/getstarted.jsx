@@ -1,6 +1,7 @@
 import React, { useRef, useState } from "react";
 import { View, Text, TouchableOpacity, Image, Dimensions, ScrollView } from "react-native";
 import { useRouter } from "expo-router";
+import AuthGuard from '../components/AuthGuard';
 
 export const options = {
   headerShown: false,
@@ -26,7 +27,7 @@ const slides = [
   }
 ];
 
-const GetStarted = () => {
+const GetStartedComponent = () => {
   const [currentIndex, setCurrentIndex] = useState(0);
   const router = useRouter();
   const scrollRef = useRef();
@@ -103,6 +104,14 @@ const GetStarted = () => {
         </TouchableOpacity>
       )}
     </View>
+  );
+};
+
+const GetStarted = () => {
+  return (
+    <AuthGuard>
+      <GetStartedComponent />
+    </AuthGuard>
   );
 };
 
