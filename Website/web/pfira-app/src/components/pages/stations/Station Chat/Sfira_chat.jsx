@@ -12,6 +12,16 @@ const Sfira_chat = () => {
   const [selectedContact, setSelectedContact] = useState(null);
   const [currentUser, setCurrentUser] = useState(null);
 
+  // Provide a default emergencyContacts array to avoid errors
+  const emergencyContacts = [
+    {
+      id: 'drrmo',
+      name: 'DRRMO Central',
+      status: 'Online',
+      avatar: 'D',
+    },
+  ];
+
   useEffect(() => {
     const unsubscribe = auth.onAuthStateChanged(user => {
       setCurrentUser(user);

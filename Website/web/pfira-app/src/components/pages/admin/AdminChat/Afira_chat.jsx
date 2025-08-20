@@ -13,6 +13,16 @@ const Afira_chat = () => {
   const [selectedContact, setSelectedContact] = useState(null);
   const [currentUser, setCurrentUser] = useState(null);
 
+  // Provide a default emergencyContacts array to avoid errors
+  const emergencyContacts = [
+    {
+      id: 'drrmo',
+      name: 'DRRMO Central',
+      status: 'Online',
+      avatar: 'D',
+    },
+  ];
+
   useEffect(() => {
     const unsubscribe = auth.onAuthStateChanged(user => {
       setCurrentUser(user);
@@ -193,42 +203,47 @@ const Afira_chat = () => {
         
         {/* Messages */}
         <div className="flex-1 overflow-y-auto p-4 bg-gray-50">
-          {messages.map((message) => (
-            <div 
-              key={message.id} 
-              className={`mb-4 flex ${
-                message.sender === 'You' ? 'justify-end' : 'justify-start'
-              }`}
-            >
-              <div className={`max-w-xs md:max-w-md rounded-lg px-4 py-2 ${
-                message.sender === 'You' 
-                  ? isEmergencyMode 
-                    ? 'bg-red-600 text-white' 
-                    : 'bg-blue-600 text-white'
-                  : message.isEmergency
-                    ? 'bg-red-100 border border-red-200'
-                    : 'bg-white border border-gray-200'
-              }`}>
-                {message.sender !== 'You' && (
-                  <div className={`text-xs font-medium mb-1 ${
-                    message.isEmergency ? 'text-red-600' : 'text-gray-500'
-                  }`}>
-                    {message.sender}
-                  </div>
-                )}
-                <p>{message.text}</p>
-                <div className={`text-xs mt-1 text-right ${
-                  message.sender === 'You' 
-                    ? 'text-white text-opacity-80' 
-                    : message.isEmergency 
-                      ? 'text-red-500' 
-                      : 'text-gray-500'
+          {messages.map((message) => {
+            // Use senderId/receiverId for Firestore-based messages
+            const isCurrentUser = message.senderId === currentUser?.uid;
+            const senderName = contacts.find(c => c.id === message.senderId)?.adminName ||
+              contacts.find(c => c.id === message.senderId)?.stationName ||
+              'Unknown';
+            return (
+              <div
+                key={message.id}
+                className={`mb-4 flex ${isCurrentUser ? 'justify-end' : 'justify-start'}`}
+              >
+                <div className={`max-w-xs md:max-w-md rounded-lg px-4 py-2 ${
+                  isCurrentUser
+                    ? isEmergencyMode
+                      ? 'bg-red-600 text-white'
+                      : 'bg-blue-600 text-white'
+                    : message.isEmergency
+                      ? 'bg-red-100 border border-red-200'
+                      : 'bg-white border border-gray-200'
                 }`}>
-                  {message.timestamp}
+                  {!isCurrentUser && (
+                    <div className={`text-xs font-medium mb-1 ${
+                      message.isEmergency ? 'text-red-600' : 'text-gray-500'
+                    }`}>
+                      {senderName}
+                    </div>
+                  )}
+                  <p>{message.text}</p>
+                  <div className={`text-xs mt-1 text-right ${
+                    isCurrentUser
+                      ? 'text-white text-opacity-80'
+                      : message.isEmergency
+                        ? 'text-red-500'
+                        : 'text-gray-500'
+                  }`}>
+                    {message.timestamp}
+                  </div>
                 </div>
               </div>
-            </div>
-          ))}
+            );
+          })}
           <div ref={messagesEndRef} />
         </div>
         
