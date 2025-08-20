@@ -8,7 +8,7 @@ const navigate = useNavigate()
     <nav className="bg-white shadow-md w-full z-1 top-0 left-0">
         <div className="max-w-7xl mx-auto px-5 py-3 flex justify-between items-center">
             <div className="flex items-center gap-0">
-                <img src="/finalogo.png" alt="" className="w-12 h-12" />
+                <img src="finalogo.png" alt="" className="w-12 h-12" />
                 <a href="@" className="object-top-left font-bold text-red-700 hover:text-amber-600">Project FIRA</a>
             </div>
             <ul className="space-x-8 text-gray-700">
