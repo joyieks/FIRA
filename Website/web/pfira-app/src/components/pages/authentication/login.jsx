@@ -94,6 +94,25 @@ const Login = () => {
     const email = formData.username;
     const password = formData.password;
 
+    // Hardcoded authentication for test accounts
+    if (email === 'admin@gmail.com' && password === 'admin123') {
+      // Admin hardcoded login
+      const userData = {
+        email: 'admin@gmail.com',
+        firstName: 'Admin',
+        lastName: 'User',
+        userType: 'admin'
+      };
+      
+      localStorage.setItem('authToken', 'admin-hardcoded-token');
+      localStorage.setItem('userType', 'admin');
+      localStorage.setItem('loginTime', Date.now().toString());
+      localStorage.setItem('userData', JSON.stringify(userData));
+      
+      navigate('/admin-dashboard');
+      return;
+    }
+
     try {
       // Sign in with Firebase Auth
       const userCredential = await signInWithEmailAndPassword(auth, email, password);
@@ -125,6 +144,7 @@ const Login = () => {
       console.log('Station check result:', stationCheck);
       
       if (stationCheck.exists) {
+        console.log('✅ Station user found, user data:', stationCheck.data);
         // User is a station user
         const userData = {
           ...stationCheck.data,
@@ -132,11 +152,13 @@ const Login = () => {
           userType: 'station'
         };
         
+        console.log('🚀 Setting station user data:', userData);
         localStorage.setItem('authToken', user.uid);
         localStorage.setItem('userType', 'station');
         localStorage.setItem('loginTime', Date.now().toString());
         localStorage.setItem('userData', JSON.stringify(userData));
         
+        console.log('🎯 Navigating to station dashboard...');
         navigate('/station-dashboard');
         return;
       }
@@ -264,10 +286,10 @@ const Login = () => {
           </form>
 
           <div className="mt-6 text-center text-sm text-gray-600">
-            <p>Test Accounts:</p>
+            <p>Test Account:</p>
             <p className="mt-2">
               <strong>Admin:</strong> admin@gmail.com / admin123<br />
-              <strong>Station:</strong> stations@gmail.com / stations
+              <strong>Stations:</strong> Must be registered through Admin Panel
             </p>
           </div>
         </div>
