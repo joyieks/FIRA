@@ -56,28 +56,47 @@ const Afira_chat = () => {
     
     setMessages([]); // Clear messages when switching users
     
+    console.log('🔍 Chat Debug - Selected User:', selectedUser);
+    console.log('🔍 Chat Debug - Current User ID:', auth.currentUser?.uid);
+    
     const q = query(
       collection(db, 'messages'),
       orderBy('timestamp', 'asc')
     );
     const unsubscribe = onSnapshot(q, (querySnapshot) => {
       const msgs = [];
-      const currentUserId = auth.currentUser?.uid;
+      const currentUserId = auth.currentUser?.uid || 'admin';
       const selectedUserId = selectedUser.id;
+      
+      console.log('🔍 Chat Debug - Filtering messages for:', { currentUserId, selectedUserId });
       
       querySnapshot.forEach((doc) => {
         const data = doc.data();
-        // Show messages between admin and selected station, regardless of userType
+        console.log('🔍 Chat Debug - Message data:', {
+          senderId: data.senderId,
+          receiverId: data.receiverId,
+          userType: data.userType,
+          text: data.text?.substring(0, 50) + '...'
+        });
+        
+        // Simplified message filtering - show messages between current user and selected user
         if (
+          // Direct sender/receiver match
           (data.senderId === currentUserId && data.receiverId === selectedUserId) ||
           (data.senderId === selectedUserId && data.receiverId === currentUserId) ||
-          // Fallback for admin <-> station communication
+          // Fallback for admin communication
+          (data.senderId === 'admin' && data.receiverId === selectedUserId) ||
+          (data.senderId === selectedUserId && data.receiverId === 'admin') ||
+          // Additional fallback for station communication
           (data.userType === 'admin' && data.receiverId === selectedUserId) ||
           (data.userType === 'station' && data.senderId === selectedUserId)
         ) {
+          console.log('✅ Chat Debug - Message included:', data.text?.substring(0, 30));
           msgs.push({ id: doc.id, ...data });
         }
       });
+      
+      console.log('🔍 Chat Debug - Total messages found:', msgs.length);
       setMessages(msgs);
       setTimeout(scrollToBottom, 100);
     });
@@ -151,6 +170,31 @@ const Afira_chat = () => {
     }
   };
 
+  const handleAcknowledge = async (message) => {
+    try {
+      const messageRef = doc(db, 'messages', message.id);
+      const currentUserId = auth.currentUser?.uid || 'admin';
+      
+      // Add current user to acknowledgments if not already there
+      await updateDoc(messageRef, {
+        acknowledgments: arrayUnion(currentUserId)
+      });
+    } catch (error) {
+      console.error('Failed to acknowledge message:', error);
+    }
+  };
+
+  // Helper function to check if current user has acknowledged a message
+  const hasUserAcknowledged = (message) => {
+    const currentUserId = auth.currentUser?.uid || 'admin';
+    return (message.acknowledgments || []).includes(currentUserId);
+  };
+
+  // Helper function to get acknowledgment count
+  const getAcknowledgmentCount = (message) => {
+    return (message.acknowledgments || []).length;
+  };
+
   const handleReactCheck = async (message) => {
     try {
       const uid = auth.currentUser?.uid;
@@ -161,23 +205,6 @@ const Afira_chat = () => {
       await updateDoc(mref, { checkReactedBy: arrayUnion(uid) });
     } catch (error) {
       alert('Failed to react: ' + error.message);
-    }
-  };
-
-  // Acknowledge button (toggle)
-  const handleAcknowledge = async (message) => {
-    try {
-      const uid = auth.currentUser?.uid;
-      if (!uid || !message?.id) return;
-      const alreadyAcked = (message.ackBy || message.checkReactedBy || []).includes(uid);
-      const mref = doc(db, 'messages', message.id);
-      if (alreadyAcked) {
-        await updateDoc(mref, { ackBy: arrayRemove(uid) });
-      } else {
-        await updateDoc(mref, { ackBy: arrayUnion(uid) });
-      }
-    } catch (error) {
-      alert('Failed to acknowledge: ' + error.message);
     }
   };
 
@@ -298,89 +325,99 @@ const Afira_chat = () => {
             </div>
             {/* Messages */}
             <div className="flex-1 overflow-y-auto p-4 bg-gray-50">
-              {messages.map((message) => {
-                const isMine = message.userType === 'admin';
-                return (
-                  <div 
-                    key={message.id} 
-                    className={`mb-4 flex ${isMine ? 'justify-end' : 'justify-start'} items-center`}
-                  >
-                    {isMine && (
-                      <button
-                        type="button"
-                        onClick={() => handleAcknowledge(message)}
-                        className={`mr-2 inline-flex items-center text-xs text-green-600 ${hasAcked ? 'opacity-100' : 'opacity-60 hover:opacity-100'}`}
-                        aria-label={hasAcked ? 'Acknowledged' : 'Acknowledge message'}
-                        title={hasAcked ? 'You acknowledged' : 'Acknowledge'}
-                      >
-                        <span className="text-base leading-none">✅</span>
-                        {count > 0 && <span className="ml-1">{count}</span>}
-                      </button>
-                    )}
-                    <div className={`max-w-xs md:max-w-md ${isMine ? 'items-end' : 'items-start'}`}>
-                      <div className={`rounded-lg px-4 py-2 ${
-                        isMine 
-                          ? isEmergencyMode 
-                            ? 'bg-red-600 text-white' 
-                            : 'bg-blue-600 text-white'
-                          : message.isEmergency
-                            ? 'bg-red-100 border border-red-200'
-                            : 'bg-white border border-gray-200'
-                      }`}>
-                        {!isMine && (
-                          <div className={`text-xs font-medium mb-1 ${
-                            message.isEmergency ? 'text-red-600' : 'text-gray-500'
-                          }`}>
-                            {message.sender || selectedUser.name || selectedUser.email}
-                          </div>
-                        )}
-                        {message.text && <p className="whitespace-pre-wrap">{message.text}</p>}
-                        {message.imageUrl && (
-                          <img
-                            src={message.imageUrl}
-                            alt="sent attachment"
-                            className="mt-1 max-h-60 rounded-md object-cover"
-                          />
-                        )}
-                        <div className={`text-xs mt-1 text-right ${
+              {messages.length === 0 ? (
+                <div className="flex flex-col items-center justify-center h-full text-gray-500">
+                  <div className="text-6xl mb-4">💬</div>
+                  <h3 className="text-lg font-medium mb-2">No messages yet</h3>
+                  <p className="text-sm text-center">
+                    Start a conversation with {selectedUser.name || selectedUser.email}
+                  </p>
+                </div>
+              ) : (
+                messages.map((message) => {
+                  const isMine = message.userType === 'admin' || message.senderId === (auth.currentUser?.uid || 'admin');
+                  return (
+                    <div 
+                      key={message.id} 
+                      className={`mb-4 flex ${isMine ? 'justify-end' : 'justify-start'} items-center`}
+                    >
+                      {isMine && (
+                        <button
+                          type="button"
+                          onClick={() => handleAcknowledge(message)}
+                          className={`mr-2 inline-flex items-center text-xs text-green-600 ${hasUserAcknowledged(message) ? 'opacity-100' : 'opacity-60 hover:opacity-100'}`}
+                          aria-label={hasUserAcknowledged(message) ? 'Acknowledged' : 'Acknowledge message'}
+                          title={hasUserAcknowledged(message) ? 'You acknowledged' : 'Acknowledge'}
+                        >
+                          <span className="text-base leading-none">✅</span>
+                          {getAcknowledgmentCount(message) > 0 && <span className="ml-1">{getAcknowledgmentCount(message)}</span>}
+                        </button>
+                      )}
+                      <div className={`max-w-xs md:max-w-md ${isMine ? 'items-end' : 'items-start'}`}>
+                        <div className={`rounded-lg px-4 py-2 ${
                           isMine 
-                            ? 'text-white text-opacity-80' 
-                            : message.isEmergency 
-                              ? 'text-red-500' 
-                              : 'text-gray-500'
+                            ? isEmergencyMode 
+                              ? 'bg-red-600 text-white' 
+                              : 'bg-blue-600 text-white'
+                            : message.isEmergency
+                              ? 'bg-red-100 border border-red-200'
+                              : 'bg-white border border-gray-200'
                         }`}>
-                          {message.timestamp && message.timestamp.toDate ? message.timestamp.toDate().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''}
+                          {!isMine && (
+                            <div className={`text-xs font-medium mb-1 ${
+                              message.isEmergency ? 'text-red-600' : 'text-gray-500'
+                            }`}>
+                              {message.sender || selectedUser.name || selectedUser.email}
+                            </div>
+                          )}
+                          {message.text && <p className="whitespace-pre-wrap">{message.text}</p>}
+                          {message.imageUrl && (
+                            <img
+                              src={message.imageUrl}
+                              alt="sent attachment"
+                              className="mt-1 max-h-60 rounded-md object-cover"
+                            />
+                          )}
+                          <div className={`text-xs mt-1 text-right ${
+                            isMine 
+                              ? 'text-white text-opacity-80' 
+                              : message.isEmergency 
+                                ? 'text-red-500' 
+                                : 'text-gray-500'
+                          }`}>
+                            {message.timestamp && message.timestamp.toDate ? message.timestamp.toDate().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''}
+                          </div>
+                        </div>
+                        <div className={`mt-0.5 flex items-center ${isMine ? 'justify-end' : 'justify-start'} space-x-2`}>
+                          {isMine ? (
+                            ((message.seenBy || []).includes(selectedUser?.id)) ? (
+                              <span className="inline-flex items-center text-[10px] text-green-600">
+                                <FiCheck className="mr-1" size={12} /> Seen
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center text-[10px] text-gray-400">
+                                <FiCheck className="mr-1" size={12} /> Sent
+                              </span>
+                            )
+                          ) : null}
                         </div>
                       </div>
-                      <div className={`mt-0.5 flex items-center ${isMine ? 'justify-end' : 'justify-start'} space-x-2`}>
-                        {isMine ? (
-                          ((message.seenBy || []).includes(selectedUser?.id)) ? (
-                            <span className="inline-flex items-center text-[10px] text-green-600">
-                              <FiCheck className="mr-1" size={12} /> Seen
-                            </span>
-                          ) : (
-                            <span className="inline-flex items-center text-[10px] text-gray-400">
-                              <FiCheck className="mr-1" size={12} /> Sent
-                            </span>
-                          )
-                        ) : null}
-                      </div>
+                      {!isMine && (
+                        <button
+                          type="button"
+                          onClick={() => handleAcknowledge(message)}
+                          className={`ml-2 inline-flex items-center text-xs text-green-600 ${hasUserAcknowledged(message) ? 'opacity-100' : 'opacity-60 hover:opacity-100'}`}
+                          aria-label={hasUserAcknowledged(message) ? 'Acknowledged' : 'Acknowledge message'}
+                          title={hasUserAcknowledged(message) ? 'You acknowledged' : 'Acknowledge'}
+                        >
+                          <span className="text-base leading-none">✅</span>
+                          {getAcknowledgmentCount(message) > 0 && <span className="ml-1">{getAcknowledgmentCount(message)}</span>}
+                        </button>
+                      )}
                     </div>
-                    {!isMine && (
-                      <button
-                        type="button"
-                        onClick={() => handleAcknowledge(message)}
-                        className={`ml-2 inline-flex items-center text-xs text-green-600 ${hasAcked ? 'opacity-100' : 'opacity-60 hover:opacity-100'}`}
-                        aria-label={hasAcked ? 'Acknowledged' : 'Acknowledge message'}
-                        title={hasAcked ? 'You acknowledged' : 'Acknowledge'}
-                      >
-                        <span className="text-base leading-none">✅</span>
-                        {count > 0 && <span className="ml-1">{count}</span>}
-                      </button>
-                    )}
-                  </div>
-                );
-              })}
+                  );
+                })
+              )}
               <div ref={messagesEndRef} />
             </div>
             {/* Message Input */}

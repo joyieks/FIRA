@@ -1,11 +1,13 @@
 import React, { useState } from 'react';
-import { View, Text, Image, ScrollView, TouchableOpacity } from 'react-native';
+import { View, Text, Image, ScrollView, TouchableOpacity, Alert } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
+import { useAuth } from '../../config/AuthContext';
 import RSettings from './RSettings';
 
 const RProfile = () => {
   const router = useRouter();
+  const { logout } = useAuth();
   const [showDeactivate, setShowDeactivate] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const profile = {
@@ -33,6 +35,33 @@ const RProfile = () => {
       return age.toString();
     }
     return '';
+  };
+
+  const handleLogout = async () => {
+    Alert.alert(
+      'Logout',
+      'Are you sure you want to logout?',
+      [
+        {
+          text: 'Cancel',
+          style: 'cancel',
+        },
+        {
+          text: 'Logout',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await logout();
+              // Navigate to login screen
+              router.replace('/Authentication/login');
+            } catch (error) {
+              console.error('Logout error:', error);
+              Alert.alert('Error', 'Failed to logout. Please try again.');
+            }
+          },
+        },
+      ]
+    );
   };
 
   if (showSettings) {
@@ -96,7 +125,7 @@ const RProfile = () => {
           <MaterialIcons name="warning" size={20} color="#ef4444" />
           <Text className="ml-2 text-base font-semibold text-red-500">Deactivate Account</Text>
         </TouchableOpacity>
-        <TouchableOpacity className="flex-row items-center justify-center bg-fire rounded-xl py-3 mb-3" onPress={() => {}}>
+        <TouchableOpacity className="flex-row items-center justify-center bg-fire rounded-xl py-3 mb-3" onPress={handleLogout}>
           <MaterialIcons name="logout" size={24} color="#fff" />
           <Text className="ml-2 text-lg font-semibold text-white">Log Out</Text>
         </TouchableOpacity>

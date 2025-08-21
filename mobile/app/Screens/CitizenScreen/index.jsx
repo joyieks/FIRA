@@ -25,7 +25,24 @@ const TAB_NAMES = [
 
 const CitizenScreen = () => {
   const [activeTab, setActiveTab] = useState(2); // Default to Status
-  const ActiveComponent = TAB_COMPONENTS[activeTab];
+  const [unreadCount, setUnreadCount] = useState(0);
+  
+  const renderActiveComponent = () => {
+    switch (activeTab) {
+      case 0: // Notifications
+        return <CNotifications onUnreadCountChange={setUnreadCount} />;
+      case 1: // Map
+        return <CMap />;
+      case 2: // Status
+        return <CStatus />;
+      case 3: // Settings
+        return <CSettings />;
+      case 4: // Profile
+        return <CProfile />;
+      default:
+        return <CStatus />;
+    }
+  };
   
   return (
     <View className="flex-1 bg-white">
@@ -37,9 +54,9 @@ const CitizenScreen = () => {
       </View>
       
       <View className="flex-1 pb-20">
-        <ActiveComponent />
+        {renderActiveComponent()}
       </View>
-      <CNavbarMenu activeTab={activeTab} setActiveTab={setActiveTab} />
+      <CNavbarMenu activeTab={activeTab} setActiveTab={setActiveTab} unreadCount={unreadCount} />
     </View>
   );
 };
