@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import { View } from 'react-native';
 import RNavbarMenu from '../../Responders/RNavBarMenu/RNavbarMenu';
 import RStatus from '../../Responders/RespondersMenu/RespondersStatus/RStatus';
@@ -10,9 +10,10 @@ import RProfile from '../../Responders/RespondersProfile/RProfile';
 export default function RespondersScreen() {
   const [activeTab, setActiveTab] = useState(2); // Default to Status
   const [selectedContact, setSelectedContact] = useState(null);
+  const [unreadCount, setUnreadCount] = useState(0);
 
   const TABS = [
-    { component: <RNotifications /> },
+    { component: <RNotifications onUnreadCountChange={setUnreadCount} /> },
     { component: <RMap /> },
     { component: <RStatus /> },
     { component: <RFiraChat onContactSelect={setSelectedContact} /> },
@@ -25,7 +26,7 @@ export default function RespondersScreen() {
       <View className="flex-1">
         {TABS[activeTab].component}
       </View>
-      <RNavbarMenu activeTab={activeTab} setActiveTab={setActiveTab} />
+      <RNavbarMenu activeTab={activeTab} setActiveTab={setActiveTab} unreadCount={unreadCount} />
     </View>
   );
 }

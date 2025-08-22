@@ -1,8 +1,8 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { View, Text, ScrollView, TouchableOpacity } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 
-export default function ANotifications() {
+export default function ANotifications({ onUnreadCountChange }) {
   const [notifications, setNotifications] = useState([
     {
       id: 1,
@@ -104,10 +104,17 @@ export default function ANotifications() {
 
   const unreadCount = notifications.filter(n => !n.read).length;
 
+  // Call the callback whenever unread count changes
+  useEffect(() => {
+    if (onUnreadCountChange) {
+      onUnreadCountChange(unreadCount);
+    }
+  }, [unreadCount, onUnreadCountChange]);
+
   return (
     <View className="flex-1 bg-gray-50">
       {/* Filter Tabs */}
-      <View className="bg-white border-b border-gray-200 pt-4">
+      <View className="bg-white border-b border-gray-200 pt-20">
         <ScrollView horizontal showsHorizontalScrollIndicator={false} className="px-4 py-2">
           <TouchableOpacity className="bg-fire px-4 py-2 rounded-lg mr-2">
             <Text className="text-white font-medium">All</Text>

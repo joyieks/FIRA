@@ -1,68 +1,139 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { FiSend, FiPaperclip, FiUser, FiAlertTriangle } from 'react-icons/fi';
+import { FiSend, FiPaperclip, FiUser, FiAlertTriangle, FiImage, FiCheck } from 'react-icons/fi';
+import { db, auth, storage } from '../../../../config/firebase';
+import { collection, addDoc, query, orderBy, onSnapshot, serverTimestamp, getDocs, updateDoc, doc, arrayUnion, arrayRemove } from 'firebase/firestore';
+import { ref as storageRef, uploadBytes, getDownloadURL } from 'firebase/storage';
 
 const Sfira_chat = () => {
-  const [messages, setMessages] = useState([
-    { id: 1, sender: 'DRRMO Operator', text: 'Emergency alert received. What is your situation?', timestamp: '10:30 AM', isEmergency: true },
-    { id: 2, sender: 'You', text: 'Fire outbreak in Barangay Lahug near UC campus!', timestamp: '10:31 AM', isEmergency: true },
-    { id: 3, sender: 'DRRMO Operator', text: 'Help is on the way. Can you share your exact location?', timestamp: '10:32 AM', isEmergency: true },
-  ]);
+  const [messages, setMessages] = useState([]);
   const [newMessage, setNewMessage] = useState('');
   const [isEmergencyMode, setIsEmergencyMode] = useState(false);
   const [activeTab, setActiveTab] = useState('chat');
+  const [users, setUsers] = useState([]);
+  const [selectedUser, setSelectedUser] = useState(null);
   const messagesEndRef = useRef(null);
+  const imageInputRef = useRef(null);
+  const [isUploadingImage, setIsUploadingImage] = useState(false);
 
-  // Sample emergency contacts
+  // Emergency contacts (can be expanded)
   const emergencyContacts = [
-    { id: 1, name: 'DRRMO Central', status: 'Online', avatar: 'D' },
-    { id: 2, name: 'BFP Station 1', status: 'Online', avatar: 'B' },
-    { id: 3, name: 'CCPO Dispatch', status: 'Offline', avatar: 'C' },
-    { id: 4, name: 'Medical Response', status: 'Online', avatar: 'M' },
+    { id: 'drrmo', name: 'DRRMO Central', status: 'Online', avatar: 'D' },
   ];
+
+  // Fetch station users and Admin User for chat list
+  useEffect(() => {
+    const fetchUsers = async () => {
+      const stationsSnap = await getDocs(collection(db, 'stationUsers'));
+      const adminsSnap = await getDocs(collection(db, 'adminUser'));
+      const currentUid = auth.currentUser?.uid;
+
+      // Find the "Admin User" document
+      const adminUserDoc = adminsSnap.docs.find(d => d.data().adminName === 'Admin User');
+      const adminUser = adminUserDoc
+        ? {
+            id: adminUserDoc.id,
+            name: adminUserDoc.data().adminName,
+            email: adminUserDoc.data().email,
+            type: 'admin',
+          }
+        : null;
+
+      const stations = stationsSnap.docs.map(d => {
+        const data = d.data();
+        return {
+          id: d.id,
+          name: data.name || data.stationName || data['Station Name'] || data['Username'] || '',
+          email: data.email || data.Email || '',
+          type: 'station',
+        };
+      });
+
+      // Only include "Admin User" and stations, exclude self
+      const combined = [
+        ...(adminUser ? [adminUser] : []),
+        ...stations.filter(u => !!u.id && u.id !== currentUid),
+      ];
+      setUsers(combined);
+    };
+    fetchUsers();
+  }, []);
+
+  // Real-time messages for selected user
+  useEffect(() => {
+    if (!selectedUser) return;
+    const q = query(
+      collection(db, 'messages'),
+      orderBy('timestamp', 'asc')
+    );
+    const unsubscribe = onSnapshot(q, (querySnapshot) => {
+      const msgs = [];
+      querySnapshot.forEach((doc) => {
+        const data = doc.data();
+        // Only show messages between current user and selected user
+        if (
+          (data.senderId === auth.currentUser?.uid && data.receiverId === selectedUser.id) ||
+          (data.senderId === selectedUser.id && data.receiverId === auth.currentUser?.uid)
+        ) {
+          msgs.push({ id: doc.id, ...data });
+        }
+      });
+      setMessages(msgs);
+      scrollToBottom();
+    });
+    return () => unsubscribe();
+  }, [selectedUser]);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   };
 
-  useEffect(() => {
-    scrollToBottom();
-  }, [messages]);
+  const handleSendMessage = async () => {
+    if (newMessage.trim() === '' || !selectedUser) return;
+    try {
+      await addDoc(collection(db, 'messages'), {
+        sender: auth.currentUser?.displayName || 'Station',
+        senderId: auth.currentUser?.uid || '',
+        receiverId: selectedUser.id,
+        receiverName: selectedUser.name || selectedUser.email || '',
+        text: newMessage,
+        isEmergency: isEmergencyMode,
+        timestamp: serverTimestamp(),
+        userType: 'station',
+      });
+      setNewMessage('');
+    } catch (error) {
+      alert('Failed to send message: ' + error.message);
+    }
+  };
 
-  const handleSendMessage = () => {
-    if (newMessage.trim() === '') return;
-    
-    const newMsg = {
-      id: messages.length + 1,
-      sender: 'You',
-      text: newMessage,
-      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-      isEmergency: isEmergencyMode
-    };
-    
-    setMessages([...messages, newMsg]);
-    setNewMessage('');
-    
-    // Simulate response after 1-2 seconds
-    setTimeout(() => {
-      const responses = [
-        "We've dispatched a team to your location.",
-        "Please stay in a safe area.",
-        "Can you provide more details about the situation?",
-        "Medical assistance is 5 minutes away.",
-        "How many people are affected?"
-      ];
-      const randomResponse = responses[Math.floor(Math.random() * responses.length)];
-      
-      const responseMsg = {
-        id: messages.length + 2,
-        sender: isEmergencyMode ? 'DRRMO Operator' : 'Support',
-        text: randomResponse,
-        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-        isEmergency: isEmergencyMode
-      };
-      
-      setMessages(prev => [...prev, responseMsg]);
-    }, 1000 + Math.random() * 1000);
+  const handleSelectImage = async (event) => {
+    const file = event.target.files && event.target.files[0];
+    if (!file || !selectedUser) return;
+    setIsUploadingImage(true);
+    try {
+      const path = `chatImages/${auth.currentUser?.uid}/${Date.now()}-${file.name}`;
+      const ref = storageRef(storage, path);
+      await uploadBytes(ref, file);
+      const downloadURL = await getDownloadURL(ref);
+      await addDoc(collection(db, 'messages'), {
+        sender: auth.currentUser?.displayName || 'Station',
+        senderId: auth.currentUser?.uid || '',
+        receiverId: selectedUser.id,
+        receiverName: selectedUser.name || selectedUser.email || '',
+        text: '',
+        imageUrl: downloadURL,
+        isEmergency: isEmergencyMode,
+        timestamp: serverTimestamp(),
+        userType: 'station',
+      });
+    } catch (error) {
+      alert('Failed to upload image: ' + error.message);
+    } finally {
+      setIsUploadingImage(false);
+      if (event.target) {
+        event.target.value = '';
+      }
+    }
   };
 
   const handleKeyPress = (e) => {
@@ -72,18 +143,36 @@ const Sfira_chat = () => {
     }
   };
 
-  const triggerEmergency = () => {
-    setIsEmergencyMode(true);
-    setMessages([
-      ...messages,
-      { 
-        id: messages.length + 1, 
-        sender: 'System', 
-        text: 'EMERGENCY MODE ACTIVATED - Connecting to DRRMO', 
-        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-        isEmergency: true 
+  const handleAcknowledge = async (message) => {
+    try {
+      const uid = auth.currentUser?.uid;
+      if (!uid || !message?.id) return;
+      const alreadyAcked = (message.ackBy || message.checkReactedBy || []).includes(uid);
+      const mref = doc(db, 'messages', message.id);
+      if (alreadyAcked) {
+        await updateDoc(mref, { ackBy: arrayRemove(uid) });
+      } else {
+        await updateDoc(mref, { ackBy: arrayUnion(uid) });
       }
-    ]);
+    } catch (error) {
+      alert('Failed to acknowledge: ' + error.message);
+    }
+  };
+
+  const triggerEmergency = async () => {
+    setIsEmergencyMode(true);
+    try {
+      await addDoc(collection(db, 'messages'), {
+        sender: 'System',
+        senderId: 'system',
+        text: 'EMERGENCY MODE ACTIVATED - Connecting to DRRMO',
+        isEmergency: true,
+        timestamp: serverTimestamp(),
+        userType: 'station',
+      });
+    } catch (error) {
+      alert('Failed to send emergency message: ' + error.message);
+    }
   };
 
   return (
@@ -94,7 +183,6 @@ const Sfira_chat = () => {
           <h2 className="text-xl font-bold text-red-600">Project FIRA</h2>
           <p className="text-sm text-gray-500">Emergency Communication</p>
         </div>
-        
         <div className="flex border-b">
           <button 
             onClick={() => setActiveTab('chat')}
@@ -109,21 +197,23 @@ const Sfira_chat = () => {
             Contacts
           </button>
         </div>
-        
         {activeTab === 'chat' ? (
           <div className="flex-1 overflow-y-auto">
-            {/* Chat list would go here */}
-            <div className="p-4 border-b border-gray-200 hover:bg-gray-50 cursor-pointer">
-              <div className="flex items-center">
-                <div className="w-10 h-10 rounded-full bg-red-100 flex items-center justify-center text-red-600 font-bold mr-3">
-                  D
+            {users.map(user => (
+              <div
+                key={user.id}
+                className={`p-4 border-b border-gray-200 hover:bg-gray-50 cursor-pointer flex items-center ${selectedUser?.id === user.id ? 'bg-red-50' : ''}`}
+                onClick={() => setSelectedUser(user)}
+              >
+                <div className={`w-10 h-10 rounded-full flex items-center justify-center font-bold mr-3 ${user.type === 'admin' ? 'bg-blue-100 text-blue-600' : 'bg-green-100 text-green-600'}`}>
+                  {user.name ? user.name[0] : (user.email ? user.email[0] : '?')}
                 </div>
-                <div>
-                  <h3 className="font-medium">DRRMO Central</h3>
-                  <p className="text-sm text-gray-500 truncate">Emergency response team</p>
+                <div className="flex-1">
+                  <h3 className="font-medium">{user.name || user.email}</h3>
+                  <p className="text-sm text-gray-500">{user.type === 'admin' ? 'Admin' : 'Station'}</p>
                 </div>
               </div>
-            </div>
+            ))}
           </div>
         ) : (
           <div className="flex-1 overflow-y-auto">
@@ -138,14 +228,10 @@ const Sfira_chat = () => {
                   <h3 className="font-medium">{contact.name}</h3>
                   <p className="text-sm text-gray-500">{contact.status}</p>
                 </div>
-                <div className="flex space-x-2">
-                  {/* Removed call icon */}
-                </div>
               </div>
             ))}
           </div>
         )}
-        
         <div className="p-4 border-t border-gray-200">
           <button 
             onClick={triggerEmergency}
@@ -156,129 +242,193 @@ const Sfira_chat = () => {
           </button>
         </div>
       </div>
-      
       {/* Chat Area */}
       <div className="flex-1 flex flex-col">
-        {/* Chat Header */}
-        <div className={`p-4 border-b border-gray-200 flex items-center justify-between ${
-          isEmergencyMode ? 'bg-red-50' : 'bg-white'
-        }`}>
-          <div className="flex items-center">
-            <div className="w-10 h-10 rounded-full bg-red-100 flex items-center justify-center text-red-600 font-bold mr-3">
-              D
-            </div>
-            <div>
-              <h3 className="font-medium">DRRMO Central</h3>
-              <p className="text-sm text-gray-500">
-                {isEmergencyMode ? (
-                  <span className="text-red-600 flex items-center">
-                    <FiAlertTriangle className="mr-1" /> Emergency Response
-                  </span>
-                ) : 'Online'}
-              </p>
-            </div>
-          </div>
-          <div className="flex space-x-2">
-            {/* Removed video call, map, and call icons */}
-          </div>
-        </div>
-        
-        {/* Messages */}
-        <div className="flex-1 overflow-y-auto p-4 bg-gray-50">
-          {messages.map((message) => (
-            <div 
-              key={message.id} 
-              className={`mb-4 flex ${
-                message.sender === 'You' ? 'justify-end' : 'justify-start'
-              }`}
-            >
-              <div className={`max-w-xs md:max-w-md rounded-lg px-4 py-2 ${
-                message.sender === 'You' 
-                  ? isEmergencyMode 
-                    ? 'bg-red-600 text-white' 
-                    : 'bg-blue-600 text-white'
-                  : message.isEmergency
-                    ? 'bg-red-100 border border-red-200'
-                    : 'bg-white border border-gray-200'
-              }`}>
-                {message.sender !== 'You' && (
-                  <div className={`text-xs font-medium mb-1 ${
-                    message.isEmergency ? 'text-red-600' : 'text-gray-500'
-                  }`}>
-                    {message.sender}
-                  </div>
-                )}
-                <p>{message.text}</p>
-                <div className={`text-xs mt-1 text-right ${
-                  message.sender === 'You' 
-                    ? 'text-white text-opacity-80' 
-                    : message.isEmergency 
-                      ? 'text-red-500' 
-                      : 'text-gray-500'
-                }`}>
-                  {message.timestamp}
+        {selectedUser ? (
+          <>
+            {/* Chat Header */}
+            <div className={`p-4 border-b border-gray-200 flex items-center justify-between ${isEmergencyMode ? 'bg-red-50' : 'bg-white'}`}>
+              <div className="flex items-center">
+                <div className={`w-10 h-10 rounded-full flex items-center justify-center font-bold mr-3 ${selectedUser.type === 'admin' ? 'bg-blue-100 text-blue-600' : 'bg-green-100 text-green-600'}`}>
+                  {selectedUser.name ? selectedUser.name[0] : (selectedUser.email ? selectedUser.email[0] : '?')}
+                </div>
+                <div>
+                  <h3 className="font-medium">{selectedUser.name || selectedUser.email}</h3>
+                  <p className="text-sm text-gray-500">
+                    {isEmergencyMode ? (
+                      <span className="text-red-600 flex items-center">
+                        <FiAlertTriangle className="mr-1" /> Emergency Response
+                      </span>
+                    ) : 'Online'}
+                  </p>
                 </div>
               </div>
             </div>
-          ))}
-          <div ref={messagesEndRef} />
-        </div>
-        
-        {/* Message Input */}
-        <div className="p-4 border-t border-gray-200 bg-white">
-          {isEmergencyMode && (
-            <div className="bg-red-50 border-l-4 border-red-400 p-3 mb-3 rounded-r-lg">
-              <div className="flex items-center text-red-800">
-                <FiAlertTriangle className="mr-2 flex-shrink-0" />
-                <p className="text-sm">You are in emergency mode. All messages are prioritized.</p>
+            {/* Messages */}
+            <div className="flex-1 overflow-y-auto p-4 bg-gray-50">
+              {messages.map((message) => {
+                const isMine = message.senderId === auth.currentUser?.uid;
+                const ackList = message.ackBy || message.checkReactedBy || [];
+                const hasAcked = !!auth.currentUser?.uid && ackList.includes(auth.currentUser.uid);
+                const ackCount = ackList.length || 0;
+                return (
+                  <div 
+                    key={message.id} 
+                    className={`mb-4 flex ${isMine ? 'justify-end' : 'justify-start'} items-center`}
+                  >
+                    {isMine && (
+                      <button
+                        type="button"
+                        onClick={() => handleAcknowledge(message)}
+                        className={`mr-2 inline-flex items-center text-xs text-green-600 ${hasAcked ? 'opacity-100' : 'opacity-60 hover:opacity-100'}`}
+                        aria-label={hasAcked ? 'Acknowledged' : 'Acknowledge message'}
+                        title={hasAcked ? 'You acknowledged' : 'Acknowledge'}
+                      >
+                        <span className="text-base leading-none">✅</span>
+                        {ackCount > 0 && <span className="ml-1">{ackCount}</span>}
+                      </button>
+                    )}
+                    <div className={`max-w-xs md:max-w-md ${isMine ? 'items-end' : 'items-start'}`}>
+                      <div className={`rounded-lg px-4 py-2 ${
+                        isMine
+                          ? isEmergencyMode 
+                            ? 'bg-red-600 text-white' 
+                            : 'bg-blue-600 text-white'
+                          : message.isEmergency
+                            ? 'bg-red-100 border border-red-200'
+                            : 'bg-white border border-gray-200'
+                      }`}>
+                        {!isMine && (
+                          <div className={`text-xs font-medium mb-1 ${message.isEmergency ? 'text-red-600' : 'text-gray-500'}`}>
+                            {message.sender}
+                          </div>
+                        )}
+                        {message.text && <p className="whitespace-pre-wrap">{message.text}</p>}
+                        {message.imageUrl && (
+                          <img
+                            src={message.imageUrl}
+                            alt="sent attachment"
+                            className="mt-1 max-h-60 rounded-md object-cover"
+                          />
+                        )}
+                        <div className={`text-xs mt-1 text-right ${
+                          isMine 
+                            ? 'text-white text-opacity-80' 
+                            : message.isEmergency 
+                              ? 'text-red-500' 
+                              : 'text-gray-500'
+                        }`}>
+                          {message.timestamp && message.timestamp.toDate ? message.timestamp.toDate().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''}
+                        </div>
+                      </div>
+                      {/* Messenger-style seen/sent indicator below message */}
+                      <div className={`mt-0.5 flex items-center ${isMine ? 'justify-end' : 'justify-start'} space-x-2`}>
+                        {isMine ? (
+                          ((message.seenBy || []).includes(selectedUser?.id)) ? (
+                            <span className="inline-flex items-center text-[10px] text-green-600">
+                              <FiCheck className="mr-1" size={12} /> Seen
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center text-[10px] text-gray-400">
+                              <FiCheck className="mr-1" size={12} /> Sent
+                            </span>
+                          )
+                        ) : null}
+                      </div>
+                    </div>
+                    {!isMine && (
+                      <button
+                        type="button"
+                        onClick={() => handleAcknowledge(message)}
+                        className={`ml-2 inline-flex items-center text-xs text-green-600 ${hasAcked ? 'opacity-100' : 'opacity-60 hover:opacity-100'}`}
+                        aria-label={hasAcked ? 'Acknowledged' : 'Acknowledge message'}
+                        title={hasAcked ? 'You acknowledged' : 'Acknowledge'}
+                      >
+                        <span className="text-base leading-none">✅</span>
+                        {ackCount > 0 && <span className="ml-1">{ackCount}</span>}
+                      </button>
+                    )}
+                  </div>
+                );
+              })}
+              <div ref={messagesEndRef} />
+            </div>
+            {/* Message Input */}
+            <div className="p-4 border-t border-gray-200 bg-white">
+              {isEmergencyMode && (
+                <div className="bg-red-50 border-l-4 border-red-400 p-3 mb-3 rounded-r-lg">
+                  <div className="flex items-center text-red-800">
+                    <FiAlertTriangle className="mr-2 flex-shrink-0" />
+                    <p className="text-sm">You are in emergency mode. All messages are prioritized.</p>
+                  </div>
+                </div>
+              )}
+              <div className="flex items-center">
+                <button className="p-2 text-gray-500 hover:text-gray-700 mr-2" disabled={isUploadingImage}>
+                  <FiPaperclip size={20} />
+                </button>
+                <input
+                  ref={imageInputRef}
+                  type="file"
+                  accept="image/*"
+                  className="hidden"
+                  onChange={handleSelectImage}
+                />
+                <button
+                  type="button"
+                  onClick={() => imageInputRef.current?.click()}
+                  disabled={isUploadingImage || !selectedUser}
+                  className={`p-2 mr-2 rounded-full ${isUploadingImage ? 'opacity-50 cursor-not-allowed' : 'text-gray-500 hover:text-gray-700'}`}
+                  title="Send image"
+                >
+                  <FiImage size={20} />
+                </button>
+                <div className="flex-1 relative">
+                  <textarea
+                    value={newMessage}
+                    onChange={(e) => setNewMessage(e.target.value)}
+                    onKeyPress={handleKeyPress}
+                    placeholder={isEmergencyMode ? "Describe your emergency..." : "Type a message..."}
+                    className="w-full border border-gray-300 rounded-lg pl-4 pr-12 py-2 focus:ring-2 focus:ring-red-500 focus:border-red-500 resize-none"
+                    rows="1"
+                  />
+                </div>
+                <button
+                  onClick={handleSendMessage}
+                  disabled={!newMessage.trim()}
+                  className={`ml-3 p-2 rounded-full ${
+                    isEmergencyMode
+                      ? 'bg-red-600 text-white hover:bg-red-700'
+                      : 'bg-blue-600 text-white hover:bg-blue-700'
+                  } ${!newMessage.trim() ? 'opacity-50 cursor-not-allowed' : ''}`}
+                >
+                  <FiSend size={20} />
+                </button>
+              </div>
+              <div className="mt-2 flex justify-between text-xs text-gray-500">
+                <div>
+                  {isEmergencyMode ? (
+                    <span className="text-red-600 flex items-center">
+                      <FiAlertTriangle className="mr-1" /> Emergency communication
+                    </span>
+                  ) : 'Standard message'}
+                </div>
+                <div>
+                  <button 
+                    onClick={() => setIsEmergencyMode(!isEmergencyMode)}
+                    className="text-red-600 hover:underline"
+                  >
+                    {isEmergencyMode ? 'Exit emergency mode' : 'Switch to emergency mode'}
+                  </button>
+                </div>
               </div>
             </div>
-          )}
-          <div className="flex items-center">
-            <button className="p-2 text-gray-500 hover:text-gray-700 mr-2">
-              <FiPaperclip size={20} />
-            </button>
-            {/* Removed voice message icon */}
-            <div className="flex-1 relative">
-              <textarea
-                value={newMessage}
-                onChange={(e) => setNewMessage(e.target.value)}
-                onKeyPress={handleKeyPress}
-                placeholder={isEmergencyMode ? "Describe your emergency..." : "Type a message..."}
-                className="w-full border border-gray-300 rounded-lg pl-4 pr-12 py-2 focus:ring-2 focus:ring-red-500 focus:border-red-500 resize-none"
-                rows="1"
-              />
-            </div>
-            <button
-              onClick={handleSendMessage}
-              disabled={!newMessage.trim()}
-              className={`ml-3 p-2 rounded-full ${
-                isEmergencyMode
-                  ? 'bg-red-600 text-white hover:bg-red-700'
-                  : 'bg-blue-600 text-white hover:bg-blue-700'
-              } ${!newMessage.trim() ? 'opacity-50 cursor-not-allowed' : ''}`}
-            >
-              <FiSend size={20} />
-            </button>
+          </>
+        ) : (
+          <div className="flex-1 flex items-center justify-center text-gray-400 text-lg">
+            Select a user to start chatting.
           </div>
-          <div className="mt-2 flex justify-between text-xs text-gray-500">
-            <div>
-              {isEmergencyMode ? (
-                <span className="text-red-600 flex items-center">
-                  <FiAlertTriangle className="mr-1" /> Emergency communication
-                </span>
-              ) : 'Standard message'}
-            </div>
-            <div>
-              <button 
-                onClick={() => setIsEmergencyMode(!isEmergencyMode)}
-                className="text-red-600 hover:underline"
-              >
-                {isEmergencyMode ? 'Exit emergency mode' : 'Switch to emergency mode'}
-              </button>
-            </div>
-          </div>
-        </div>
+        )}
       </div>
     </div>
   );

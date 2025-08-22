@@ -7,6 +7,16 @@ service cloud.firestore {
       allow read, write: if true;
     }
     
+    // Allow read/write access to stationUsers collection
+    match /stationUsers/{userId} {
+      allow read, write: if true;
+    }
+    
+    // Allow read/write access to passwordResetCodes collection
+    match /passwordResetCodes/{codeId} {
+      allow read, write: if true;
+    }
+    
     // Default rule for other collections (more restrictive)
     match /{document=**} {
       allow read, write: if request.time < timestamp.date(2025, 12, 31);
