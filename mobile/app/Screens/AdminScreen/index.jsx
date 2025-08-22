@@ -15,11 +15,12 @@ export default function AdminScreen() {
   const [activeTab, setActiveTab] = useState(0); // Default to Overview
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [selectedContact, setSelectedContact] = useState(null);
+  const [unreadCount, setUnreadCount] = useState(0);
 
   const TABS = [
     { component: <AStatus /> },
     { component: <AMap /> },
-    { component: <ANotifications /> },
+    { component: <ANotifications onUnreadCountChange={setUnreadCount} /> },
     { component: <AFiraChat onContactSelect={setSelectedContact} /> },
     { component: <AUserManagement /> },
     { component: <AProfile /> },

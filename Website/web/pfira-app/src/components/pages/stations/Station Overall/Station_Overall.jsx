@@ -120,7 +120,7 @@ const Station_Overview = () => {
   });
 
   const handleReportClick = (report) => {
-    setSelectedReport(report);
+    setSelectedReport(report);S
     setShowReportModal(true);
   };
 

@@ -17,7 +17,7 @@ const { width } = Dimensions.get('window');
 const TAB_WIDTH = width / TABS.length;
 const CIRCLE_SIZE = 56;
 
-const RNavbarMenu = ({ activeTab, setActiveTab }) => {
+const RNavbarMenu = ({ activeTab, setActiveTab, unreadCount = 0 }) => {
   const animValue = React.useRef(new Animated.Value(activeTab)).current;
 
   React.useEffect(() => {
@@ -84,9 +84,19 @@ const RNavbarMenu = ({ activeTab, setActiveTab }) => {
                 activeOpacity={0.8}
                 onPress={() => handlePress(idx)}
               >
-                {activeTab !== idx && (
-                  <MaterialIcons name={tab.icon} size={28} color={INACTIVE_COLOR} />
-                )}
+                <View className="relative">
+                  {activeTab !== idx && (
+                    <MaterialIcons name={tab.icon} size={28} color={INACTIVE_COLOR} />
+                  )}
+                  {/* Unread count badge for notifications */}
+                  {tab.id === 'Notifications' && unreadCount > 0 && activeTab !== idx && (
+                    <View className="absolute -top-1 -right-1 bg-red-500 rounded-full w-5 h-5 items-center justify-center">
+                      <Text className="text-white font-bold text-xs">
+                        {unreadCount > 99 ? '99+' : unreadCount}
+                      </Text>
+                    </View>
+                  )}
+                </View>
                 <Animated.Text
                   className={`text-[11px] mt-0.5 ${isActive ? 'text-[#ff512f] font-bold' : 'text-white'}`}
                   style={{ transform: [{ translateY: labelTranslateY }] }}

@@ -15,11 +15,12 @@ export default function StationScreen() {
   const [activeTab, setActiveTab] = useState(0); // Default to Overview
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [selectedContact, setSelectedContact] = useState(null);
+  const [unreadCount, setUnreadCount] = useState(0);
 
   const TABS = [
     { component: <SStatus /> },
     { component: <SMap /> },
-    { component: <SNotifications /> },
+    { component: <SNotifications onUnreadCountChange={setUnreadCount} /> },
     { component: <SFiraChat onContactSelect={setSelectedContact} /> },
     { component: <SUserManagement /> },
     { component: <SProfile /> },

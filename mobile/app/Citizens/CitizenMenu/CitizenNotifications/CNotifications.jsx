@@ -1,8 +1,8 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { View, Text, ScrollView, TouchableOpacity, Image } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 
-const CNotifications = () => {
+const CNotifications = ({ onUnreadCountChange }) => {
   const [notifications, setNotifications] = useState([
     {
       id: 1,
@@ -88,6 +88,13 @@ const CNotifications = () => {
   };
 
   const unreadCount = notifications.filter(n => !n.read).length;
+
+  // Call the callback whenever unread count changes
+  useEffect(() => {
+    if (onUnreadCountChange) {
+      onUnreadCountChange(unreadCount);
+    }
+  }, [unreadCount, onUnreadCountChange]);
 
   return (
     <View className="flex-1 bg-gray-50">
