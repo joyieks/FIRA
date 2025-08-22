@@ -94,8 +94,11 @@ const Login = () => {
     const email = formData.username;
     const password = formData.password;
 
+    console.log('🔍 Login attempt:', { email, password });
+
     // Hardcoded authentication for test accounts
     if (email === 'admin@gmail.com' && password === 'admin123') {
+      console.log('✅ Hardcoded admin login detected');
       // Admin hardcoded login
       const userData = {
         email: 'admin@gmail.com',
@@ -109,19 +112,27 @@ const Login = () => {
       localStorage.setItem('loginTime', Date.now().toString());
       localStorage.setItem('userData', JSON.stringify(userData));
       
+      console.log('✅ Admin login successful, navigating to dashboard');
       navigate('/admin-dashboard');
       return;
+    } else {
+      console.log('❌ Hardcoded admin credentials do not match');
     }
 
     try {
+      console.log('🔄 Attempting Firebase authentication...');
       // Sign in with Firebase Auth
       const userCredential = await signInWithEmailAndPassword(auth, email, password);
       const user = userCredential.user;
+      console.log('✅ Firebase Auth successful:', user.uid);
 
       // Check if user exists in adminUser collection
+      console.log('🔍 Checking adminUser collection...');
       const adminCheck = await checkUserInCollection(email, 'adminUser');
+      console.log('📊 Admin check result:', adminCheck);
       
       if (adminCheck.exists) {
+        console.log('✅ Admin user found in adminUser collection');
         // User is an admin
         const userData = {
           ...adminCheck.data,
@@ -134,14 +145,15 @@ const Login = () => {
         localStorage.setItem('loginTime', Date.now().toString());
         localStorage.setItem('userData', JSON.stringify(userData));
         
+        console.log('✅ Admin login successful, navigating to dashboard');
         navigate('/admin-dashboard');
         return;
       }
 
       // Check if user exists in stationUsers collection
-      console.log('Checking stationUsers collection...');
+      console.log('🔍 Checking stationUsers collection...');
       const stationCheck = await checkUserInCollection(email, 'stationUsers');
-      console.log('Station check result:', stationCheck);
+      console.log('📊 Station check result:', stationCheck);
       
       if (stationCheck.exists) {
         console.log('✅ Station user found, user data:', stationCheck.data);
@@ -164,10 +176,11 @@ const Login = () => {
       }
 
       // User authenticated but not found in either collection
+      console.log('❌ User authenticated but not found in authorized collections');
       setError('User not found in authorized collections. Please contact administrator.');
       
     } catch (error) {
-      console.error('Login error:', error);
+      console.error('❌ Login error:', error);
       
       // Handle specific Firebase Auth errors
       switch (error.code) {
