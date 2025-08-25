@@ -15,6 +15,7 @@ export default function RootLayout() {
       <Stack.Screen name="get-started/getstarted" />
       <Stack.Screen name="Authentication/login" />
       <Stack.Screen name="Authentication/registration" />
+      <Stack.Screen name="Authentication/verificationCode" />
       {/* ✅ Direct match for index.jsx under Screens/CitizenScreen */}
       <Stack.Screen name="Screens/CitizenScreen" />
       {/* Optional wildcard for other subroutes under CitizenScreen */}
