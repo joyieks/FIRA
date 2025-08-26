@@ -2,9 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { FiUsers, FiHome, FiUserCheck, FiUserX, FiEdit2, FiTrash2, FiSearch, FiChevronDown, FiEye, FiFileText, FiX, FiPlus, FiClock, FiUser } from 'react-icons/fi';
 import { db } from '../../../../config/firebase';
 import { collection, getDocs, addDoc, doc, setDoc } from "firebase/firestore";
-import { createUserWithEmailAndPassword } from 'firebase/auth';
-import { auth } from '../../../../config/firebase';
 import emailjs from '@emailjs/browser';
+
 
 const Auser_management = () => {
   // Initialize EmailJS
@@ -12,10 +11,10 @@ const Auser_management = () => {
     emailjs.init('hDU2Ar_g1pr7Cpg-S');
     console.log('EmailJS initialized with key:', 'hDU2Ar_g1pr7Cpg-S');
   }, []);
+
   const [activeTab, setActiveTab] = useState('citizens');
   const [editUser, setEditUser] = useState(null);
   const [showAddStationModal, setShowAddStationModal] = useState(false);
-  const [showAddCitizenModal, setShowAddCitizenModal] = useState(false);
   const [showCitizenProfileModal, setShowCitizenProfileModal] = useState(false);
   const [selectedCitizen, setSelectedCitizen] = useState(null);
   const [showEditProfileModal, setShowEditProfileModal] = useState(false);
@@ -34,13 +33,6 @@ const Auser_management = () => {
     email: '',
     phone: '',
     position: '',
-    password: ''
-  });
-  const [newCitizen, setNewCitizen] = useState({
-    firstName: '',
-    lastName: '',
-    email: '',
-    phone: '',
     password: ''
   });
 
@@ -284,19 +276,8 @@ const Auser_management = () => {
     }
 
     try {
-      // Create Firebase Auth user directly
-      const userCredential = await createUserWithEmailAndPassword(
-        auth, 
-        newStation.email.toLowerCase(), 
-        newStation.password
-      );
-      
-      const uid = userCredential.user.uid;
-      console.log('✅ Firebase Auth user created:', uid);
-      
       // Create station data for Firestore
       const stationData = {
-        uid: uid,
         email: newStation.email.toLowerCase(),
         stationName: newStation.name,
         address: newStation.location,
@@ -355,101 +336,19 @@ const Auser_management = () => {
       
       setShowAddStationModal(false);
       
-      alert(`Station ${newStation.name} has been successfully added! An email with login credentials has been sent to ${newStation.email}`);
-      
     } catch (error) {
       console.error('Error adding station:', error);
       
-      // Handle specific Firebase Auth errors
-      if (error.code === 'auth/email-already-in-use') {
-        alert('A station with this email already exists. Please use a different email.');
-      } else if (error.code === 'auth/weak-password') {
-        alert('Password is too weak. Please use a stronger password (at least 6 characters).');
-      } else if (error.code === 'auth/invalid-email') {
-        alert('Invalid email address. Please check the email format.');
-      } else {
-        alert(`Error adding station: ${error.message}`);
-      }
+      alert(`Error adding station: ${error.message}`);
     }
   };
 
-  const handleAddCitizen = async () => {
-    if (!newCitizen.firstName || !newCitizen.lastName || !newCitizen.email || !newCitizen.password) {
-      alert('Please fill in all required fields (First Name, Last Name, Email, Password)');
-      return;
-    }
-
+  const sendWelcomeEmail = async (email, stationName, password) => {
     try {
-      // Use the password from the form
-      const userPassword = newCitizen.password;
-      
-      // Create citizen data for Firestore
-      const citizenData = {
-        firstName: newCitizen.firstName,
-        lastName: newCitizen.lastName,
-        email: newCitizen.email.toLowerCase(),
-        phone: newCitizen.phone || '',
-        password: userPassword, // Store the manual password
-        status: 'active',
-        lastActivity: 'Recently active',
-        reports: 0,
-        createdAt: new Date().toISOString(),
-        userType: 'citizen'
-      };
-
-      // Add to Firestore
-      const docRef = await addDoc(collection(db, "citizenUsers"), citizenData);
-      
-      // Create the citizen object for local state
-      const citizen = {
-        id: docRef.id,
-        name: `${newCitizen.firstName} ${newCitizen.lastName}`,
-        email: newCitizen.email,
-        phone: newCitizen.phone,
-        firstName: newCitizen.firstName,
-        lastName: newCitizen.lastName,
-        lastActivity: 'Recently active',
-        reports: 0,
-        status: 'active',
-        createdAt: citizenData.createdAt
-      };
-      
-      // Update local state
-      setUsers(prev => ({
-        ...prev,
-        citizens: [...prev.citizens, citizen]
-      }));
-      
-      // Send email with credentials
-      await sendWelcomeEmail(newCitizen.email, newCitizen.firstName, userPassword);
-      
-      // Clear form
-      setNewCitizen({
-        firstName: '',
-        lastName: '',
-        email: '',
-        phone: '',
-        password: ''
-      });
-      
-      setShowAddCitizenModal(false);
-      
-      alert(`Citizen ${newCitizen.firstName} ${newCitizen.lastName} has been successfully added! An email with login credentials has been sent to ${newCitizen.email}`);
-      
-    } catch (error) {
-      console.error('Error adding citizen:', error);
-      alert('Error adding citizen. Please try again.');
-    }
-  };
-
-
-
-  const sendWelcomeEmail = async (email, firstName, password) => {
-    try {
-      console.log('Starting email send process...');
-      console.log('EmailJS configuration:', {
+      console.log('🚀 Starting email send process for station...');
+      console.log('📧 EmailJS configuration:', {
         serviceId: 'service_717ciwa',
-        templateId: 'template_46bcvcf',
+        templateId: 'template_vfzvmj2',
         publicKey: 'hDU2Ar_g1pr7Cpg-S'
       });
       
@@ -459,27 +358,27 @@ const Auser_management = () => {
       const publicKey = 'hDU2Ar_g1pr7Cpg-S'; // Your EmailJS public key
       
       const templateParams = {
-        to_name: firstName,
+        to_name: stationName,
         user_email: email,
         user_password: password
       };
 
-      console.log('Template parameters:', templateParams);
+      console.log('📋 Template parameters:', templateParams);
+      console.log('📤 Attempting to send email...');
 
       const result = await emailjs.send(serviceId, templateId, templateParams, publicKey);
-      console.log('Welcome email sent successfully:', result);
-      alert(`Email sent successfully to ${email}!`);
+      console.log('✅ Welcome email sent successfully:', result);
+      console.log('📬 EmailJS response:', result);
       
     } catch (error) {
-      console.error('Error sending welcome email:', error);
-      console.error('Error details:', {
+      console.error('❌ Error sending welcome email:', error);
+      console.error('❌ Error details:', {
         message: error.message,
         code: error.code,
         stack: error.stack
       });
-      // Don't throw error here as the user was still created successfully
-      // You might want to show a warning to the admin that email failed
-      alert(`Citizen created successfully, but email delivery failed. Error: ${error.message}. Please manually send credentials to ${email}`);
+      // Don't throw error here as the station was still created successfully
+      // Email failed but station was created - no user notification
     }
   };
 
@@ -562,13 +461,15 @@ const Auser_management = () => {
                 />
               </div>
               <div className="flex gap-2">
-                <button
-                  onClick={() => activeTab === 'citizens' ? setShowAddCitizenModal(true) : setShowAddStationModal(true)}
-                  className="flex items-center justify-center px-6 py-3 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors"
-                >
-                  <FiPlus className="mr-2" />
-                  Add New {activeTab === 'citizens' ? 'Citizen' : 'Station'}
-                </button>
+                {activeTab === 'stations' && (
+                  <button
+                    onClick={() => setShowAddStationModal(true)}
+                    className="flex items-center justify-center px-6 py-3 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors"
+                  >
+                    <FiPlus className="mr-2" />
+                    Add New Station
+                  </button>
+                )}
               </div>
             </div>
           </div>
@@ -1046,131 +947,12 @@ const Auser_management = () => {
             </div>
           )}
           
-          {/* Add Citizen Modal */}
-          {showAddCitizenModal && (
-            <div 
-              className="fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center z-50 backdrop-blur-sm"
-              onClick={() => setShowAddCitizenModal(false)}
-            >
-              <div 
-                className="bg-white rounded-2xl shadow-2xl p-8 max-w-4xl w-full mx-4"
-                onClick={(e) => e.stopPropagation()}
-              >
-                <div className="flex justify-between items-center mb-6">
-                  <div>
-                    <h2 className="text-2xl font-bold text-gray-900 mb-1">Add New Citizen</h2>
-                    <p className="text-gray-600">Create a new citizen account</p>
-                  </div>
-                  <button
-                    onClick={() => setShowAddCitizenModal(false)}
-                    className="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-full transition-all duration-200"
-                  >
-                    <FiX className="w-6 h-6" />
-                  </button>
-                </div>
 
-                <form onSubmit={(e) => { e.preventDefault(); handleAddCitizen(); }} className="space-y-6">
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-2">
-                        First Name <span className="text-red-500">*</span>
-                      </label>
-                      <input
-                        type="text"
-                        value={newCitizen.firstName}
-                        onChange={(e) => setNewCitizen({...newCitizen, firstName: e.target.value})}
-                        className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-red-500 focus:border-red-500 transition-all duration-200 bg-gray-50 focus:bg-white"
-                        placeholder="Enter first name"
-                        required
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-2">
-                        Last Name <span className="text-red-500">*</span>
-                      </label>
-                      <input
-                        type="text"
-                        value={newCitizen.lastName}
-                        onChange={(e) => setNewCitizen({...newCitizen, lastName: e.target.value})}
-                        className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-red-500 focus:border-red-500 transition-all duration-200 bg-gray-50 focus:bg-white"
-                        placeholder="Enter last name"
-                        required
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-2">
-                        Email Address <span className="text-red-500">*</span>
-                      </label>
-                      <input
-                        type="email"
-                        value={newCitizen.email}
-                        onChange={(e) => setNewCitizen({...newCitizen, email: e.target.value})}
-                        className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-red-500 focus:border-red-500 transition-all duration-200 bg-gray-50 focus:bg-white"
-                        placeholder="Enter email address"
-                        required
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-2">
-                        Phone Number
-                      </label>
-                      <input
-                        type="tel"
-                        value={newCitizen.phone}
-                        onChange={(e) => setNewCitizen({...newCitizen, phone: e.target.value})}
-                        className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-red-500 focus:border-red-500 transition-all duration-200 bg-gray-50 focus:bg-white"
-                        placeholder="Enter phone number (optional)"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-2">
-                        Password <span className="text-red-500">*</span>
-                      </label>
-                      <input
-                        type="password"
-                        value={newCitizen.password}
-                        onChange={(e) => setNewCitizen({...newCitizen, password: e.target.value})}
-                        className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-red-500 focus:border-red-500 transition-all duration-200 bg-gray-50 focus:bg-white"
-                        placeholder="Enter password for the user"
-                        required
-                      />
-                    </div>
-                  </div>
 
-                  <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
-                    <div className="flex items-start">
-                      <div className="flex-shrink-0">
-                        <FiUser className="w-5 h-5 text-blue-600" />
-                      </div>
-                      <div className="ml-3">
-                        <h3 className="text-sm font-medium text-blue-800">Account Creation</h3>
-                        <p className="text-sm text-blue-700 mt-1">
-                          The password you enter will be sent to the user's email address along with their login credentials. 
-                          The user will be able to log in to the FIRA mobile application with these credentials.
-                        </p>
-                      </div>
-                    </div>
-                  </div>
 
-                  <div className="flex justify-end space-x-4 pt-6 border-t border-gray-200">
-                    <button
-                      type="button"
-                      onClick={() => setShowAddCitizenModal(false)}
-                      className="px-6 py-3 text-gray-600 border border-gray-300 rounded-xl hover:bg-gray-50 transition-all duration-200 font-medium"
-                    >
-                      Cancel
-                    </button>
-                    <button
-                      type="submit"
-                      className="px-6 py-3 bg-gradient-to-r from-red-600 to-red-700 text-white rounded-xl hover:from-red-700 hover:to-red-800 transition-all duration-200 font-medium shadow-lg hover:shadow-xl"
-                    >
-                      Create Citizen
-                    </button>
-                  </div>
-                </form>
-              </div>
-            </div>
-          )}
+
+
+
 
           {/* Add Station Modal */}
           {showAddStationModal && (
