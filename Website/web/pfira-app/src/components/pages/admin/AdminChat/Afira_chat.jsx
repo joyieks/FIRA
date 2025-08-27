@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { FiSend, FiPaperclip, FiMic, FiPhone, FiVideo, FiUser, FiMapPin, FiAlertTriangle, FiImage, FiCheck } from 'react-icons/fi';
 import { db, auth, storage } from './../../../../config/firebase';
-import { collection, addDoc, query, orderBy, onSnapshot, serverTimestamp, where, getDocs, updateDoc, doc, arrayUnion, arrayRemove } from 'firebase/firestore';
+import { collection, addDoc, query, orderBy, onSnapshot, serverTimestamp, where, getDocs, updateDoc, doc, arrayUnion, arrayRemove, getDoc } from 'firebase/firestore';
 import { ref as storageRef, uploadBytes, getDownloadURL } from 'firebase/storage';
 
 const Afira_chat = () => {
@@ -14,6 +14,8 @@ const Afira_chat = () => {
   const messagesEndRef = useRef(null);
   const imageInputRef = useRef(null);
   const [isUploadingImage, setIsUploadingImage] = useState(false);
+  const [currentUserName, setCurrentUserName] = useState('');
+  const [fallbackAdminEmail, setFallbackAdminEmail] = useState('');
   // Restore emergency contacts for Contacts tab
   const emergencyContacts = [
     { id: 1, name: 'DRRMO Central', status: 'Online', avatar: 'D' },
@@ -50,55 +52,89 @@ const Afira_chat = () => {
     fetchUsers();
   }, []);
 
+  // Resolve the current admin user's display name
+  useEffect(() => {
+    const resolveName = async () => {
+      const uid = auth.currentUser?.uid;
+      const fallback = auth.currentUser?.displayName || auth.currentUser?.email || 'Admin';
+      if (!uid) {
+        // Try to resolve from adminUser collection if not authenticated
+        try {
+          const adminSnap = await getDocs(collection(db, 'adminUser'));
+          const docMatch = adminSnap.docs.find(d => !!d.data()?.email) || adminSnap.docs[0];
+          if (docMatch) {
+            const d = docMatch.data();
+            setCurrentUserName(d.adminName || fallback);
+            setFallbackAdminEmail(d.email || '');
+          } else {
+            setCurrentUserName(fallback);
+          }
+        } catch {
+          setCurrentUserName(fallback);
+        }
+        return;
+      }
+      try {
+        const profileRef = doc(db, 'adminUser', uid);
+        const snap = await getDoc(profileRef);
+        if (snap.exists()) {
+          const d = snap.data();
+          const name = d.adminName || d.name || fallback;
+          setCurrentUserName(name || fallback);
+          setFallbackAdminEmail(d.email || '');
+        } else {
+          setCurrentUserName(fallback);
+        }
+      } catch {
+        setCurrentUserName(fallback);
+      }
+    };
+    resolveName();
+  }, []);
+
+  // Stable conversation id for two users
+  const getConversationId = (uidA, uidB) => {
+    if (!uidA || !uidB) return null;
+    return [uidA, uidB].sort().join('_');
+  };
+
   // Real-time messages for selected user
   useEffect(() => {
     if (!selectedUser) return;
     
     setMessages([]); // Clear messages when switching users
     
-    console.log('🔍 Chat Debug - Selected User:', selectedUser);
-    console.log('🔍 Chat Debug - Current User ID:', auth.currentUser?.uid);
-    
+    const currentUserId = auth.currentUser?.uid || '';
+    const currentUserEmail = auth.currentUser?.email || fallbackAdminEmail || '';
+    if (!currentUserId && !currentUserEmail) return;
+    const selectedUserId = selectedUser.id;
+    const selectedUserEmail = selectedUser.email || '';
+    const emailConv = (currentUserEmail && selectedUserEmail) ? [currentUserEmail, selectedUserEmail].sort().join('_') : null;
+    const uidConv = (currentUserId && selectedUserId) ? getConversationId(currentUserId, selectedUserId) : null;
+    const candidateIds = [emailConv, uidConv].filter(Boolean);
+    if (candidateIds.length === 0) return;
     const q = query(
       collection(db, 'messages'),
+      where('conversationId', 'in', candidateIds),
       orderBy('timestamp', 'asc')
     );
     const unsubscribe = onSnapshot(q, (querySnapshot) => {
       const msgs = [];
-      const currentUserId = auth.currentUser?.uid || 'admin';
-      const selectedUserId = selectedUser.id;
-      
-      console.log('🔍 Chat Debug - Filtering messages for:', { currentUserId, selectedUserId });
-      
-      querySnapshot.forEach((doc) => {
-        const data = doc.data();
-        console.log('🔍 Chat Debug - Message data:', {
-          senderId: data.senderId,
-          receiverId: data.receiverId,
-          userType: data.userType,
-          text: data.text?.substring(0, 50) + '...'
-        });
-        
-        // Simplified message filtering - show messages between current user and selected user
-        if (
-          // Direct sender/receiver match
-          (data.senderId === currentUserId && data.receiverId === selectedUserId) ||
-          (data.senderId === selectedUserId && data.receiverId === currentUserId) ||
-          // Fallback for admin communication
-          (data.senderId === 'admin' && data.receiverId === selectedUserId) ||
-          (data.senderId === selectedUserId && data.receiverId === 'admin') ||
-          // Additional fallback for station communication
-          (data.userType === 'admin' && data.receiverId === selectedUserId) ||
-          (data.userType === 'station' && data.senderId === selectedUserId)
-        ) {
-          console.log('✅ Chat Debug - Message included:', data.text?.substring(0, 30));
-          msgs.push({ id: doc.id, ...data });
-        }
+      querySnapshot.forEach((d) => {
+        const data = d.data();
+        msgs.push({ id: d.id, ...data });
       });
-      
-      console.log('🔍 Chat Debug - Total messages found:', msgs.length);
       setMessages(msgs);
       setTimeout(scrollToBottom, 100);
+
+      // Mark incoming messages as seen
+      const myId = auth.currentUser?.uid;
+      const unseenForMe = msgs.filter(m => m.receiverId === myId && !(m.seenBy || []).includes(myId));
+      unseenForMe.forEach(async (m) => {
+        try {
+          await updateDoc(doc(db, 'messages', m.id), { seenBy: arrayUnion(myId) });
+        } catch {}
+      });
     });
     return () => unsubscribe();
     // eslint-disable-next-line
@@ -111,18 +147,29 @@ const Afira_chat = () => {
   const handleSendMessage = async () => {
     if (newMessage.trim() === '' || !selectedUser) return;
     try {
-      const currentUserId = auth.currentUser?.uid;
+      const currentUserId = auth.currentUser?.uid || '';
+      const currentUserEmail = auth.currentUser?.email || fallbackAdminEmail || '';
       const selectedUserId = selectedUser.id;
+      const selectedUserEmail = selectedUser.email || '';
+      const conversationId = (currentUserEmail && selectedUserEmail)
+        ? [currentUserEmail, selectedUserEmail].sort().join('_')
+        : (currentUserId && selectedUserId ? getConversationId(currentUserId, selectedUserId) : null);
+      if (!conversationId) return;
       
       await addDoc(collection(db, 'messages'), {
-        sender: auth.currentUser?.displayName || 'Admin',
-        senderId: currentUserId || 'admin',
+        sender: currentUserName || auth.currentUser?.displayName || auth.currentUser?.email || 'Admin',
+        senderId: currentUserId || currentUserEmail || 'admin',
+        senderEmail: currentUserEmail || null,
         receiverId: selectedUserId,
+        receiverEmail: selectedUserEmail || null,
         receiverName: selectedUser.name || selectedUser.email || '',
         text: newMessage,
         isEmergency: isEmergencyMode,
         timestamp: serverTimestamp(),
         userType: 'admin',
+        conversationId,
+        seenBy: [],
+        acknowledgments: [],
       });
       setNewMessage('');
     } catch (error) {
@@ -135,23 +182,34 @@ const Afira_chat = () => {
     if (!file || !selectedUser) return;
     setIsUploadingImage(true);
     try {
-      const currentUserId = auth.currentUser?.uid;
+      const currentUserId = auth.currentUser?.uid || '';
+      const currentUserEmail = auth.currentUser?.email || fallbackAdminEmail || '';
       const selectedUserId = selectedUser.id;
+      const selectedUserEmail = selectedUser.email || '';
+      const conversationId = (currentUserEmail && selectedUserEmail)
+        ? [currentUserEmail, selectedUserEmail].sort().join('_')
+        : (currentUserId && selectedUserId ? getConversationId(currentUserId, selectedUserId) : null);
+      if (!conversationId) return;
       
       const path = `chatImages/${currentUserId}/${Date.now()}-${file.name}`;
       const ref = storageRef(storage, path);
       await uploadBytes(ref, file);
       const downloadURL = await getDownloadURL(ref);
       await addDoc(collection(db, 'messages'), {
-        sender: auth.currentUser?.displayName || 'Admin',
-        senderId: currentUserId || 'admin',
+        sender: currentUserName || auth.currentUser?.displayName || auth.currentUser?.email || 'Admin',
+        senderId: currentUserId || currentUserEmail || 'admin',
+        senderEmail: currentUserEmail || null,
         receiverId: selectedUserId,
+        receiverEmail: selectedUserEmail || null,
         receiverName: selectedUser.name || selectedUser.email || '',
         text: '',
         imageUrl: downloadURL,
         isEmergency: isEmergencyMode,
         timestamp: serverTimestamp(),
         userType: 'admin',
+        conversationId,
+        seenBy: [],
+        acknowledgments: [],
       });
     } catch (error) {
       alert('Failed to upload image: ' + error.message);

@@ -1,8 +1,24 @@
 import React, { useState, useEffect } from 'react';
 import { FiUsers, FiUserPlus, FiEdit2, FiUserX, FiSearch, FiLoader } from 'react-icons/fi';
-import { collection, getDocs, doc, updateDoc, deleteDoc, addDoc, query, where, orderBy } from 'firebase/firestore';
-import { db } from '../../../../config/firebase';
-import { getAuth, createUserWithEmailAndPassword } from 'firebase/auth';
+import { supabase } from '../../../../config/supabase';
+
+/*
+ * IMPORTANT: Database Schema Requirements
+ * The responders table should have:
+ * - id: uuid (primary key, references auth.users.id)
+ * - station_id: uuid (foreign key, references stations table or current station)
+ * - first_name: varchar
+ * - middle_name: varchar (optional)
+ * - last_name: varchar
+ * - email: varchar (unique)
+ * - phone: varchar
+ * - user_position: varchar
+ * - created_at: timestamptz
+ * - updated_at: timestamptz
+ * 
+ * The password is stored securely in Supabase Auth, not in the responders table.
+ * Responders are linked to the station that creates them via station_id.
+ */
 
 const cebuLocations = [
   'Lahug', 'Talamban', 'Mabolo', 'Guadalupe', 'Banilad', 'Capitol', 'Fuente', 'Labangon', 'Pardo', 'Sawang Calero', 'Tisa', 'Inayawan', 'Bulacao', 'Sambag', 'Kamputhaw', 'Other'
@@ -15,120 +31,67 @@ const Suser_Management = () => {
   const [loading, setLoading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
-  const [currentStation, setCurrentStation] = useState(null);
+  const [currentStationId, setCurrentStationId] = useState(null);
   const [form, setForm] = useState({
     firstName: '',
+    middleName: '',
     lastName: '',
-    address: '',
-    phoneNumber: '',
-    position: '',
     email: '',
+    phone: '',
+    userPosition: '',
     password: ''
   });
 
-  const auth = getAuth();
-
-  // Get current station information
-  const getCurrentStation = async () => {
-    try {
-      const user = auth.currentUser;
-      console.log('🔍 Current user:', user);
-      
-      if (!user) {
-        console.error('No authenticated user found');
-        return null;
-      }
-
-      console.log('🔍 Searching for station with email:', user.email);
-      
-      // First try to find by email
-      let stationQuery = query(collection(db, 'stationUsers'), where('email', '==', user.email));
-      let stationSnapshot = await getDocs(stationQuery);
-      
-      if (stationSnapshot.empty) {
-        // If not found by email, try to find by uid
-        console.log('🔍 Not found by email, trying uid:', user.uid);
-        stationQuery = query(collection(db, 'stationUsers'), where('uid', '==', user.uid));
-        stationSnapshot = await getDocs(stationQuery);
-      }
-      
-      if (!stationSnapshot.empty) {
-        const stationData = { id: stationSnapshot.docs[0].id, ...stationSnapshot.docs[0].data() };
-        console.log('✅ Found station data:', stationData);
-        setCurrentStation(stationData);
-        return stationData;
-      } else {
-        console.error('❌ No station found for user:', user.email);
-        // For testing purposes, create a default station if none exists
-        console.log('🔄 Creating default station for testing...');
-        const defaultStation = {
-          id: 'default-station',
-          stationName: 'Test Station',
-          email: user.email,
-          uid: user.uid
-        };
-        setCurrentStation(defaultStation);
-        return defaultStation;
-      }
-    } catch (error) {
-      console.error('Error getting current station:', error);
-      return null;
+  // Fetch responders from Supabase
+  const fetchResponders = async () => {
+    if (!currentStationId) {
+      console.log('⏳ Waiting for station ID...');
+      return;
     }
-  };
 
-  // Fetch responder users from Firestore (only for current station)
-  const fetchResponderUsers = async () => {
     try {
       setLoading(true);
-      console.log('🔍 Fetching responder users from Firestore...');
+      console.log('🔍 Fetching responders for station:', currentStationId);
       
-      const station = await getCurrentStation();
-      if (!station) {
-        console.error('No station found for current user');
-        setResponders([]);
+      const { data: users, error } = await supabase
+        .from('responders')
+        .select('*')
+        .eq('station_id', currentStationId)
+        .order('created_at', { ascending: false });
+      
+      if (error) {
+        console.error('❌ Error fetching responders:', error);
+        alert(`Failed to fetch responders: ${error.message}`);
         return;
       }
       
-      // Query responders that belong to this station using stationId instead of stationName
-      // Index is now built and enabled - can use orderBy for proper sorting
-      const q = query(
-        collection(db, 'responderUsers'), 
-        where('stationId', '==', station.id),
-        orderBy('createdAt', 'desc')
-      );
-      const querySnapshot = await getDocs(q);
-      
-      const users = [];
-      querySnapshot.forEach((doc) => {
-        const userData = { id: doc.id, ...doc.data() };
-        users.push(userData);
-      });
-      
-      setResponders(users);
+      setResponders(users || []);
       
     } catch (error) {
-      console.error('❌ Error fetching responder users:', error);
-      alert(`Failed to fetch responder users: ${error.message}`);
+      console.error('❌ Error fetching responders:', error);
+      alert(`Failed to fetch responders: ${error.message}`);
     } finally {
       setLoading(false);
     }
   };
 
+  // Get current station ID from localStorage
   useEffect(() => {
-    // Check authentication status
-    const unsubscribe = auth.onAuthStateChanged((user) => {
-      if (user) {
-        console.log('✅ User authenticated:', user.email);
-        fetchResponderUsers();
-      } else {
-        console.log('❌ No user authenticated');
-        setResponders([]);
-        setCurrentStation(null);
-      }
-    });
-
-    return () => unsubscribe();
+    const userData = JSON.parse(localStorage.getItem('userData') || '{}');
+    if (userData.id) {
+      setCurrentStationId(userData.id);
+      console.log('🏢 Current station ID:', userData.id);
+    } else {
+      console.error('❌ No station ID found in userData');
+      alert('Error: Unable to identify current station. Please log in again.');
+    }
   }, []);
+
+  useEffect(() => {
+    if (currentStationId) {
+      fetchResponders();
+    }
+  }, [currentStationId]);
 
   const handleChange = (e) => {
     setForm({ ...form, [e.target.name]: e.target.value });
@@ -136,16 +99,13 @@ const Suser_Management = () => {
 
   const handleAddUser = async (e) => {
     e.preventDefault();
-    
-    // Check if user is authenticated
-    const currentUser = auth.currentUser;
-    if (!currentUser) {
-      alert('Error: You must be logged in to add responders. Please log in again.');
+    if (!form.firstName || !form.lastName || !form.email || !form.phone || !form.userPosition || (!editId && !form.password)) {
+      alert('Please fill in all required fields');
       return;
     }
-    
-    if (!form.firstName || !form.lastName || !form.address || !form.phoneNumber || !form.position || !form.email || (!editId && !form.password)) {
-      alert('Please fill in all required fields');
+
+    if (!currentStationId) {
+      alert('Error: Unable to identify current station. Please refresh the page and try again.');
       return;
     }
 
@@ -153,74 +113,91 @@ const Suser_Management = () => {
       setSubmitting(true);
       
       if (editId) {
-        // Update existing user
-        const userRef = doc(db, 'responderUsers', editId);
-        await updateDoc(userRef, {
-          firstName: form.firstName,
-          lastName: form.lastName,
-          address: form.address,
-          phoneNumber: form.phoneNumber,
-          position: form.position,
-          email: form.email,
-          updatedAt: new Date()
-        });
+        // Update existing responder
+        const { error } = await supabase
+          .from('responders')
+          .update({
+            first_name: form.firstName,
+            middle_name: form.middleName,
+            last_name: form.lastName,
+            email: form.email,
+            phone: form.phone,
+            user_position: form.userPosition,
+            updated_at: new Date().toISOString()
+          })
+          .eq('id', editId);
+        
+        if (error) {
+          console.error('Error updating responder:', error);
+          alert(`Error updating responder: ${error.message}`);
+          return;
+        }
+
+        // Update password if provided
+        if (form.password && form.password.trim() !== '') {
+          const passwordUpdated = await handleUpdatePassword(editId, form.password);
+          if (!passwordUpdated) {
+            return; // Stop if password update failed
+          }
+        }
         
         setResponders(responders.map(r => 
           r.id === editId 
-            ? { ...r, firstName: form.firstName, lastName: form.lastName, address: form.address, phoneNumber: form.phoneNumber, position: form.position, email: form.email }
+            ? { ...r, first_name: form.firstName, middle_name: form.middleName, last_name: form.lastName, email: form.email, phone: form.phone, user_position: form.userPosition }
             : r
         ));
         setEditId(null);
         alert('Responder updated successfully');
       } else {
-        // Get current station information
-        const station = await getCurrentStation();
-        if (!station) {
-          alert('Error: Could not identify current station');
+        // Create new responder with Supabase Auth
+        const { data: authData, error: authError } = await supabase.auth.signUp({
+          email: form.email,
+          password: form.password,
+        });
+
+        if (authError) {
+          console.error('Error creating user in auth:', authError);
+          if (authError.message.includes('already registered')) {
+            alert('Error: A responder with this email already exists');
+          } else {
+            alert(`Error creating responder: ${authError.message}`);
+          }
           return;
         }
 
-        try {
-          // Create user in Firebase Auth
-          const userCredential = await createUserWithEmailAndPassword(auth, form.email, form.password);
-          const user = userCredential.user;
+        // Store responder data in Supabase with auth user ID
+        const responderData = {
+          id: authData.user?.id, // Use auth user ID as primary key
+          station_id: currentStationId, // Link to current station
+          first_name: form.firstName,
+          middle_name: form.middleName,
+          last_name: form.lastName,
+          email: form.email,
+          phone: form.phone,
+          user_position: form.userPosition,
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString()
+        };
 
-          // Store responder data in Firestore
-          const responderData = {
-            uid: user.uid,
-            email: form.email,
-            firstName: form.firstName,
-            lastName: form.lastName,
-            address: form.address,
-            phoneNumber: form.phoneNumber,
-            position: form.position,
-            stationName: station.stationName,
-            stationId: station.id,
-            role: 'responderUser',
-            active: true,
-            createdAt: new Date(),
-            updatedAt: new Date()
-          };
+        const { error: insertError } = await supabase
+          .from('responders')
+          .insert([responderData]);
 
-          await addDoc(collection(db, 'responderUsers'), responderData);
-
-          // Refresh the users list
-          await fetchResponderUsers();
-          alert('Responder created successfully!');
-        } catch (error) {
-          console.error('Error creating responder:', error);
-          if (error.code === 'auth/email-already-in-use') {
-            alert('Error: A user with this email already exists');
-          } else {
-            alert(`Error creating responder: ${error.message}`);
-          }
+        if (insertError) {
+          console.error('Error inserting responder data:', insertError);
+          alert(`Error creating responder: ${insertError.message}`);
+          return;
         }
+
+        // Refresh the responders list
+        await fetchResponders();
+        alert('Responder created successfully!');
       }
       
-      setForm({ firstName: '', lastName: '', address: '', phoneNumber: '', position: '', email: '', password: '' });
+      setForm({ firstName: '', middleName: '', lastName: '', email: '', phone: '', userPosition: '', password: '' });
       setShowAddUser(false);
     } catch (error) {
-      console.error('Error handling user:', error);
+      console.error('Error handling responder:', error);
       alert(`Error: ${error.message}`);
     } finally {
       setSubmitting(false);
@@ -230,40 +207,38 @@ const Suser_Management = () => {
   const handleEdit = (responder) => {
     setEditId(responder.id);
     setForm({
-      firstName: responder.firstName || '',
-      lastName: responder.lastName || '',
-      address: responder.address || '',
-      phoneNumber: responder.phoneNumber || '',
-      position: responder.position || '',
+      firstName: responder.first_name || '',
+      middleName: responder.middle_name || '',
+      lastName: responder.last_name || '',
       email: responder.email || '',
+      phone: responder.phone || '',
+      userPosition: responder.user_position || '',
       password: ''
     });
     setShowAddUser(true);
   };
 
-  const handleDisable = async (id) => {
-    try {
-      const userRef = doc(db, 'responderUsers', id);
-      const user = responders.find(r => r.id === id);
-      const newStatus = user.active ? false : true;
-      
-      await updateDoc(userRef, { active: newStatus });
-      
-      setResponders(responders.map(r => 
-        r.id === id ? { ...r, active: newStatus } : r
-      ));
-      
-      alert(`Responder ${newStatus ? 'enabled' : 'disabled'} successfully`);
-    } catch (error) {
-      console.error('Error updating responder status:', error);
-      alert('Error updating responder status');
-    }
-  };
+
 
   const handleDelete = async (id) => {
     if (window.confirm('Are you sure you want to delete this responder?')) {
       try {
-        await deleteDoc(doc(db, 'responderUsers', id));
+        // Delete from responders table
+        const { error: deleteError } = await supabase
+          .from('responders')
+          .delete()
+          .eq('id', id);
+        
+        if (deleteError) {
+          console.error('Error deleting responder:', deleteError);
+          alert('Error deleting responder');
+          return;
+        }
+
+        // Note: Auth user will remain in auth.users table
+        // You may want to delete it as well if needed:
+        // const { error: authError } = await supabase.auth.admin.deleteUser(id);
+        
         setResponders(responders.filter(r => r.id !== id));
         alert('Responder deleted successfully');
       } catch (error) {
@@ -273,36 +248,37 @@ const Suser_Management = () => {
     }
   };
 
+  const handleUpdatePassword = async (id, newPassword) => {
+    try {
+      // Update password in Supabase Auth
+      const { error } = await supabase.auth.admin.updateUserById(id, {
+        password: newPassword
+      });
+
+      if (error) {
+        console.error('Error updating password:', error);
+        alert('Error updating password');
+        return false;
+      }
+
+      alert('Password updated successfully');
+      return true;
+    } catch (error) {
+      console.error('Error updating password:', error);
+      alert('Error updating password');
+      return false;
+    }
+  };
+
   // Filter responders based on search term
   const filteredResponders = responders.filter(responder =>
-    `${responder.firstName} ${responder.lastName}`.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    responder.first_name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    responder.middle_name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    responder.last_name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
     responder.email?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    responder.address?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    responder.position?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    responder.phoneNumber?.toLowerCase().includes(searchTerm.toLowerCase())
+    responder.phone?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    responder.user_position?.toLowerCase().includes(searchTerm.toLowerCase())
   );
-
-  // Check if user is authenticated
-  const currentUser = auth.currentUser;
-
-  if (!currentUser) {
-    return (
-      <div className="min-h-screen bg-gray-50 p-6">
-        <div className="max-w-none mx-auto">
-          <div className="bg-white rounded-xl shadow-sm p-8 text-center">
-            <h2 className="text-2xl font-bold text-gray-900 mb-4">Authentication Required</h2>
-            <p className="text-gray-600 mb-6">You must be logged in as a station user to access this page.</p>
-            <button 
-              onClick={() => window.location.href = '/login'}
-              className="bg-red-600 text-white px-6 py-3 rounded-lg hover:bg-red-700 transition-colors"
-            >
-              Go to Login
-            </button>
-          </div>
-        </div>
-      </div>
-    );
-  }
 
   return (
     <div className="min-h-screen bg-gray-50 p-6">
@@ -310,21 +286,14 @@ const Suser_Management = () => {
         {/* Header */}
         <div className="flex justify-between items-center mb-6">
           <div className="flex items-center gap-4">
-            <h2 className="text-2xl font-bold text-gray-900">
-              Responder Management
-              {currentStation && (
-                <span className="text-lg font-normal text-gray-600 ml-2">
-                  - {currentStation.stationName}
-                </span>
-              )}
-            </h2>
+            <h2 className="text-2xl font-bold text-gray-900">Responders</h2>
             <span className="text-sm text-gray-500 bg-gray-100 px-3 py-1 rounded-full">
               {loading ? 'Loading...' : `${responders.length} responders found`}
             </span>
           </div>
           <div className="flex gap-2">
             <button 
-              onClick={fetchResponderUsers}
+              onClick={fetchResponders}
               className="bg-blue-600 text-white px-4 py-3 rounded-lg hover:bg-blue-700 transition-colors flex items-center gap-2"
               disabled={loading}
             >
@@ -332,7 +301,7 @@ const Suser_Management = () => {
               Refresh
             </button>
             <button 
-              onClick={() => { setShowAddUser(true); setEditId(null); setForm({ firstName: '', lastName: '', address: '', phoneNumber: '', position: '', email: '', password: '' }); }}
+              onClick={() => { setShowAddUser(true); setEditId(null); setForm({ firstName: '', middleName: '', lastName: '', email: '', phone: '', userPosition: '', password: '' }); }}
               className="bg-red-600 text-white px-6 py-3 rounded-lg hover:bg-red-700 transition-colors flex items-center gap-2"
             >
               <FiUserPlus className="w-5 h-5" />
@@ -357,44 +326,41 @@ const Suser_Management = () => {
 
         {/* Responders Table */}
         <div className="bg-white rounded-xl shadow-sm p-8">
-          {!loading && (
+          {loading ? (
+            <div className="flex justify-center items-center py-12">
+              <FiLoader className="w-8 h-8 animate-spin text-gray-400" />
+              <span className="ml-2 text-gray-600">Loading responders...</span>
+            </div>
+          ) : (
             <div className="overflow-x-auto">
               <table className="min-w-full divide-y divide-gray-200">
                 <thead className="bg-gray-50">
                   <tr>
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Name</th>
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Email</th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Address</th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Phone</th>
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Position</th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Phone Number</th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
                   </tr>
                 </thead>
                 <tbody className="bg-white divide-y divide-gray-200">
                   {filteredResponders.length === 0 ? (
                     <tr>
-                      <td colSpan="7" className="px-6 py-4 text-center text-gray-500">
-                        {loading ? 'Loading responders...' : 'No responders found'}
+                      <td colSpan="5" className="px-6 py-4 text-center text-gray-500">
+                        No responders found
                       </td>
                     </tr>
                   ) : (
                     filteredResponders.map(responder => (
                       <tr key={responder.id}>
                         <td className="px-6 py-4 whitespace-nowrap">
-                          <div className="font-medium text-gray-900">{`${responder.firstName} ${responder.lastName}`}</div>
+                          <div className="font-medium text-gray-900">
+                            {responder.first_name} {responder.middle_name ? responder.middle_name + ' ' : ''}{responder.last_name}
+                          </div>
                         </td>
                         <td className="px-6 py-4 whitespace-nowrap text-gray-500">{responder.email}</td>
-                        <td className="px-6 py-4 whitespace-nowrap text-gray-500">{responder.address}</td>
-                        <td className="px-6 py-4 whitespace-nowrap text-gray-500">{responder.position}</td>
-                        <td className="px-6 py-4 whitespace-nowrap text-gray-500">{responder.phoneNumber}</td>
-                        <td className="px-6 py-4 whitespace-nowrap">
-                          <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${
-                            responder.active ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-800'
-                          }`}>
-                            {responder.active ? 'Active' : 'Disabled'}
-                          </span>
-                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap text-gray-500">{responder.phone}</td>
+                        <td className="px-6 py-4 whitespace-nowrap text-gray-500">{responder.user_position}</td>
                         <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium flex gap-2">
                           <button
                             onClick={() => handleEdit(responder)}
@@ -402,13 +368,6 @@ const Suser_Management = () => {
                             title="Edit"
                           >
                             <FiEdit2 />
-                          </button>
-                          <button
-                            onClick={() => handleDisable(responder.id)}
-                            className={responder.active ? 'text-yellow-600 hover:text-yellow-900' : 'text-green-600 hover:text-green-900'}
-                            title={responder.active ? 'Disable' : 'Enable'}
-                          >
-                            <FiUserX />
                           </button>
                           <button
                             onClick={() => handleDelete(responder.id)}
@@ -436,7 +395,7 @@ const Suser_Management = () => {
                   {editId ? 'Edit Responder' : 'Add New Responder'}
                 </h3>
                 <button
-                  onClick={() => { setShowAddUser(false); setEditId(null); setForm({ firstName: '', lastName: '', address: '', phoneNumber: '', position: '', email: '', password: '' }); }}
+                  onClick={() => { setShowAddUser(false); setEditId(null); setForm({ firstName: '', middleName: '', lastName: '', email: '', phone: '', userPosition: '', password: '' }); }}
                   className="text-gray-400 hover:text-gray-600"
                 >
                   <FiUserX className="w-6 h-6" />
@@ -453,6 +412,17 @@ const Suser_Management = () => {
                     onChange={handleChange}
                     className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:border-red-500"
                     required
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Middle Name</label>
+                  <input
+                    type="text"
+                    name="middleName"
+                    value={form.middleName}
+                    onChange={handleChange}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:border-red-500"
                   />
                 </div>
 
@@ -480,42 +450,25 @@ const Suser_Management = () => {
                   />
                 </div>
 
-                {!editId && (
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Password</label>
-                    <input
-                      type="password"
-                      name="password"
-                      value={form.password}
-                      onChange={handleChange}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:border-red-500"
-                      required
-                    />
-                  </div>
-                )}
-
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Address</label>
-                  <select
-                    name="address"
-                    value={form.address}
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Phone</label>
+                  <input
+                    type="text"
+                    name="phone"
+                    value={form.phone}
                     onChange={handleChange}
                     className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:border-red-500"
+                    placeholder="Phone number"
                     required
-                  >
-                    <option value="">Select Address</option>
-                    {cebuLocations.map(location => (
-                      <option key={location} value={location}>{location}</option>
-                    ))}
-                  </select>
+                  />
                 </div>
 
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Position</label>
                   <input
                     type="text"
-                    name="position"
-                    value={form.position}
+                    name="userPosition"
+                    value={form.userPosition}
                     onChange={handleChange}
                     className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:border-red-500"
                     placeholder="e.g., Fire Captain, Firefighter"
@@ -524,15 +477,17 @@ const Suser_Management = () => {
                 </div>
 
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Phone Number</label>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Password {editId ? '(Leave blank to keep current password)' : '(Required)'}
+                  </label>
                   <input
-                    type="text"
-                    name="phoneNumber"
-                    value={form.phoneNumber}
+                    type="password"
+                    name="password"
+                    value={form.password}
                     onChange={handleChange}
                     className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:border-red-500"
-                    placeholder="Phone number"
-                    required
+                    placeholder={editId ? "Enter new password or leave blank" : "Enter password"}
+                    required={!editId}
                   />
                 </div>
 
@@ -546,7 +501,7 @@ const Suser_Management = () => {
                   </button>
                   <button
                     type="button"
-                    onClick={() => { setShowAddUser(false); setEditId(null); setForm({ firstName: '', lastName: '', address: '', phoneNumber: '', position: '', email: '', password: '' }); }}
+                    onClick={() => { setShowAddUser(false); setEditId(null); setForm({ firstName: '', middleName: '', lastName: '', email: '', phone: '', userPosition: '', password: '' }); }}
                     className="flex-1 bg-gray-500 text-white py-2 px-4 rounded-lg hover:bg-gray-600 transition-colors"
                   >
                     Cancel

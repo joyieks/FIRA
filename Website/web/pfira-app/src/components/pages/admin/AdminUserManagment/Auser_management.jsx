@@ -116,19 +116,42 @@ const Auser_management = () => {
 
         // Fetch responder counts for each station
         const responderSnapshot = await getDocs(collection(db, "responderUsers"));
-        const responderCounts = {};
-        
-        responderSnapshot.docs.forEach(doc => {
-          const responderData = doc.data();
-          if (responderData.stationName) {
-            responderCounts[responderData.stationName] = (responderCounts[responderData.stationName] || 0) + 1;
-          }
-        });
 
-        // Update stations with responder counts
-        stations.forEach(station => {
-          station.responders = responderCounts[station.stationName] || 0;
-        });
+        // First, let's also check the Supabase responders table
+        const { data: supabaseResponders, error: respondersError } = await supabase
+          .from('responders')
+          .select('station_id');
+
+        if (!respondersError && supabaseResponders) {
+          // Count responders by station_id
+          const responderCounts = {};
+          
+          // Count from Supabase responders table (this is what you need)
+          supabaseResponders.forEach(responder => {
+            if (responder.station_id) {
+              responderCounts[responder.station_id] = (responderCounts[responder.station_id] || 0) + 1;
+            }
+          });
+          
+          // Update stations with responder counts using station ID
+          stations.forEach(station => {
+            station.responders = responderCounts[station.id] || 0;
+          });
+        } else {
+          // Fallback to Firebase if needed (though you should migrate fully to Supabase)
+          const responderCounts = {};
+          
+          responderSnapshot.docs.forEach(doc => {
+            const responderData = doc.data();
+            if (responderData.stationName) {
+              responderCounts[responderData.stationName] = (responderCounts[responderData.stationName] || 0) + 1;
+            }
+          });
+          
+          stations.forEach(station => {
+            station.responders = responderCounts[station.stationName] || 0;
+          });
+        }
         
         console.log('📊 Processed stations data:', stations);
 
@@ -267,29 +290,62 @@ const Auser_management = () => {
     setShowRespondersModal(true);
     
     try {
-      // Fetch responders for this specific station
-      const responderQuery = query(
-        collection(db, "responderUsers"), 
-        where("stationName", "==", station.stationName)
-      );
-      const responderSnapshot = await getDocs(responderQuery);
+      // First try to fetch from Supabase responders table
+      const { data: supabaseResponders, error: supabaseError } = await supabase
+        .from('responders')
+        .select('*')
+        .eq('station_id', station.id);
       
-      const responders = responderSnapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      }));
-      
-      setStationResponders(responders);
-      
-      // Update the responder count in the stations list
-      setUsers(prev => ({
-        ...prev,
-        stations: prev.stations.map(s => 
-          s.id === station.id 
-            ? { ...s, responders: responders.length }
-            : s
-        )
-      }));
+      if (!supabaseError && supabaseResponders) {
+        // Map Supabase responder data to match expected format
+        const responders = supabaseResponders.map(resp => ({
+          id: resp.id,
+          firstName: resp.first_name,
+          lastName: resp.last_name,
+          email: resp.email,
+          phoneNumber: resp.phone,
+          position: resp.user_position,
+          address: resp.address || 'Not specified',
+          stationName: station.stationName,
+          active: resp.status === 'active' || resp.active !== false,
+          createdAt: resp.created_at
+        }));
+        
+        setStationResponders(responders);
+        
+        // Update the responder count in the stations list
+        setUsers(prev => ({
+          ...prev,
+          stations: prev.stations.map(s => 
+            s.id === station.id 
+              ? { ...s, responders: responders.length }
+              : s
+          )
+        }));
+      } else {
+        // Fallback to Firebase query if Supabase fails
+        const responderQuery = query(
+          collection(db, "responderUsers"), 
+          where("stationName", "==", station.stationName)
+        );
+        const responderSnapshot = await getDocs(responderQuery);
+        
+        const responders = responderSnapshot.docs.map(doc => ({
+          id: doc.id,
+          ...doc.data()
+        }));
+        
+        setStationResponders(responders);
+        
+        setUsers(prev => ({
+          ...prev,
+          stations: prev.stations.map(s => 
+            s.id === station.id 
+              ? { ...s, responders: responders.length }
+              : s
+          )
+        }));
+      }
     } catch (error) {
       console.error('Error fetching station responders:', error);
       alert('Error fetching responders for this station');
@@ -484,27 +540,52 @@ const Auser_management = () => {
     try {
       console.log('🔄 Refreshing responder counts...');
       
-      // Fetch all responders
-      const responderSnapshot = await getDocs(collection(db, "responderUsers"));
-      const responderCounts = {};
+      // Fetch from Supabase responders table
+      const { data: supabaseResponders, error } = await supabase
+        .from('responders')
+        .select('station_id');
       
-      responderSnapshot.docs.forEach(doc => {
-        const responderData = doc.data();
-        if (responderData.stationName) {
-          responderCounts[responderData.stationName] = (responderCounts[responderData.stationName] || 0) + 1;
-        }
-      });
-
-      // Update stations with new responder counts
-      setUsers(prev => ({
-        ...prev,
-        stations: prev.stations.map(station => ({
-          ...station,
-          responders: responderCounts[station.stationName] || 0
-        }))
-      }));
-      
-      console.log('✅ Responder counts refreshed');
+      if (!error && supabaseResponders) {
+        const responderCounts = {};
+        
+        supabaseResponders.forEach(responder => {
+          if (responder.station_id) {
+            responderCounts[responder.station_id] = (responderCounts[responder.station_id] || 0) + 1;
+          }
+        });
+        
+        // Update stations with new responder counts
+        setUsers(prev => ({
+          ...prev,
+          stations: prev.stations.map(station => ({
+            ...station,
+            responders: responderCounts[station.id] || 0
+          }))
+        }));
+        
+        console.log('✅ Responder counts refreshed from Supabase');
+      } else {
+        // Fallback to Firebase
+        const responderSnapshot = await getDocs(collection(db, "responderUsers"));
+        const responderCounts = {};
+        
+        responderSnapshot.docs.forEach(doc => {
+          const responderData = doc.data();
+          if (responderData.stationName) {
+            responderCounts[responderData.stationName] = (responderCounts[responderData.stationName] || 0) + 1;
+          }
+        });
+        
+        setUsers(prev => ({
+          ...prev,
+          stations: prev.stations.map(station => ({
+            ...station,
+            responders: responderCounts[station.stationName] || 0
+          }))
+        }));
+        
+        console.log('✅ Responder counts refreshed from Firebase');
+      }
     } catch (error) {
       console.error('❌ Error refreshing responder counts:', error);
     }

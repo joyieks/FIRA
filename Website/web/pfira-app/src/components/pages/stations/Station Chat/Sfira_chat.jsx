@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { FiSend, FiPaperclip, FiUser, FiAlertTriangle, FiImage, FiCheck } from 'react-icons/fi';
 import { db, auth, storage } from '../../../../config/firebase';
-import { collection, addDoc, query, orderBy, onSnapshot, serverTimestamp, getDocs, updateDoc, doc, arrayUnion, arrayRemove } from 'firebase/firestore';
+import { collection, addDoc, query, orderBy, onSnapshot, serverTimestamp, getDocs, updateDoc, doc, arrayUnion, arrayRemove, getDoc, where } from 'firebase/firestore';
 import { ref as storageRef, uploadBytes, getDownloadURL } from 'firebase/storage';
 
 const Sfira_chat = () => {
@@ -14,6 +14,7 @@ const Sfira_chat = () => {
   const messagesEndRef = useRef(null);
   const imageInputRef = useRef(null);
   const [isUploadingImage, setIsUploadingImage] = useState(false);
+  const [currentUserName, setCurrentUserName] = useState('');
 
   // Emergency contacts (can be expanded)
   const emergencyContacts = [
@@ -31,7 +32,8 @@ const Sfira_chat = () => {
       const adminUserDoc = adminsSnap.docs.find(d => d.data().adminName === 'Admin User');
       const adminUser = adminUserDoc
         ? {
-            id: adminUserDoc.id,
+            // Prefer UID field if present for correct routing
+            id: adminUserDoc.data().uid || adminUserDoc.id,
             name: adminUserDoc.data().adminName,
             email: adminUserDoc.data().email,
             type: 'admin',
@@ -58,27 +60,62 @@ const Sfira_chat = () => {
     fetchUsers();
   }, []);
 
+  // Resolve the current station user's display name
+  useEffect(() => {
+    const resolveName = async () => {
+      const uid = auth.currentUser?.uid;
+      const fallback = auth.currentUser?.displayName || auth.currentUser?.email || 'Station';
+      if (!uid) {
+        setCurrentUserName(fallback);
+        return;
+      }
+      try {
+        const profileRef = doc(db, 'stationUsers', uid);
+        const snap = await getDoc(profileRef);
+        if (snap.exists()) {
+          const d = snap.data();
+          const name = d.name || d.stationName || d['Station Name'] || d.Username || fallback;
+          setCurrentUserName(name || fallback);
+        } else {
+          setCurrentUserName(fallback);
+        }
+      } catch {
+        setCurrentUserName(fallback);
+      }
+    };
+    resolveName();
+  }, []);
+
   // Real-time messages for selected user
   useEffect(() => {
     if (!selectedUser) return;
+    const myUid = auth.currentUser?.uid || '';
+    const myEmail = auth.currentUser?.email || '';
+    if (!myUid && !myEmail) return;
+    const emailConv = myEmail && selectedUser?.email ? [myEmail, selectedUser.email].sort().join('_') : null;
+    const uidConv = myUid && selectedUser?.id ? [myUid, selectedUser.id].sort().join('_') : null;
+    const candidateIds = [emailConv, uidConv].filter(Boolean);
+    if (candidateIds.length === 0) return;
     const q = query(
       collection(db, 'messages'),
+      where('conversationId', 'in', candidateIds),
       orderBy('timestamp', 'asc')
     );
     const unsubscribe = onSnapshot(q, (querySnapshot) => {
       const msgs = [];
-      querySnapshot.forEach((doc) => {
-        const data = doc.data();
-        // Only show messages between current user and selected user
-        if (
-          (data.senderId === auth.currentUser?.uid && data.receiverId === selectedUser.id) ||
-          (data.senderId === selectedUser.id && data.receiverId === auth.currentUser?.uid)
-        ) {
-          msgs.push({ id: doc.id, ...data });
-        }
+      querySnapshot.forEach((d) => {
+        const data = d.data();
+        msgs.push({ id: d.id, ...data });
       });
       setMessages(msgs);
       scrollToBottom();
+      // Mark incoming messages as seen
+      const unseenForMe = msgs.filter(m => m.receiverId === myUid && !(m.seenBy || []).includes(myUid));
+      unseenForMe.forEach(async (m) => {
+        try {
+          await updateDoc(doc(db, 'messages', m.id), { seenBy: arrayUnion(myUid) });
+        } catch {}
+      });
     });
     return () => unsubscribe();
   }, [selectedUser]);
@@ -90,15 +127,26 @@ const Sfira_chat = () => {
   const handleSendMessage = async () => {
     if (newMessage.trim() === '' || !selectedUser) return;
     try {
+      const myUid = auth.currentUser?.uid || '';
+      const myEmail = auth.currentUser?.email || '';
+      if (!myUid) return;
+      const conversationId = (myEmail && selectedUser?.email)
+        ? [myEmail, selectedUser.email].sort().join('_')
+        : [myUid, selectedUser.id].sort().join('_');
       await addDoc(collection(db, 'messages'), {
-        sender: auth.currentUser?.displayName || 'Station',
-        senderId: auth.currentUser?.uid || '',
+        sender: currentUserName || auth.currentUser?.displayName || auth.currentUser?.email || 'Station',
+        senderId: myUid,
+        senderEmail: myEmail || null,
         receiverId: selectedUser.id,
+        receiverEmail: selectedUser.email || null,
         receiverName: selectedUser.name || selectedUser.email || '',
         text: newMessage,
         isEmergency: isEmergencyMode,
         timestamp: serverTimestamp(),
         userType: 'station',
+        conversationId,
+        seenBy: [],
+        ackBy: [],
       });
       setNewMessage('');
     } catch (error) {
@@ -111,20 +159,31 @@ const Sfira_chat = () => {
     if (!file || !selectedUser) return;
     setIsUploadingImage(true);
     try {
-      const path = `chatImages/${auth.currentUser?.uid}/${Date.now()}-${file.name}`;
+      const myUid = auth.currentUser?.uid || '';
+      const myEmail = auth.currentUser?.email || '';
+      if (!myUid) return;
+      const conversationId = (myEmail && selectedUser?.email)
+        ? [myEmail, selectedUser.email].sort().join('_')
+        : [myUid, selectedUser.id].sort().join('_');
+      const path = `chatImages/${myUid}/${Date.now()}-${file.name}`;
       const ref = storageRef(storage, path);
       await uploadBytes(ref, file);
       const downloadURL = await getDownloadURL(ref);
       await addDoc(collection(db, 'messages'), {
-        sender: auth.currentUser?.displayName || 'Station',
-        senderId: auth.currentUser?.uid || '',
+        sender: currentUserName || auth.currentUser?.displayName || auth.currentUser?.email || 'Station',
+        senderId: myUid,
+        senderEmail: myEmail || null,
         receiverId: selectedUser.id,
+        receiverEmail: selectedUser.email || null,
         receiverName: selectedUser.name || selectedUser.email || '',
         text: '',
         imageUrl: downloadURL,
         isEmergency: isEmergencyMode,
         timestamp: serverTimestamp(),
         userType: 'station',
+        conversationId,
+        seenBy: [],
+        ackBy: [],
       });
     } catch (error) {
       alert('Failed to upload image: ' + error.message);
