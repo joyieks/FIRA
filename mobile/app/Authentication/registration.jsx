@@ -2,9 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { View, Text, TextInput, TouchableOpacity, Image, ScrollView, Alert } from 'react-native';
 import { useRouter } from 'expo-router';
 import { AntDesign } from '@expo/vector-icons';
-import { createUserWithEmailAndPassword, signInWithCredential, GoogleAuthProvider } from 'firebase/auth';
-import { auth, db } from '../config/firebase';
-import { doc, setDoc } from 'firebase/firestore';
+import { supabase } from '../config/supabase';
 import { WebBrowser, Crypto, googleSignInConfig } from '../config/googleSignIn';
 import AuthGuard from '../components/AuthGuard';
 
@@ -20,73 +18,31 @@ const RegistrationComponent = () => {
     agreeTerms: false,
   });
   const [errors, setErrors] = useState({});
+  const [isLoading, setIsLoading] = useState(false);
   const [showVerification, setShowVerification] = useState(false);
   const [verificationCode, setVerificationCode] = useState('');
   const [userInputCode, setUserInputCode] = useState('');
-  const [isLoading, setIsLoading] = useState(false);
+  const [resendCountdown, setResendCountdown] = useState(0);
 
   // EmailJS configuration
   const serviceId = 'service_717ciwa';
   const templateId = 'template_iefgxnk';
   const publicKey = 'hDU2Ar_g1pr7Cpg-S';
-  const privateKey = 'toeoBDUw3w6FPgdo7-Rjr';  // Add private key for strict mode
+  const privateKey = 'toeoBDUw3w6FPgdo7-Rjr';
 
   useEffect(() => {
-    // Log EmailJS configuration
-    console.log('🔧 EmailJS Configuration Loaded');
-    console.log('🔑 Service ID:', serviceId);
-    console.log('📝 Template ID:', templateId);
-    console.log('🔐 Public Key:', publicKey);
-  }, []);
-
-  // Simple test function to check EmailJS connection
-  const testBasicEmailJS = async () => {
-    try {
-      console.log('🧪 Testing basic EmailJS connection...');
-      
-      const testParams = {
-        to_name: 'Test User',
-        passcode: '123456',
-        time: '12:00 PM',
-        user_email: 'test@example.com'  // This matches the template
-      };
-
-      const response = await fetch('https://api.emailjs.com/api/v1.0/email/send', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          service_id: serviceId,
-          template_id: templateId,
-          user_id: publicKey,
-          accessToken: privateKey,  // Changed from 'private_key' to 'accessToken'
-          template_params: testParams,
-        }),
-      });
-
-      const responseText = await response.text();
-      console.log('🧪 Test response status:', response.status);
-      console.log('🧪 Test response text:', responseText);
-
-      if (response.ok) {
-        Alert.alert('Test Success', 'EmailJS connection is working!');
-      } else {
-        Alert.alert('Test Failed', `Status: ${response.status}\nResponse: ${responseText.substring(0, 100)}`);
-      }
-    } catch (error) {
-      Alert.alert('Test Error', error.message);
+    // Countdown timer for resend button
+    if (resendCountdown > 0) {
+      const timer = setTimeout(() => setResendCountdown(resendCountdown - 1), 1000);
+      return () => clearTimeout(timer);
     }
-  };
+  }, [resendCountdown]);
 
   const sendVerificationCode = async (email, firstName) => {
     try {
       console.log('🚀 Starting verification code send...');
       console.log('📧 Email:', email);
       console.log('👤 First Name:', firstName);
-      console.log('🔑 Service ID:', serviceId);
-      console.log('📝 Template ID:', templateId);
-      console.log('🔐 Public Key:', publicKey);
       
       // Generate 6-digit verification code
       const code = Math.random().toString().slice(2, 8);
@@ -96,13 +52,13 @@ const RegistrationComponent = () => {
         to_name: firstName,
         passcode: code,
         time: expirationTime,
-        user_email: email        // This is what the template expects for "To Email"
+        user_email: email
       };
 
       console.log('📋 Template Params:', templateParams);
       console.log('📤 Sending email via EmailJS REST API...');
 
-      // Use EmailJS REST API instead of browser library
+      // Use EmailJS REST API
       const response = await fetch('https://api.emailjs.com/api/v1.0/email/send', {
         method: 'POST',
         headers: {
@@ -112,74 +68,78 @@ const RegistrationComponent = () => {
           service_id: serviceId,
           template_id: templateId,
           user_id: publicKey,
-          accessToken: privateKey,  // Changed from 'private_key' to 'accessToken'
+          accessToken: privateKey,
           template_params: templateParams,
         }),
       });
 
       console.log('📡 Response status:', response.status);
-      console.log('📡 Response headers:', response.headers);
 
-      // Get response text first to see what we're actually receiving
       const responseText = await response.text();
       console.log('📡 Raw response:', responseText);
 
       if (!response.ok) {
-        // Try to parse as JSON, but handle non-JSON responses gracefully
         let errorMessage = `HTTP ${response.status}: Failed to send email`;
         try {
           const errorData = JSON.parse(responseText);
           errorMessage = `HTTP ${response.status}: ${errorData.message || 'Failed to send email'}`;
         } catch (parseError) {
-          // If response is not JSON, use the raw text
           errorMessage = `HTTP ${response.status}: ${responseText.substring(0, 100)}`;
         }
         throw new Error(errorMessage);
       }
 
-      // Try to parse response as JSON
-      let result;
-      try {
-        result = JSON.parse(responseText);
-        console.log('✅ EmailJS REST API result:', result);
-      } catch (parseError) {
-        console.log('⚠️ Response is not JSON, but email might have been sent');
-        result = { status: 'success', message: 'Email sent (non-JSON response)' };
-      }
-      
       // Store the code for verification
       setVerificationCode(code);
       console.log('💾 Verification code stored:', code);
       
+      // Start resend countdown (60 seconds)
+      setResendCountdown(60);
+      
       return code;
     } catch (error) {
       console.error('❌ EmailJS REST API Error Details:', error);
-      console.error('❌ Error Message:', error.message);
       throw new Error(`Failed to send verification code: ${error.message}`);
     }
   };
 
   const validate = () => {
     const newErrors = {};
-    if (!formData.firstName) newErrors.firstName = 'First name is required';
-    if (!formData.lastName) newErrors.lastName = 'Last name is required';
-    if (!formData.email) {
+
+    if (!formData.firstName.trim()) {
+      newErrors.firstName = 'First name is required';
+    }
+
+    if (!formData.lastName.trim()) {
+      newErrors.lastName = 'Last name is required';
+    }
+
+    if (!formData.email.trim()) {
       newErrors.email = 'Email is required';
     } else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(formData.email)) {
       newErrors.email = 'Please enter a valid email';
     }
-    if (!formData.phoneNumber) newErrors.phoneNumber = 'Phone number is required';
+
     if (!formData.password) {
       newErrors.password = 'Password is required';
     } else if (formData.password.length < 6) {
       newErrors.password = 'Password must be at least 6 characters';
     }
+
     if (formData.password !== formData.confirmPassword) {
       newErrors.confirmPassword = 'Passwords do not match';
     }
-    if (!formData.agreeTerms) {
-      newErrors.agreeTerms = 'You must agree to the terms';
+
+    if (!formData.phoneNumber.trim()) {
+      newErrors.phoneNumber = 'Phone number is required';
+    } else if (!/^09\d{9}$/.test(formData.phoneNumber)) {
+      newErrors.phoneNumber = 'Please enter a valid phone number (09XXXXXXXXX)';
     }
+
+    if (!formData.agreeTerms) {
+      newErrors.agreeTerms = 'You must agree to the terms and conditions';
+    }
+
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
   };
@@ -213,60 +173,67 @@ const RegistrationComponent = () => {
     try {
       setIsLoading(true);
       
-      // Check if this is a Google user or regular registration
-      const isGoogleUser = formData.password === ''; // Google users don't have password
+      // Create Supabase Auth account
+      console.log('🔄 Creating Supabase Auth account...');
       
-      if (isGoogleUser) {
-        // For Google users, account is already created, just update verification status
-        const userData = {
-          uid: auth.currentUser?.uid,
-          firstName: formData.firstName,
-          lastName: formData.lastName,
-          email: formData.email,
-          phoneNumber: formData.phoneNumber,
-          userType: 'citizen',
-          createdAt: new Date().toISOString(),
-          isVerified: true,
-          googleSignIn: true,
-        };
+      const { data: authData, error: authError } = await supabase.auth.signUp({
+        email: formData.email.toLowerCase(),
+        password: formData.password,
+        options: {
+          data: {
+            first_name: formData.firstName,
+            last_name: formData.lastName,
+            phone: formData.phoneNumber,
+            user_type: 'citizen'
+          },
+          emailRedirectTo: null,
+          emailConfirm: false
+        }
+      });
 
-        await setDoc(doc(db, 'citizenUsers', userData.uid), userData);
-
-        Alert.alert(
-          'Account Verified Successfully! 🎉',
-          `Welcome, ${userData.firstName}! Your Google account has been verified.`,
-          [{ 
-            text: 'Continue', 
-            onPress: () => router.replace('/Screens/CitizenScreen') 
-          }]
-        );
-      } else {
-        // For regular users, create the account after verification
-        const userCredential = await createUserWithEmailAndPassword(auth, formData.email, formData.password);
-        const user = userCredential.user;
-
-        const userData = {
-          uid: user.uid,
-          firstName: formData.firstName,
-          lastName: formData.lastName,
-          email: formData.email,
-          phoneNumber: formData.phoneNumber,
-          userType: 'citizen',
-          createdAt: new Date().toISOString(),
-          isVerified: true,
-        };
-
-        await setDoc(doc(db, 'citizenUsers', user.uid), userData);
-
-        Alert.alert(
-          'Account Created Successfully! 🎉',
-          'Your account has been verified and created. You can now login.',
-          [{ 
-            text: 'Login Now', 
-            onPress: () => router.push('/Authentication/login') 
-          }]
-        );
+      if (authError) {
+        console.error('❌ Supabase Auth error:', authError);
+        throw new Error(`Failed to create auth account: ${authError.message}`);
       }
+
+      console.log('✅ Supabase Auth account created:', authData.user.id);
+
+      // Create user data for citizen_users table
+      const userData = {
+        id: authData.user.id,
+        first_name: formData.firstName,
+        last_name: formData.lastName,
+        email: formData.email.toLowerCase(),
+        phone: formData.phoneNumber,
+        phone_number: formData.phoneNumber,
+        display_name: `${formData.firstName} ${formData.lastName}`,
+        status: 'active',
+        reports: 0,
+        created_at: new Date().toISOString(),
+        is_verified: true,
+      };
+
+      // Insert into Supabase citizen_users table
+      const { data, error } = await supabase
+        .from('citizen_users')
+        .insert([userData])
+        .select();
+
+      if (error) {
+        console.error('❌ Supabase insert error:', error);
+        throw new Error(`Failed to create user profile: ${error.message}`);
+      }
+
+      console.log('✅ User profile created in Supabase:', data[0]);
+
+      Alert.alert(
+        'Account Created Successfully! 🎉',
+        'Your account has been verified and created. You can now login.',
+        [{ 
+          text: 'Login Now', 
+          onPress: () => router.push('/Authentication/login') 
+        }]
+      );
       
     } catch (error) {
       console.error('Account creation error:', error);
@@ -277,6 +244,8 @@ const RegistrationComponent = () => {
   };
 
   const handleResendCode = async () => {
+    if (resendCountdown > 0) return;
+
     try {
       setIsLoading(true);
       await sendVerificationCode(formData.email, formData.firstName);
@@ -315,70 +284,98 @@ const RegistrationComponent = () => {
         const idToken = urlParams.get('id_token');
         
         if (idToken) {
-          // Create Firebase credential from Google ID token
-          const credential = GoogleAuthProvider.credential(idToken);
-          
-          // Sign in to Firebase with Google credential
-          const userCredential = await signInWithCredential(auth, credential);
-          const user = userCredential.user;
+          // Sign in to Supabase with Google ID token
+          const { data: authData, error: authError } = await supabase.auth.signInWithIdToken({
+            provider: 'google',
+            token: idToken,
+          });
 
-          // Store Google user data temporarily for verification
-          const tempUserData = {
-            uid: user.uid,
-            firstName: user.displayName?.split(' ')[0] || 'Google',
-            lastName: user.displayName?.split(' ').slice(1).join(' ') || 'User',
-            email: user.email,
-            phoneNumber: user.phoneNumber || '',
-            userType: 'citizen',
-            createdAt: new Date().toISOString(),
-            googleSignIn: true,
-          };
+          if (authError) {
+            console.error('❌ Supabase Google sign-in error:', authError);
+            throw new Error(`Google sign-in failed: ${authError.message}`);
+          }
 
-          // Send verification code
-          try {
-            await sendVerificationCode(user.email, tempUserData.firstName);
-            
-            // Store temporary data and show verification UI
-            setFormData({
-              ...formData,
-              firstName: tempUserData.firstName,
-              lastName: tempUserData.lastName,
-              email: tempUserData.email,
-              phoneNumber: tempUserData.phoneNumber,
-              password: '', // Google users don't need password
-              confirmPassword: '',
-              agreeTerms: true,
-            });
-            
-            // Show verification UI
-            setShowVerification(true);
-            
-          } catch (emailError) {
-            // If email fails, still allow registration but show warning
+          const user = authData.user;
+          console.log('✅ Google sign-in successful:', user.id);
+
+          // Check if user exists in citizen_users table
+          const { data: citizenData, error: citizenError } = await supabase
+            .from('citizen_users')
+            .select('*')
+            .eq('email', user.email)
+            .single();
+
+          if (citizenError && citizenError.code !== 'PGRST116') {
+            console.error('❌ Error checking citizen_users:', citizenError);
+            throw new Error('Error checking user data');
+          }
+
+          if (citizenData) {
+            // User exists, just sign in
             Alert.alert(
-              'Google Sign-In Successful! ⚠️',
-              'Account verified with Google but verification email failed. You can verify later.',
-              [{ text: 'Continue', onPress: () => router.replace('/Screens/CitizenScreen') }]
+              'Welcome Back! 👋',
+              'You are already registered. Please log in.',
+              [{ 
+                text: 'Login', 
+                onPress: () => router.push('/Authentication/login') 
+              }]
+            );
+          } else {
+            // User doesn't exist, create new account
+            const newUserData = {
+              id: user.id,
+              first_name: user.user_metadata?.full_name?.split(' ')[0] || 'Google',
+              last_name: user.user_metadata?.full_name?.split(' ').slice(1).join(' ') || 'User',
+              email: user.email,
+              phone: user.phone || '',
+              phone_number: user.phone || '',
+              display_name: user.user_metadata?.full_name || 'Google User',
+              status: 'active',
+              reports: 0,
+              is_verified: true,
+              google_sign_in: true,
+              created_at: new Date().toISOString(),
+              updated_at: new Date().toISOString()
+            };
+
+            const { data: insertData, error: insertError } = await supabase
+              .from('citizen_users')
+              .insert([newUserData])
+              .select()
+              .single();
+
+            if (insertError) {
+              console.error('❌ Error creating user:', insertError);
+              throw new Error('Failed to create user account');
+            }
+
+            Alert.alert(
+              'Account Created Successfully! 🎉',
+              `Welcome to Project FIRA, ${newUserData.first_name}! Your Google account has been registered.`,
+              [{ 
+                text: 'Continue', 
+                onPress: () => router.replace('/Screens/CitizenScreen') 
+              }]
             );
           }
         } else {
-          Alert.alert('Google Sign-In Failed', 'No ID token received from Google.');
+          Alert.alert('Error', 'No ID token received from Google.');
         }
       } else if (result.type === 'cancel') {
-        Alert.alert('Sign In Cancelled', 'You cancelled the Google Sign-In process.');
+        Alert.alert('Cancelled', 'You cancelled the Google Sign-In process.');
       } else {
-        Alert.alert('Google Sign-In Failed', 'An error occurred during sign-in.');
+        Alert.alert('Error', 'An error occurred during sign-in.');
       }
     } catch (error) {
       console.error('Google Sign-In error:', error);
-      Alert.alert('Google Sign-In Failed', error.message);
+      Alert.alert('Error', error.message);
     }
   };
 
-  const handleChange = (name, value) => {
-    setFormData({ ...formData, [name]: value });
-    if (errors[name]) {
-      setErrors({ ...errors, [name]: null });
+  const handleChange = (field, value) => {
+    setFormData(prev => ({ ...prev, [field]: value }));
+    if (errors[field]) {
+      setErrors(prev => ({ ...prev, [field]: '' }));
     }
   };
 
@@ -429,10 +426,10 @@ const RegistrationComponent = () => {
           <TouchableOpacity
             className="mt-4"
             onPress={handleResendCode}
-            disabled={isLoading}
+            disabled={isLoading || resendCountdown > 0}
           >
-            <Text className="text-red-600 font-medium">
-              {isLoading ? 'Sending...' : 'Resend Code'}
+            <Text className={`font-medium ${resendCountdown > 0 ? 'text-gray-400' : 'text-red-600'}`}>
+              {isLoading ? 'Sending...' : resendCountdown > 0 ? `Resend in ${resendCountdown}s` : 'Resend Code'}
             </Text>
           </TouchableOpacity>
         </View>
@@ -498,8 +495,10 @@ const RegistrationComponent = () => {
         </Text>
       </View>
 
-      <TouchableOpacity 
-        className={`py-4 rounded-xl items-center mb-4 ${isLoading ? 'bg-gray-400' : 'bg-fire'}`} 
+      {errors.agreeTerms && <Text className="text-fire text-sm mb-4">{errors.agreeTerms}</Text>}
+
+      <TouchableOpacity
+        className={`w-full py-4 rounded-xl items-center mb-6 ${isLoading ? 'bg-gray-400' : 'bg-fire'}`}
         onPress={handleRegister}
         disabled={isLoading}
       >
@@ -508,15 +507,7 @@ const RegistrationComponent = () => {
         </Text>
       </TouchableOpacity>
 
-      {/* Test EmailJS Connection Button */}
-      <TouchableOpacity 
-        className="py-2 rounded-lg items-center mb-4 bg-blue-500" 
-        onPress={testBasicEmailJS}
-      >
-        <Text className="text-white font-medium">🧪 Test EmailJS Connection</Text>
-      </TouchableOpacity>
-
-      <View className="flex-row items-center mb-4">
+      <View className="flex-row items-center mb-6">
         <View className="flex-1 h-px bg-gray-300" />
         <Text className="mx-4 text-gray-500 text-sm">or</Text>
         <View className="flex-1 h-px bg-gray-300" />
@@ -545,14 +536,14 @@ const RegistrationComponent = () => {
           <AntDesign name="google" size={20} color="#dc2626" />
         </View>
         <Text style={{ color: '#dc2626', fontWeight: '600', fontSize: 16, letterSpacing: 0.5 }}>
-          Register with Google
+          Sign up with Google
         </Text>
       </TouchableOpacity>
 
-      <View className="flex-row justify-center py-4">
+      <View className="flex-row justify-center">
         <Text className="text-gray-600">Already have an account? </Text>
         <TouchableOpacity onPress={() => router.push('/Authentication/login')}>
-          <Text className="text-fire font-medium">Login</Text>
+          <Text className="text-fire font-medium">Sign In</Text>
         </TouchableOpacity>
       </View>
     </ScrollView>

@@ -1,9 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { CiLock, CiUser } from 'react-icons/ci';
-import { signInWithEmailAndPassword } from 'firebase/auth';
-import { collection, query, where, getDocs } from 'firebase/firestore';
-import { auth, db } from '../../../config/firebase';
+import { supabase } from '../../../config/supabase';
 
 const Login = () => {
   const navigate = useNavigate();
@@ -39,49 +37,34 @@ const Login = () => {
     setError('');
   };
 
-  const checkUserInCollection = async (email, collectionName) => {
+  const checkUserInSupabaseTable = async (email, tableName) => {
     try {
       const cleanEmail = email.trim().toLowerCase();
-      console.log(`Checking ${collectionName} collection for email: ${cleanEmail}`);
+      console.log(`Checking ${tableName} table for email: ${cleanEmail}`);
       
-      // First, let's get all documents in the collection to see what's there
-      const allDocs = await getDocs(collection(db, collectionName));
-      console.log(`All documents in ${collectionName}:`, allDocs.docs.map(doc => ({ id: doc.id, data: doc.data() })));
-      
-      // Now try the exact query
-      const q = query(collection(db, collectionName), where('email', '==', cleanEmail));
-      const querySnapshot = await getDocs(q);
-      
-      console.log(`${collectionName} query result:`, querySnapshot.size, 'documents found');
-      
-      if (!querySnapshot.empty) {
-        const userDoc = querySnapshot.docs[0];
-        console.log(`${collectionName} user found:`, userDoc.data());
-        return {
-          exists: true,
-          data: userDoc.data(),
-          docId: userDoc.id
-        };
+      const { data, error } = await supabase
+        .from(tableName)
+        .select('*')
+        .eq('email', cleanEmail)
+        .single();
+
+      if (error && error.code !== 'PGRST116') {
+        console.error(`Error checking ${tableName}:`, error);
+        return { exists: false, error };
       }
-      
-      // If exact match fails, try case-insensitive search by checking all documents
-      const matchingDoc = allDocs.docs.find(doc => {
-        const docEmail = doc.data().email;
-        return docEmail && docEmail.toLowerCase() === cleanEmail;
-      });
-      
-      if (matchingDoc) {
-        console.log(`${collectionName} user found via case-insensitive search:`, matchingDoc.data());
+
+      if (data) {
+        console.log(`${tableName} user found:`, data);
         return {
           exists: true,
-          data: matchingDoc.data(),
-          docId: matchingDoc.id
+          data: data,
+          docId: data.id
         };
       }
       
       return { exists: false };
     } catch (error) {
-      console.error(`Error checking ${collectionName}:`, error);
+      console.error(`Error checking ${tableName}:`, error);
       return { exists: false, error };
     }
   };
@@ -115,49 +98,20 @@ const Login = () => {
       console.log('✅ Admin login successful, navigating to dashboard');
       navigate('/admin-dashboard');
       return;
-    } else {
-      console.log('❌ Hardcoded admin credentials do not match');
     }
 
     try {
-      console.log('🔄 Attempting Firebase authentication...');
-      // Sign in with Firebase Auth
-      const userCredential = await signInWithEmailAndPassword(auth, email, password);
-      const user = userCredential.user;
-      console.log('✅ Firebase Auth successful:', user.uid);
-
-      // Check if user exists in adminUser collection
-      console.log('🔍 Checking adminUser collection...');
-      const adminCheck = await checkUserInCollection(email, 'adminUser');
-      console.log('📊 Admin check result:', adminCheck);
+      console.log('🔄 Starting authentication process...');
       
-      if (adminCheck.exists) {
-        console.log('✅ Admin user found in adminUser collection');
-        // User is an admin
-        const userData = {
-          ...adminCheck.data,
-          docId: adminCheck.docId,
-          userType: 'admin'
-        };
-        
-        localStorage.setItem('authToken', user.uid);
-        localStorage.setItem('userType', 'admin');
-        localStorage.setItem('loginTime', Date.now().toString());
-        localStorage.setItem('userData', JSON.stringify(userData));
-        
-        console.log('✅ Admin login successful, navigating to dashboard');
-        navigate('/admin-dashboard');
-        return;
-      }
-
-      // Check if user exists in stationUsers collection
-      console.log('🔍 Checking stationUsers collection...');
-      const stationCheck = await checkUserInCollection(email, 'stationUsers');
+      // First, check if user exists in station_users table (no Auth required)
+      console.log('🔍 Checking station_users table first...');
+      const stationCheck = await checkUserInSupabaseTable(email, 'station_users');
       console.log('📊 Station check result:', stationCheck);
       
       if (stationCheck.exists) {
-        console.log('✅ Station user found, user data:', stationCheck.data);
-        // User is a station user
+        console.log('✅ Station user found in station_users table, user data:', stationCheck.data);
+        
+        // For stations, we'll use a simple token-based auth since they don't have Auth accounts
         const userData = {
           ...stationCheck.data,
           docId: stationCheck.docId,
@@ -165,7 +119,7 @@ const Login = () => {
         };
         
         console.log('🚀 Setting station user data:', userData);
-        localStorage.setItem('authToken', user.uid);
+        localStorage.setItem('authToken', `station_${stationCheck.docId}`);
         localStorage.setItem('userType', 'station');
         localStorage.setItem('loginTime', Date.now().toString());
         localStorage.setItem('userData', JSON.stringify(userData));
@@ -175,25 +129,63 @@ const Login = () => {
         return;
       }
 
-      // User authenticated but not found in either collection
-      console.log('❌ User authenticated but not found in authorized collections');
-      setError('User not found in authorized collections. Please contact administrator.');
+      // If not a station, try Supabase Auth for admin users
+      console.log('🔄 Attempting Supabase authentication for admin...');
+      
+      // Sign in with Supabase Auth
+      const { data: authData, error: authError } = await supabase.auth.signInWithPassword({
+        email: email,
+        password: password
+      });
+
+      if (authError) {
+        console.error('❌ Supabase Auth error:', authError);
+        throw authError;
+      }
+
+      const user = authData.user;
+      console.log('✅ Supabase Auth successful:', user.id);
+
+      // Check if user exists in admin_users table
+      console.log('🔍 Checking admin_users table...');
+      const adminCheck = await checkUserInSupabaseTable(email, 'admin_users');
+      console.log('📊 Admin check result:', adminCheck);
+      
+      if (adminCheck.exists) {
+        console.log('✅ Admin user found in admin_users table');
+        // User is an admin
+        const userData = {
+          ...adminCheck.data,
+          docId: adminCheck.docId,
+          userType: 'admin'
+        };
+        
+        localStorage.setItem('authToken', user.id);
+        localStorage.setItem('userType', 'admin');
+        localStorage.setItem('loginTime', Date.now().toString());
+        localStorage.setItem('userData', JSON.stringify(userData));
+        
+        console.log('✅ Admin login successful, navigating to dashboard');
+        navigate('/admin-dashboard');
+        return;
+      }
+
+      // User authenticated but not found in either table
+      console.log('❌ User authenticated but not found in authorized tables');
+      setError('User not found in authorized tables. Please contact administrator to register your account.');
       
     } catch (error) {
       console.error('❌ Login error:', error);
       
-      // Handle specific Firebase Auth errors
-      switch (error.code) {
-        case 'auth/user-not-found':
-          setError('No account found with this email address.');
+      // Handle specific Supabase Auth errors
+      switch (error.message) {
+        case 'Invalid login credentials':
+          setError('Invalid email or password.');
           break;
-        case 'auth/wrong-password':
-          setError('Incorrect password.');
+        case 'Email not confirmed':
+          setError('Please confirm your email address before logging in.');
           break;
-        case 'auth/invalid-email':
-          setError('Invalid email address.');
-          break;
-        case 'auth/too-many-requests':
+        case 'Too many requests':
           setError('Too many failed attempts. Please try again later.');
           break;
         default:
@@ -302,7 +294,8 @@ const Login = () => {
             <p>Test Account:</p>
             <p className="mt-2">
               <strong>Admin:</strong> admin@gmail.com / admin123<br />
-              <strong>Stations:</strong> Must be registered through Admin Panel
+              <strong>Stations:</strong> Must be registered through Admin Panel<br />
+              <strong>Note:</strong> Using Supabase Authentication
             </p>
           </div>
         </div>

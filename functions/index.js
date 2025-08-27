@@ -412,3 +412,170 @@ exports.createStationUser = functions.https.onCall(async (data, context) => {
     throw new functions.https.HttpsError('internal', 'Failed to create station user');
   }
 });
+
+// Send welcome email to new responder user
+exports.sendResponderWelcomeEmail = functions.https.onCall(async (data, context) => {
+  try {
+    const { email, firstName, lastName, address, phoneNumber, position, password, stationName } = data;
+
+    if (!email || !firstName || !lastName || !address || !phoneNumber || !position || !password || !stationName) {
+      throw new functions.https.HttpsError('invalid-argument', 'All fields are required');
+    }
+
+    console.log(`📧 Sending responder welcome email to: ${email}`);
+
+    const mailOptions = {
+      from: functions.config().email?.user || 'your-email@gmail.com',
+      to: email,
+      subject: 'Welcome to Project FIRA - Responder Account Created',
+      html: `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+          <div style="background: linear-gradient(135deg, #ff512f 0%, #dd2476 100%); color: white; padding: 30px; text-align: center;">
+            <h1 style="margin: 0; font-size: 28px;">Welcome to Project FIRA</h1>
+            <p style="margin: 10px 0 0 0; font-size: 16px;">Responder Account Created Successfully!</p>
+          </div>
+          
+          <div style="padding: 30px; background: #f9f9f9;">
+            <h2 style="color: #333; margin-bottom: 20px;">Hello ${firstName} ${lastName},</h2>
+            
+            <p style="color: #555; line-height: 1.6; margin-bottom: 20px;">
+              Welcome to Project FIRA! Your <strong>responder account</strong> has been successfully created by ${stationName}.
+              You can now access the FIRA mobile application to respond to emergencies and assist in fire incident management.
+            </p>
+            
+            <div style="background: white; border: 2px solid #ff512f; border-radius: 10px; padding: 20px; margin: 20px 0;">
+              <h3 style="color: #ff512f; margin-top: 0;">Your Responder Account Details:</h3>
+              <p style="margin: 10px 0;"><strong>Name:</strong> ${firstName} ${lastName}</p>
+              <p style="margin: 10px 0;"><strong>Email:</strong> ${email}</p>
+              <p style="margin: 10px 0;"><strong>Phone Number:</strong> ${phoneNumber}</p>
+              <p style="margin: 10px 0;"><strong>Address:</strong> ${address}</p>
+              <p style="margin: 10px 0;"><strong>Position:</strong> ${position}</p>
+              <p style="margin: 10px 0;"><strong>Assigned Station:</strong> ${stationName}</p>
+              <p style="margin: 10px 0;"><strong>Password:</strong> ${password}</p>
+              <p style="margin: 10px 0;"><strong>Role:</strong> Responder</p>
+              <p style="color: #ff512f; font-weight: bold; margin-top: 15px;">
+                Please change your password after your first login for security.
+              </p>
+            </div>
+            
+            <p style="color: #555; line-height: 1.6; margin-bottom: 20px;">
+              <strong>What you can do as a Responder:</strong>
+            </p>
+            <ul style="color: #555; line-height: 1.6;">
+              <li>Respond to fire emergency reports</li>
+              <li>Update incident status and progress</li>
+              <li>View emergency locations on the map</li>
+              <li>Communicate with citizens and other responders</li>
+              <li>Assist in emergency response operations</li>
+              <li>Access station resources and equipment</li>
+            </ul>
+            
+            <p style="color: #555; line-height: 1.6; margin-top: 20px;">
+              If you have any questions or need assistance, please contact your station administrator at ${stationName}.
+            </p>
+            
+            <p style="color: #555; line-height: 1.6;">
+              Stay safe and thank you for your service!<br>
+              <strong>The Project FIRA Team</strong>
+            </p>
+          </div>
+          
+          <div style="background: #333; color: white; padding: 20px; text-align: center;">
+            <p style="margin: 0; font-size: 14px;">© 2024 Project FIRA. All rights reserved.</p>
+            <p style="margin: 5px 0 0 0; font-size: 12px;">Responder Registration</p>
+          </div>
+        </div>
+      `
+    };
+
+    await transporter.sendMail(mailOptions);
+    console.log(`✅ Responder welcome email sent successfully to: ${email}`);
+
+    return {
+      success: true,
+      message: 'Responder welcome email sent successfully'
+    };
+
+  } catch (error) {
+    console.error('❌ Error sending responder welcome email:', error);
+    throw new functions.https.HttpsError('internal', 'Failed to send welcome email');
+  }
+});
+
+// Create responder user account
+exports.createResponderUser = functions.https.onCall(async (data, context) => {
+  try {
+    const { email, firstName, lastName, address, phoneNumber, position, password, stationName, stationId } = data;
+
+    console.log('🚀 Creating responder user:', { email, firstName, lastName, address, phoneNumber, position, stationName });
+
+    if (!email || !firstName || !lastName || !address || !phoneNumber || !position || !password || !stationName) {
+      throw new functions.https.HttpsError('invalid-argument', 'All fields are required');
+    }
+
+    // Check if user already exists
+    try {
+      const existingUser = await admin.auth().getUserByEmail(email);
+      throw new functions.https.HttpsError('already-exists', 'User with this email already exists');
+    } catch (error) {
+      if (error.code === 'user-not-found') {
+        console.log('✅ User does not exist, proceeding with creation');
+      } else {
+        throw error;
+      }
+    }
+
+    // Create user in Firebase Auth
+    console.log('🔐 Creating Firebase Auth user...');
+    const userRecord = await admin.auth().createUser({
+      email: email,
+      password: password,
+      displayName: `${firstName} ${lastName}`,
+      emailVerified: false
+    });
+    console.log('✅ Firebase Auth user created:', userRecord.uid);
+
+    // Store user data in Firestore
+    console.log('💾 Storing responder data in Firestore...');
+    await admin.firestore().collection('responderUsers').doc(userRecord.uid).set({
+      uid: userRecord.uid,
+      email: email,
+      firstName: firstName,
+      lastName: lastName,
+      address: address,
+      phoneNumber: phoneNumber,
+      position: position,
+      stationName: stationName,
+      stationId: stationId,
+      role: 'responderUser',
+      active: true,
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp()
+    });
+    console.log('✅ Responder data stored in Firestore');
+
+    // Send welcome email
+    console.log('📧 Sending responder welcome email...');
+    await exports.sendResponderWelcomeEmail({
+      email,
+      firstName,
+      lastName,
+      address,
+      phoneNumber,
+      position,
+      password,
+      stationName
+    });
+    console.log('✅ Responder welcome email sent successfully');
+
+    return {
+      success: true,
+      message: 'Responder user created successfully',
+      uid: userRecord.uid
+    };
+
+  } catch (error) {
+    console.error('❌ Error creating responder user:', error);
+    throw new functions.https.HttpsError('internal', 'Failed to create responder user');
+  }
+});

@@ -3,9 +3,7 @@ import { View, Text, TextInput, TouchableOpacity, Image, KeyboardAvoidingView, P
 import { useRouter } from 'expo-router';
 import { AntDesign } from '@expo/vector-icons';
 import { MaterialIcons } from '@expo/vector-icons';
-import { signInWithEmailAndPassword, signInWithCredential, GoogleAuthProvider } from 'firebase/auth';
-import { auth, db } from '../config/firebase';
-import { collection, query, where, getDocs, setDoc, doc } from 'firebase/firestore';
+import { supabase } from '../config/supabase';
 import { WebBrowser, Crypto, googleSignInConfig } from '../config/googleSignIn';
 import { useAuth } from '../config/AuthContext';
 import AuthGuard from '../components/AuthGuard';
@@ -78,51 +76,79 @@ const LoginComponent = () => {
         return;
       }
 
-      // For all other emails, try Firebase Auth (citizens)
-      console.log('🔍 Trying Firebase Auth for citizen login:', email);
-      const userCredential = await signInWithEmailAndPassword(auth, email, password);
-      const user = userCredential.user;
+      // For all other emails, try Supabase Auth (citizens)
+      console.log('🔍 Trying Supabase Auth for citizen login:', email);
+      
+      const { data: authData, error: authError } = await supabase.auth.signInWithPassword({
+        email: email.toLowerCase(),
+        password: password
+      });
 
-      console.log('✅ Firebase Auth successful, checking Firestore...');
+      if (authError) {
+        console.error('❌ Supabase Auth error:', authError);
+        throw authError;
+      }
 
-      // Check if this user exists in 'citizenUsers' Firestore
-      const q = query(collection(db, 'citizenUsers'), where('email', '==', email));
-      const snapshot = await getDocs(q);
+      const user = authData.user;
+      console.log('✅ Supabase Auth successful, checking citizen_users table...');
 
-      if (!snapshot.empty) {
-        const userData = snapshot.docs[0].data();
-        console.log('✅ User found in Firestore:', userData);
+      // Check if this user exists in 'citizen_users' table
+      const { data: citizenData, error: citizenError } = await supabase
+        .from('citizen_users')
+        .select('*')
+        .eq('email', email.toLowerCase())
+        .single();
+
+      if (citizenError && citizenError.code !== 'PGRST116') {
+        console.error('❌ Error checking citizen_users:', citizenError);
+        throw new Error('Error checking user data');
+      }
+
+      if (citizenData) {
+        console.log('✅ User found in citizen_users table:', citizenData);
+        
+        // Convert Supabase data format to match your app's expected format
+        const userData = {
+          uid: citizenData.id,
+          firstName: citizenData.first_name,
+          lastName: citizenData.last_name,
+          email: citizenData.email,
+          phoneNumber: citizenData.phone || citizenData.phone_number,
+          userType: 'citizen',
+          displayName: citizenData.display_name,
+          status: citizenData.status,
+          reports: citizenData.reports,
+          isVerified: citizenData.is_verified,
+          googleSignIn: citizenData.google_sign_in,
+          createdAt: citizenData.created_at
+        };
+
         displayToast(`Welcome to Project FIRA, ${userData.firstName || 'User'}! 👋`, 'success');
+        
         // Store citizen authentication
         await loginCitizen(userData);
         
         // Let AuthGuard handle the navigation - no manual navigation needed
         // This prevents the glitching/refreshing effect
       } else {
-        console.log('❌ User not found in Firestore');
-        displayToast('No user record found in citizenUsers collection.', 'error');
+        console.log('❌ User not found in citizen_users table');
+        displayToast('No user record found. Please register first.', 'error');
       }
     } catch (error) {
       console.error('❌ Login error:', error);
       
-      // Handle specific Firebase Auth errors
+      // Handle specific Supabase Auth errors
       let errorMessage = 'Login failed. Please check your credentials.';
       
-      switch (error.code) {
-        case 'auth/user-not-found':
-          errorMessage = 'No account found with this email address.';
+      switch (error.message) {
+        case 'Invalid login credentials':
+          errorMessage = 'Invalid email or password. Please try again.';
           break;
-        case 'auth/wrong-password':
-          errorMessage = 'Incorrect password. Please try again.';
+        case 'Email not confirmed':
+          errorMessage = 'Please confirm your email address before logging in.';
           break;
-        case 'auth/invalid-email':
-          errorMessage = 'Please enter a valid email address.';
-          break;
-        case 'auth/too-many-requests':
+        case 'Too many requests':
           errorMessage = 'Too many failed attempts. Please try again later.';
-          break;
-        case 'auth/user-disabled':
-          errorMessage = 'This account has been disabled.';
           break;
         default:
           errorMessage = error.message || errorMessage;
@@ -132,7 +158,7 @@ const LoginComponent = () => {
     }
   };
 
-    const handleGoogleSignIn = async () => {
+  const handleGoogleSignIn = async () => {
     try {
       // Generate a random nonce for security
       const nonce = await Crypto.digestStringAsync(
@@ -159,45 +185,98 @@ const LoginComponent = () => {
         const idToken = urlParams.get('id_token');
         
         if (idToken) {
-          // Create Firebase credential from Google ID token
-          const credential = GoogleAuthProvider.credential(idToken);
-          
-          // Sign in to Firebase with Google credential
-          const userCredential = await signInWithCredential(auth, credential);
-          const user = userCredential.user;
+          // Sign in to Supabase with Google ID token
+          const { data: authData, error: authError } = await supabase.auth.signInWithIdToken({
+            provider: 'google',
+            token: idToken,
+          });
 
-                     // Check if user exists in Firestore
-           const q = query(collection(db, 'citizenUsers'), where('email', '==', user.email));
-           const snapshot = await getDocs(q);
+          if (authError) {
+            console.error('❌ Supabase Google sign-in error:', authError);
+            throw new Error(`Google sign-in failed: ${authError.message}`);
+          }
 
-           if (snapshot.empty) {
-             // User doesn't exist, create new account
-             const userData = {
-               uid: user.uid,
-               firstName: user.displayName?.split(' ')[0] || 'Google',
-               lastName: user.displayName?.split(' ').slice(1).join(' ') || 'User',
-               email: user.email,
-               phoneNumber: user.phoneNumber || '',
-               userType: 'citizen',
-               createdAt: new Date().toISOString(),
-               googleSignIn: true,
-             };
+          const user = authData.user;
+          console.log('✅ Google sign-in successful:', user.id);
 
-             await setDoc(doc(db, 'citizenUsers', user.uid), userData);
-             displayToast(`Welcome to Project FIRA, ${userData.firstName}! Your Google account has been registered. 🎉`, 'success');
-             // Store citizen authentication
-             await loginCitizen(userData);
-             
-             // Let AuthGuard handle the navigation - no manual navigation needed
-           } else {
-             // User exists, just sign in
-             const userData = snapshot.docs[0].data();
-             displayToast(`Welcome back to Project FIRA, ${userData.firstName || 'User'}! 👋`, 'success');
-             // Store citizen authentication
-             await loginCitizen(userData);
-             
-             // Let AuthGuard handle the navigation - no manual navigation needed
-           }
+          // Check if user exists in citizen_users table
+          const { data: citizenData, error: citizenError } = await supabase
+            .from('citizen_users')
+            .select('*')
+            .eq('email', user.email)
+            .single();
+
+          if (citizenError && citizenError.code !== 'PGRST116') {
+            console.error('❌ Error checking citizen_users:', citizenError);
+            throw new Error('Error checking user data');
+          }
+
+          if (citizenData) {
+            // User exists, just sign in
+            const userData = {
+              uid: citizenData.id,
+              firstName: citizenData.first_name,
+              lastName: citizenData.last_name,
+              email: citizenData.email,
+              phoneNumber: citizenData.phone || citizenData.phone_number,
+              userType: 'citizen',
+              displayName: citizenData.display_name,
+              status: citizenData.status,
+              reports: citizenData.reports,
+              isVerified: citizenData.is_verified,
+              googleSignIn: citizenData.google_sign_in,
+              createdAt: citizenData.created_at
+            };
+
+            displayToast(`Welcome back to Project FIRA, ${userData.firstName || 'User'}! 👋`, 'success');
+            await loginCitizen(userData);
+          } else {
+            // User doesn't exist, create new account
+            const newUserData = {
+              id: user.id,
+              first_name: user.user_metadata?.full_name?.split(' ')[0] || 'Google',
+              last_name: user.user_metadata?.full_name?.split(' ').slice(1).join(' ') || 'User',
+              email: user.email,
+              phone: user.phone || '',
+              phone_number: user.phone || '',
+              display_name: user.user_metadata?.full_name || 'Google User',
+              status: 'active',
+              reports: 0,
+              is_verified: true,
+              google_sign_in: true,
+              created_at: new Date().toISOString(),
+              updated_at: new Date().toISOString()
+            };
+
+            const { data: insertData, error: insertError } = await supabase
+              .from('citizen_users')
+              .insert([newUserData])
+              .select()
+              .single();
+
+            if (insertError) {
+              console.error('❌ Error creating user:', insertError);
+              throw new Error('Failed to create user account');
+            }
+
+            const userData = {
+              uid: insertData.id,
+              firstName: insertData.first_name,
+              lastName: insertData.last_name,
+              email: insertData.email,
+              phoneNumber: insertData.phone || insertData.phone_number,
+              userType: 'citizen',
+              displayName: insertData.display_name,
+              status: insertData.status,
+              reports: insertData.reports,
+              isVerified: insertData.is_verified,
+              googleSignIn: insertData.google_sign_in,
+              createdAt: insertData.created_at
+            };
+
+            displayToast(`Welcome to Project FIRA, ${userData.firstName}! Your Google account has been registered. 🎉`, 'success');
+            await loginCitizen(userData);
+          }
         } else {
           displayToast('No ID token received from Google.', 'error');
         }
@@ -310,12 +389,12 @@ const LoginComponent = () => {
           </Text>
         </TouchableOpacity>
 
-                 <TouchableOpacity 
-           className="items-center mb-6"
-           onPress={() => router.push('/Authentication/ForgotPassword/forgotpassword')}
-         >
-           <Text className="text-fire font-medium">Forgot Password?</Text>
-         </TouchableOpacity>
+        <TouchableOpacity 
+          className="items-center mb-6"
+          onPress={() => router.push('/Authentication/ForgotPassword/forgotpassword')}
+        >
+          <Text className="text-fire font-medium">Forgot Password?</Text>
+        </TouchableOpacity>
 
         <View className="flex-row justify-center">
           <Text className="text-gray-600">Don't have an account? </Text>

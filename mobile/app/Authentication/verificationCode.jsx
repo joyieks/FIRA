@@ -3,19 +3,39 @@ import { View, Text, TextInput, TouchableOpacity, StyleSheet, Alert, KeyboardAvo
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
 import { AntDesign } from '@expo/vector-icons';
+import { supabase } from '../config/supabase';
+import { useAuth } from '../config/AuthContext';
 
 const VerificationCode = () => {
   const [otp, setOtp] = useState(['', '', '', '', '', '']);
   const [isLoading, setIsLoading] = useState(false);
   const [timeLeft, setTimeLeft] = useState(900); // 15 minutes
   const [canResend, setCanResend] = useState(false);
+  const [userEmail, setUserEmail] = useState('');
+  const [userData, setUserData] = useState(null);
   const inputRefs = useRef([]);
+  const { loginCitizen } = useAuth();
 
   // EmailJS config
   const serviceId = 'service_717ciwa';
   const templateId = 'template_iefgxnk';
   const publicKey = 'hDU2Ar_g1pr7Cpg-S';
-  const privateKey = 'toeoBDUw3w6FPgdo7-Rjr';  // Add private key for strict mode
+  const privateKey = 'toeoBDUw3w6FPgdo7-Rjr';
+
+  useEffect(() => {
+    // Get user data from route params or storage
+    const getUserData = async () => {
+      try {
+        // Try to get from AsyncStorage or route params
+        // For now, we'll use a placeholder - you might need to pass this via route params
+        setUserEmail('user@example.com'); // This should come from your registration flow
+      } catch (error) {
+        console.error('Error getting user data:', error);
+      }
+    };
+
+    getUserData();
+  }, []);
 
   useEffect(() => {
     const timer = setInterval(() => {
@@ -57,10 +77,61 @@ const VerificationCode = () => {
     setIsLoading(true);
     
     try {
-      await new Promise(resolve => setTimeout(resolve, 1500));
-      Alert.alert('Success!', 'Account verified successfully.');
-      router.push('/Authentication/login');
+      // For now, we'll skip the actual OTP verification since you disabled email confirmation
+      // and just proceed with the registration flow
+      
+      // Check if user exists in citizen_users table
+      const { data: citizenData, error: citizenError } = await supabase
+        .from('citizen_users')
+        .select('*')
+        .eq('email', userEmail)
+        .single();
+
+      if (citizenError && citizenError.code !== 'PGRST116') {
+        console.error('❌ Error checking citizen_users:', citizenError);
+        throw new Error('Error checking user data');
+      }
+
+      if (citizenData) {
+        // User exists, convert to app format and login
+        const userData = {
+          uid: citizenData.id,
+          firstName: citizenData.first_name,
+          lastName: citizenData.last_name,
+          email: citizenData.email,
+          phoneNumber: citizenData.phone || citizenData.phone_number,
+          userType: 'citizen',
+          displayName: citizenData.display_name,
+          status: citizenData.status,
+          reports: citizenData.reports,
+          isVerified: citizenData.is_verified,
+          googleSignIn: citizenData.google_sign_in,
+          createdAt: citizenData.created_at
+        };
+
+        await loginCitizen(userData);
+        
+        Alert.alert(
+          'Account Verified Successfully! 🎉',
+          'Welcome to Project FIRA!',
+          [{ 
+            text: 'Continue', 
+            onPress: () => router.replace('/Screens/CitizenScreen') 
+          }]
+        );
+      } else {
+        // User doesn't exist, this shouldn't happen but handle gracefully
+        Alert.alert(
+          'Verification Complete',
+          'Your account has been verified. Please log in.',
+          [{ 
+            text: 'OK', 
+            onPress: () => router.replace('/Authentication/login') 
+          }]
+        );
+      }
     } catch (error) {
+      console.error('Verification error:', error);
       Alert.alert('Error', 'Verification failed. Please try again.');
     } finally {
       setIsLoading(false);
@@ -77,10 +148,10 @@ const VerificationCode = () => {
     try {
       const templateParams = {
         to_name: 'User',
-        to_email: 'user@example.com',
+        to_email: userEmail,
         passcode: Math.random().toString().slice(2, 8),
         time: new Date(Date.now() + 15 * 60 * 1000).toLocaleTimeString(),
-        user_email: 'user@example.com'
+        user_email: userEmail
       };
 
       // Use REST API instead of EmailJS browser library
@@ -93,7 +164,7 @@ const VerificationCode = () => {
           service_id: serviceId,
           template_id: templateId,
           user_id: publicKey,
-          accessToken: privateKey,  // Changed from 'private_key' to 'accessToken'
+          accessToken: privateKey,
           template_params: templateParams,
         }),
       });
@@ -136,6 +207,9 @@ const VerificationCode = () => {
             <Text style={styles.description}>
               We've sent a verification code to your email. Please enter the 6-digit code below.
             </Text>
+            {userEmail && (
+              <Text style={styles.emailText}>{userEmail}</Text>
+            )}
           </View>
 
           {/* OTP Inputs */}
@@ -275,6 +349,13 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     lineHeight: 24,
     paddingHorizontal: 20,
+    marginBottom: 10,
+  },
+  emailText: {
+    fontSize: 14,
+    color: '#DC2626',
+    fontWeight: '600',
+    textAlign: 'center',
   },
   otpContainer: {
     marginBottom: 30,

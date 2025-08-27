@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { FiUsers, FiHome, FiUserCheck, FiUserX, FiEdit2, FiTrash2, FiSearch, FiChevronDown, FiEye, FiFileText, FiX, FiPlus, FiClock, FiUser } from 'react-icons/fi';
+import { FiUsers, FiHome, FiUserCheck, FiUserX, FiEdit2, FiTrash2, FiSearch, FiChevronDown, FiEye, FiFileText, FiX, FiPlus, FiClock, FiUser, FiLoader } from 'react-icons/fi';
 import { db } from '../../../../config/firebase';
-import { collection, getDocs, addDoc, doc, setDoc } from "firebase/firestore";
+import { collection, getDocs, addDoc, doc, setDoc, query, where } from "firebase/firestore";
+import { supabase } from '../../../../config/supabase';
 import emailjs from '@emailjs/browser';
 
 
@@ -23,6 +24,9 @@ const Auser_management = () => {
   const [showHistoryModal, setShowHistoryModal] = useState(false);
   const [showRespondersModal, setShowRespondersModal] = useState(false);
   const [showResponderProfileModal, setShowResponderProfileModal] = useState(false);
+  const [selectedStation, setSelectedStation] = useState(null);
+  const [stationResponders, setStationResponders] = useState([]);
+  const [loadingResponders, setLoadingResponders] = useState(false);
 
   const [selectedUser, setSelectedUser] = useState(null);
   const [selectedResponder, setSelectedResponder] = useState(null);
@@ -80,27 +84,50 @@ const Auser_management = () => {
           };
         });
 
-        // Fetch stations
-        const stationSnapshot = await getDocs(collection(db, "stationUsers"));
-        const stations = stationSnapshot.docs.map(doc => {
-          const data = doc.data();
-          console.log('🔍 Station data from Firebase:', { id: doc.id, ...data }); // Debug log
+        // Fetch stations from Supabase
+        const { data: stationsData, error: stationsError } = await supabase
+          .from('station_users')
+          .select('*');
+
+        if (stationsError) {
+          console.error('Error fetching stations from Supabase:', stationsError);
+          throw new Error(`Supabase error: ${stationsError.message}`);
+        }
+
+        const stations = stationsData.map(data => {
+          console.log('🔍 Station data from Supabase:', { id: data.id, ...data }); // Debug log
           
           return {
-            id: doc.id,
+            id: data.id,
             ...data,
             // Add default values for missing fields
-            name: data.stationName || data.name || 'Unnamed Station',
-            stationName: data.stationName || data.name || 'Unnamed Station',
-            address: data.address || data.location || 'Address not specified',
-            number: data.number || data.phone || 'No number',
-            location: data.address || data.location || 'Address not specified',
-            lastUpdate: data.lastUpdate || data.createdAt ? 'Recently updated' : 'Unknown',
-            responders: data.responders || data.responderCount || 0,
+            name: data.station_name || 'Unnamed Station',
+            stationName: data.station_name || 'Unnamed Station',
+            address: data.address || 'Address not specified',
+            number: data.phone || 'No number',
+            location: data.address || 'Address not specified',
+            lastUpdate: data.updated_at ? 'Recently updated' : 'Unknown',
+            responders: 0, // Will be updated below
             status: data.status || 'active',
-            phone: data.number || data.phone || 'No number',
-            isOnline: data.isOnline || false
+            phone: data.phone || 'No number',
+            isOnline: data.is_online || false
           };
+        });
+
+        // Fetch responder counts for each station
+        const responderSnapshot = await getDocs(collection(db, "responderUsers"));
+        const responderCounts = {};
+        
+        responderSnapshot.docs.forEach(doc => {
+          const responderData = doc.data();
+          if (responderData.stationName) {
+            responderCounts[responderData.stationName] = (responderCounts[responderData.stationName] || 0) + 1;
+          }
+        });
+
+        // Update stations with responder counts
+        stations.forEach(station => {
+          station.responders = responderCounts[station.stationName] || 0;
         });
         
         console.log('📊 Processed stations data:', stations);
@@ -234,9 +261,41 @@ const Auser_management = () => {
     setShowHistoryModal(true);
   };
 
-  const handleViewResponders = (station) => {
-    setSelectedUser(station);
+  const handleViewResponders = async (station) => {
+    setSelectedStation(station);
+    setLoadingResponders(true);
     setShowRespondersModal(true);
+    
+    try {
+      // Fetch responders for this specific station
+      const responderQuery = query(
+        collection(db, "responderUsers"), 
+        where("stationName", "==", station.stationName)
+      );
+      const responderSnapshot = await getDocs(responderQuery);
+      
+      const responders = responderSnapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      }));
+      
+      setStationResponders(responders);
+      
+      // Update the responder count in the stations list
+      setUsers(prev => ({
+        ...prev,
+        stations: prev.stations.map(s => 
+          s.id === station.id 
+            ? { ...s, responders: responders.length }
+            : s
+        )
+      }));
+    } catch (error) {
+      console.error('Error fetching station responders:', error);
+      alert('Error fetching responders for this station');
+    } finally {
+      setLoadingResponders(false);
+    }
   };
 
   const handleToggleStatus = (type, id) => {
@@ -276,31 +335,63 @@ const Auser_management = () => {
     }
 
     try {
-      // Create station data for Firestore
-      const stationData = {
+      // Check if email already exists in Supabase
+      const { data: existingStations, error: checkError } = await supabase
+        .from('station_users')
+        .select('email')
+        .eq('email', newStation.email.toLowerCase());
+
+      if (checkError) {
+        console.error('Error checking email:', checkError);
+        throw new Error(`Error checking email: ${checkError.message}`);
+      }
+
+      if (existingStations && existingStations.length > 0) {
+        alert('A station with this email already exists. Please use a different email address.');
+        return;
+      }
+
+      // Create station data for Supabase
+      const supabaseData = {
+        station_name: newStation.name,
         email: newStation.email.toLowerCase(),
-        stationName: newStation.name,
         address: newStation.location,
-        number: newStation.phone || '',
+        phone: newStation.phone || '',
         position: newStation.position || '',
         role: 'stationUser',
         active: true,
         status: 'active',
-        isOnline: false,
-        responders: 0,
-        lastUpdate: new Date().toISOString(),
-        createdAt: new Date().toISOString(),
-        userType: 'station'
+        is_online: false,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString()
       };
 
-      // Add to Firestore
-      console.log('💾 Storing station data in Firestore...');
-      const docRef = await addDoc(collection(db, "stationUsers"), stationData);
-      console.log('✅ Station data stored in Firestore:', docRef.id);
+      // Add to Supabase
+      console.log('💾 Storing station data in Supabase...');
+      console.log('📋 Station data to insert:', supabaseData);
+      
+      let insertedData;
+      try {
+        const { data, error } = await supabase
+          .from('station_users')
+          .insert([supabaseData])
+          .select();
+
+        if (error) {
+          console.error('❌ Supabase error details:', error);
+          throw new Error(`Supabase error: ${error.message} (Code: ${error.code})`);
+        }
+
+        console.log('✅ Station data stored in Supabase:', data[0]);
+        insertedData = data[0];
+      } catch (networkError) {
+        console.error('❌ Network error:', networkError);
+        throw new Error(`Network error: ${networkError.message}. Please check your internet connection and try again.`);
+      }
       
       // Create the station object for local state
       const station = {
-        id: docRef.id,
+        id: insertedData.id,
         name: newStation.name,
         stationName: newStation.name,
         address: newStation.location,
@@ -311,7 +402,7 @@ const Auser_management = () => {
         responders: 0,
         status: 'active',
         isOnline: false,
-        createdAt: stationData.createdAt
+        createdAt: supabaseData.created_at
       };
       
       // Update local state
@@ -335,11 +426,17 @@ const Auser_management = () => {
       });
       
       setShowAddStationModal(false);
+      alert('Station added successfully!');
       
     } catch (error) {
       console.error('Error adding station:', error);
       
-      alert(`Error adding station: ${error.message}`);
+      // Check if it's a duplicate email error
+      if (error.message.includes('duplicate key value violates unique constraint "station_users_email_key"')) {
+        alert('A station with this email already exists. Please use a different email address.');
+      } else {
+        alert(`Error adding station: ${error.message}`);
+      }
     }
   };
 
@@ -379,6 +476,37 @@ const Auser_management = () => {
       });
       // Don't throw error here as the station was still created successfully
       // Email failed but station was created - no user notification
+    }
+  };
+
+  // Refresh responder counts for all stations
+  const refreshResponderCounts = async () => {
+    try {
+      console.log('🔄 Refreshing responder counts...');
+      
+      // Fetch all responders
+      const responderSnapshot = await getDocs(collection(db, "responderUsers"));
+      const responderCounts = {};
+      
+      responderSnapshot.docs.forEach(doc => {
+        const responderData = doc.data();
+        if (responderData.stationName) {
+          responderCounts[responderData.stationName] = (responderCounts[responderData.stationName] || 0) + 1;
+        }
+      });
+
+      // Update stations with new responder counts
+      setUsers(prev => ({
+        ...prev,
+        stations: prev.stations.map(station => ({
+          ...station,
+          responders: responderCounts[station.stationName] || 0
+        }))
+      }));
+      
+      console.log('✅ Responder counts refreshed');
+    } catch (error) {
+      console.error('❌ Error refreshing responder counts:', error);
     }
   };
 
@@ -462,13 +590,22 @@ const Auser_management = () => {
               </div>
               <div className="flex gap-2">
                 {activeTab === 'stations' && (
-                  <button
-                    onClick={() => setShowAddStationModal(true)}
-                    className="flex items-center justify-center px-6 py-3 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors"
-                  >
-                    <FiPlus className="mr-2" />
-                    Add New Station
-                  </button>
+                  <>
+                    <button
+                      onClick={refreshResponderCounts}
+                      className="flex items-center justify-center px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+                    >
+                      <FiLoader className="mr-2" />
+                      Refresh Counts
+                    </button>
+                    <button
+                      onClick={() => setShowAddStationModal(true)}
+                      className="flex items-center justify-center px-6 py-3 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors"
+                    >
+                      <FiPlus className="mr-2" />
+                      Add New Station
+                    </button>
+                  </>
                 )}
               </div>
             </div>
@@ -1092,10 +1229,200 @@ const Auser_management = () => {
             </div>
           )}
 
+          {/* Responders Modal */}
+          {showRespondersModal && selectedStation && (
+            <div 
+              className="fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center z-50 backdrop-blur-sm"
+              onClick={() => setShowRespondersModal(false)}
+            >
+              <div 
+                className="bg-white rounded-2xl shadow-2xl p-8 max-w-6xl w-full mx-4 h-[85vh] flex flex-col border border-gray-100"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <div className="flex justify-between items-center mb-6">
+                  <div>
+                    <h2 className="text-2xl font-bold text-gray-900 mb-1">
+                      Responders - {selectedStation.stationName}
+                    </h2>
+                    <p className="text-gray-600">
+                      {stationResponders.length} responders registered
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => setShowRespondersModal(false)}
+                    className="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-full transition-all duration-200"
+                  >
+                    <FiX className="w-6 h-6" />
+                  </button>
+                </div>
+
+                {loadingResponders ? (
+                  <div className="flex-1 flex items-center justify-center">
+                    <div className="text-center">
+                      <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-red-600 mx-auto mb-4"></div>
+                      <p className="text-gray-600">Loading responders...</p>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="flex-1 overflow-y-auto">
+                    {stationResponders.length === 0 ? (
+                      <div className="text-center py-12">
+                        <FiUsers className="w-16 h-16 text-gray-300 mx-auto mb-4" />
+                        <h3 className="text-lg font-medium text-gray-900 mb-2">No Responders Found</h3>
+                        <p className="text-gray-600">This station hasn't registered any responders yet.</p>
+                      </div>
+                    ) : (
+                      <div className="grid gap-4">
+                        {stationResponders.map((responder) => (
+                          <div key={responder.id} className="bg-white border border-gray-200 rounded-xl p-6 shadow-sm hover:shadow-md transition-all duration-200">
+                            <div className="flex items-center justify-between">
+                              <div className="flex items-center space-x-4">
+                                <div className="w-12 h-12 bg-gradient-to-br from-red-500 to-red-600 rounded-full flex items-center justify-center shadow-lg">
+                                  <FiUser className="w-6 h-6 text-white" />
+                                </div>
+                                <div className="flex-1">
+                                  <h3 className="text-lg font-semibold text-gray-900">
+                                    {responder.firstName} {responder.lastName}
+                                  </h3>
+                                  <p className="text-sm text-gray-600">{responder.email}</p>
+                                  <div className="flex items-center space-x-4 mt-1">
+                                    <span className="text-sm text-gray-500">
+                                      Position: {responder.position}
+                                    </span>
+                                    <span className="text-sm text-gray-500">
+                                      Phone: {responder.phoneNumber}
+                                    </span>
+                                    <span className="text-sm text-gray-500">
+                                      Address: {responder.address}
+                                    </span>
+                                  </div>
+                                </div>
+                              </div>
+                              <div className="flex items-center space-x-2">
+                                <span className={`px-3 py-1 rounded-full text-xs font-medium ${
+                                  responder.active !== false 
+                                    ? 'bg-green-100 text-green-800 border border-green-200' 
+                                    : 'bg-red-100 text-red-800 border border-red-200'
+                                }`}>
+                                  {responder.active !== false ? 'Active' : 'Inactive'}
+                                </span>
+                                <button
+                                  onClick={() => {
+                                    setSelectedResponder(responder);
+                                    setShowResponderProfileModal(true);
+                                  }}
+                                  className="p-2 text-blue-600 hover:bg-blue-50 rounded-full transition-colors"
+                                  title="View Profile"
+                                >
+                                  <FiEye className="w-4 h-4" />
+                                </button>
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Responder Profile Modal */}
+          {showResponderProfileModal && selectedResponder && (
+            <div 
+              className="fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center z-50 backdrop-blur-sm"
+              onClick={() => setShowResponderProfileModal(false)}
+            >
+              <div 
+                className="bg-white rounded-2xl shadow-2xl p-8 max-w-2xl w-full mx-4 border border-gray-100"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <div className="flex justify-between items-center mb-6">
+                  <div>
+                    <h2 className="text-2xl font-bold text-gray-900 mb-1">
+                      Responder Profile
+                    </h2>
+                    <p className="text-gray-600">View responder details</p>
+                  </div>
+                  <button
+                    onClick={() => setShowResponderProfileModal(false)}
+                    className="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-full transition-all duration-200"
+                  >
+                    <FiX className="w-6 h-6" />
+                  </button>
+                </div>
+
+                <div className="space-y-6">
+                  <div className="bg-gradient-to-r from-red-50 to-orange-50 rounded-xl p-6 border border-red-100">
+                    <div className="flex items-center space-x-6">
+                      <div className="w-20 h-20 bg-gradient-to-br from-red-500 to-red-600 rounded-full flex items-center justify-center shadow-lg">
+                        <FiUser className="w-10 h-10 text-white" />
+                      </div>
+                      <div>
+                        <h3 className="text-2xl font-bold text-gray-900 mb-2">
+                          {selectedResponder.firstName} {selectedResponder.lastName}
+                        </h3>
+                        <p className="text-gray-600 mb-1">{selectedResponder.email}</p>
+                        <span className={`inline-flex items-center px-3 py-1 rounded-full text-xs font-medium ${
+                          selectedResponder.active !== false 
+                            ? 'bg-green-100 text-green-800 border border-green-200' 
+                            : 'bg-red-100 text-red-800 border border-red-200'
+                        }`}>
+                          {selectedResponder.active !== false ? 'Active' : 'Inactive'}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                  
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <div className="bg-white border border-gray-200 rounded-xl p-6 shadow-sm">
+                      <h4 className="text-lg font-semibold text-gray-900 mb-4 flex items-center">
+                        <FiUser className="w-5 h-5 mr-2 text-red-600" />
+                        Personal Information
+                      </h4>
+                      <div className="space-y-4">
+                        <div>
+                          <span className="text-sm font-medium text-gray-500 block mb-1">Position</span>
+                          <p className="text-gray-900">{selectedResponder.position}</p>
+                        </div>
+                        <div>
+                          <span className="text-sm font-medium text-gray-500 block mb-1">Phone Number</span>
+                          <p className="text-gray-900">{selectedResponder.phoneNumber}</p>
+                        </div>
+                        <div>
+                          <span className="text-sm font-medium text-gray-500 block mb-1">Address</span>
+                          <p className="text-gray-900">{selectedResponder.address}</p>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="bg-white border border-gray-200 rounded-xl p-6 shadow-sm">
+                      <h4 className="text-lg font-semibold text-gray-900 mb-4 flex items-center">
+                        <FiClock className="w-5 h-5 mr-2 text-red-600" />
+                        Station Information
+                      </h4>
+                      <div className="space-y-4">
+                        <div>
+                          <span className="text-sm font-medium text-gray-500 block mb-1">Station</span>
+                          <p className="text-gray-900">{selectedResponder.stationName}</p>
+                        </div>
+                        {selectedResponder.createdAt && (
+                          <div>
+                            <span className="text-sm font-medium text-gray-500 block mb-1">Registered Date</span>
+                            <p className="text-gray-900">{new Date(selectedResponder.createdAt).toLocaleDateString()}</p>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* Edit Profile Modal */}
           {/* History Modal */}
-          {/* Responders Modal */}
-          {/* Responder Profile Modal */}
         </div>
       </div>
     </>
