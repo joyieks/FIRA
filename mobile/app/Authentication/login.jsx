@@ -20,19 +20,41 @@ const LoginComponent = () => {
   const router = useRouter();
   const { login: authLogin, loginCitizen } = useAuth();
 
+  // Clear toast on component mount/unmount
+  useEffect(() => {
+    return () => {
+      setShowToast(false);
+      setToastMessage('');
+    };
+  }, []);
+
   const validateEmail = (text) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(text);
 
   const displayToast = (message, type = 'success') => {
-    setToastMessage(message);
-    setToastType(type);
-    setShowToast(true);
+    // Clear any existing toast first
+    setShowToast(false);
+    setToastMessage('');
+    
+    // Small delay to ensure state is cleared before showing new toast
     setTimeout(() => {
-      setShowToast(false);
-    }, 4000); // Show for 4 seconds for welcome messages
+      setToastMessage(message);
+      setToastType(type);
+      setShowToast(true);
+      
+      // Auto-hide the toast
+      setTimeout(() => {
+        setShowToast(false);
+        setToastMessage('');
+      }, 4000); // Show for 4 seconds
+    }, 100);
   };
 
   const handleLogin = async () => {
     let isValid = true;
+
+    // Clear any existing toast first
+    setShowToast(false);
+    setToastMessage('');
 
     if (!email) {
       setEmailError('Email is required');
@@ -85,7 +107,10 @@ const LoginComponent = () => {
       });
 
       if (authError) {
-        console.error('❌ Supabase Auth error:', authError);
+        // Only log to console in development, don't use console.error to avoid error overlay
+        if (__DEV__) {
+          console.log('🔍 Supabase Auth failed:', authError.message);
+        }
         throw authError;
       }
 
@@ -100,7 +125,9 @@ const LoginComponent = () => {
         .single();
 
       if (citizenError && citizenError.code !== 'PGRST116') {
-        console.error('❌ Error checking citizen_users:', citizenError);
+        if (__DEV__) {
+          console.log('🔍 Error checking citizen_users:', citizenError.message);
+        }
         throw new Error('Error checking user data');
       }
 
@@ -123,19 +150,23 @@ const LoginComponent = () => {
           createdAt: citizenData.created_at
         };
 
-        displayToast(`Welcome to Project FIRA, ${userData.firstName || 'User'}! 👋`, 'success');
+        // Clear any existing toast before login
+        setShowToast(false);
+        setToastMessage('');
         
-        // Store citizen authentication
         await loginCitizen(userData);
         
-        // Let AuthGuard handle the navigation - no manual navigation needed
-        // This prevents the glitching/refreshing effect
+        // Show success toast after successful login
+        displayToast(`Welcome to Project FIRA, ${userData.firstName || 'User'}! 👋`, 'success');
       } else {
         console.log('❌ User not found in citizen_users table');
         displayToast('No user record found. Please register first.', 'error');
       }
     } catch (error) {
-      console.error('❌ Login error:', error);
+      // Only log to console in development, don't use console.error to avoid error overlay
+      if (__DEV__) {
+        console.log('🔍 Login attempt failed:', error.message);
+      }
       
       // Handle specific Supabase Auth errors
       let errorMessage = 'Login failed. Please check your credentials.';
@@ -160,6 +191,10 @@ const LoginComponent = () => {
 
   const handleGoogleSignIn = async () => {
     try {
+      // Clear any existing toast first
+      setShowToast(false);
+      setToastMessage('');
+
       // Generate a random nonce for security
       const nonce = await Crypto.digestStringAsync(
         Crypto.CryptoDigestAlgorithm.SHA256,
@@ -192,7 +227,9 @@ const LoginComponent = () => {
           });
 
           if (authError) {
-            console.error('❌ Supabase Google sign-in error:', authError);
+            if (__DEV__) {
+              console.log('🔍 Supabase Google sign-in failed:', authError.message);
+            }
             throw new Error(`Google sign-in failed: ${authError.message}`);
           }
 
@@ -207,7 +244,9 @@ const LoginComponent = () => {
             .single();
 
           if (citizenError && citizenError.code !== 'PGRST116') {
-            console.error('❌ Error checking citizen_users:', citizenError);
+            if (__DEV__) {
+              console.log('🔍 Error checking citizen_users:', citizenError.message);
+            }
             throw new Error('Error checking user data');
           }
 
@@ -228,8 +267,8 @@ const LoginComponent = () => {
               createdAt: citizenData.created_at
             };
 
-            displayToast(`Welcome back to Project FIRA, ${userData.firstName || 'User'}! 👋`, 'success');
             await loginCitizen(userData);
+            displayToast(`Welcome back to Project FIRA, ${userData.firstName || 'User'}! 👋`, 'success');
           } else {
             // User doesn't exist, create new account
             const newUserData = {
@@ -255,7 +294,9 @@ const LoginComponent = () => {
               .single();
 
             if (insertError) {
-              console.error('❌ Error creating user:', insertError);
+              if (__DEV__) {
+                console.log('🔍 Error creating user:', insertError.message);
+              }
               throw new Error('Failed to create user account');
             }
 
@@ -274,8 +315,8 @@ const LoginComponent = () => {
               createdAt: insertData.created_at
             };
 
-            displayToast(`Welcome to Project FIRA, ${userData.firstName}! Your Google account has been registered. 🎉`, 'success');
             await loginCitizen(userData);
+            displayToast(`Welcome to Project FIRA, ${userData.firstName}! Your Google account has been registered. 🎉`, 'success');
           }
         } else {
           displayToast('No ID token received from Google.', 'error');
@@ -286,7 +327,9 @@ const LoginComponent = () => {
         displayToast('An error occurred during sign-in.', 'error');
       }
     } catch (error) {
-      console.error('Google Sign-In error:', error);
+      if (__DEV__) {
+        console.log('🔍 Google Sign-In attempt failed:', error.message);
+      }
       displayToast(error.message, 'error');
     }
   };
@@ -405,7 +448,7 @@ const LoginComponent = () => {
       </View>
 
       {/* Toast Notification */}
-      {showToast && (
+      {showToast && toastMessage ? (
         <View className="absolute top-20 left-4 right-4 z-50">
           <View className={`rounded-xl p-4 flex-row items-center shadow-xl ${
             toastType === 'success' ? 'bg-gradient-to-r from-green-500 to-green-600' : 'bg-red-500'
@@ -420,7 +463,7 @@ const LoginComponent = () => {
             </Text>
           </View>
         </View>
-      )}
+      ) : null}
     </KeyboardAvoidingView>
   );
 };

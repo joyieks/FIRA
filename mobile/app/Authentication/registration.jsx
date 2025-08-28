@@ -4,7 +4,6 @@ import { useRouter } from 'expo-router';
 import { AntDesign } from '@expo/vector-icons';
 import { supabase } from '../config/supabase';
 import { WebBrowser, Crypto, googleSignInConfig } from '../config/googleSignIn';
-import AuthGuard from '../components/AuthGuard';
 
 const RegistrationComponent = () => {
   const router = useRouter();
@@ -169,7 +168,7 @@ const RegistrationComponent = () => {
       Alert.alert('Invalid Code', 'Please enter the correct verification code.');
       return;
     }
-
+  
     try {
       setIsLoading(true);
       
@@ -186,18 +185,28 @@ const RegistrationComponent = () => {
             phone: formData.phoneNumber,
             user_type: 'citizen'
           },
-          emailRedirectTo: null,
-          emailConfirm: false
+          emailRedirectTo: null
         }
       });
-
+  
       if (authError) {
         console.error('❌ Supabase Auth error:', authError);
         throw new Error(`Failed to create auth account: ${authError.message}`);
       }
-
+  
       console.log('✅ Supabase Auth account created:', authData.user.id);
-
+  
+      // Confirm the user's email through our custom database function
+      const { error: confirmError } = await supabase.rpc('confirm_user_email', {
+        user_id: authData.user.id
+      });
+  
+      if (confirmError) {
+        console.error('⚠️ Could not confirm email:', confirmError);
+      } else {
+        console.log('✅ Email confirmed successfully');
+      }
+  
       // Create user data for citizen_users table
       const userData = {
         id: authData.user.id,
@@ -205,33 +214,52 @@ const RegistrationComponent = () => {
         last_name: formData.lastName,
         email: formData.email.toLowerCase(),
         phone: formData.phoneNumber,
-        phone_number: formData.phoneNumber,
         display_name: `${formData.firstName} ${formData.lastName}`,
         status: 'active',
         reports: 0,
         created_at: new Date().toISOString(),
         is_verified: true,
       };
-
+  
       // Insert into Supabase citizen_users table
       const { data, error } = await supabase
         .from('citizen_users')
         .insert([userData])
         .select();
-
+  
       if (error) {
         console.error('❌ Supabase insert error:', error);
         throw new Error(`Failed to create user profile: ${error.message}`);
       }
-
+  
       console.log('✅ User profile created in Supabase:', data[0]);
-
+      
+      // Hide verification screen immediately
+      setShowVerification(false);
+      
+      // Show success message and redirect to login instead of trying to maintain session
       Alert.alert(
-        'Account Created Successfully! 🎉',
-        'Your account has been verified and created. You can now login.',
+        'Account Created Successfully!',
+        'Your account has been created and verified. Please log in to continue.',
         [{ 
           text: 'Login Now', 
-          onPress: () => router.push('/Authentication/login') 
+          onPress: () => {
+            // Clear form data
+            setFormData({
+              firstName: '',
+              lastName: '',
+              email: '',
+              password: '',
+              confirmPassword: '',
+              phoneNumber: '',
+              agreeTerms: false,
+            });
+            setUserInputCode('');
+            setVerificationCode('');
+            
+            // Navigate to login
+            router.replace('/Authentication/login');
+          }
         }]
       );
       
@@ -242,7 +270,7 @@ const RegistrationComponent = () => {
       setIsLoading(false);
     }
   };
-
+  
   const handleResendCode = async () => {
     if (resendCountdown > 0) return;
 
@@ -311,24 +339,23 @@ const RegistrationComponent = () => {
           }
 
           if (citizenData) {
-            // User exists, just sign in
+            // User exists, redirect to login to use normal flow
             Alert.alert(
-              'Welcome Back! 👋',
-              'You are already registered. Please log in.',
+              'Welcome Back!',
+              'You are already registered. Please use the regular login.',
               [{ 
-                text: 'Login', 
-                onPress: () => router.push('/Authentication/login') 
+                text: 'Go to Login', 
+                onPress: () => router.replace('/Authentication/login') 
               }]
             );
           } else {
-            // User doesn't exist, create new account
+            // User doesn't exist, create new account and redirect to login
             const newUserData = {
               id: user.id,
               first_name: user.user_metadata?.full_name?.split(' ')[0] || 'Google',
               last_name: user.user_metadata?.full_name?.split(' ').slice(1).join(' ') || 'User',
               email: user.email,
               phone: user.phone || '',
-              phone_number: user.phone || '',
               display_name: user.user_metadata?.full_name || 'Google User',
               status: 'active',
               reports: 0,
@@ -350,11 +377,11 @@ const RegistrationComponent = () => {
             }
 
             Alert.alert(
-              'Account Created Successfully! 🎉',
-              `Welcome to Project FIRA, ${newUserData.first_name}! Your Google account has been registered.`,
+              'Account Created Successfully!',
+              `Welcome to Project FIRA, ${newUserData.first_name}! Please log in to continue.`,
               [{ 
-                text: 'Continue', 
-                onPress: () => router.replace('/Screens/CitizenScreen') 
+                text: 'Login Now', 
+                onPress: () => router.replace('/Authentication/login')
               }]
             );
           }
@@ -550,12 +577,9 @@ const RegistrationComponent = () => {
   );
 };
 
+// Remove AuthGuard wrapper to prevent session interference during registration
 const registration = () => {
-  return (
-    <AuthGuard>
-      <RegistrationComponent />
-    </AuthGuard>
-  );
+  return <RegistrationComponent />;
 };
 
 export default registration;

@@ -3,8 +3,7 @@ import { View, Text, ScrollView, TouchableOpacity, Image, Modal, Alert, TextInpu
 import { MaterialIcons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
 import * as Location from 'expo-location';
-import { auth, db } from '../../../config/firebase';
-import { doc, getDoc } from 'firebase/firestore';
+import { supabase } from '../../../config/supabase'; // <-- Make sure this is your Supabase client
 
 // TODO: Replace with your deployed API endpoint
 const API_URL = 'https://fire-predictor-api-production.up.railway.app/predict';
@@ -20,34 +19,58 @@ const CStatus = () => {
   const [yourReports, setYourReports] = useState([]);
   const [nearbyReports, setNearbyReports] = useState([]);
 
-  // Authentication state listener - This fixes the main issue
+  // Supabase Auth state listener
   useEffect(() => {
-    const unsubscribe = auth.onAuthStateChanged(async (user) => {
-      console.log('Auth state changed:', user ? user.uid : 'No user');
-      
-      if (user) {
-        try {
-          const userDoc = await getDoc(doc(db, 'citizenUsers', user.uid));
-          if (userDoc.exists()) {
-            const userData = { ...userDoc.data(), uid: user.uid };
-            console.log('User data loaded:', userData);
-            setCurrentUser(userData);
-          } else {
-            console.log('User document not found, using basic user data');
-            setCurrentUser({ uid: user.uid });
-          }
-        } catch (error) {
-          console.log('Error getting user info:', error);
-          setCurrentUser({ uid: user.uid });
+    let isMounted = true;
+    const getUser = async () => {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (user && isMounted) {
+        // Optionally fetch more user data from your citizen_users table
+        const { data: userData, error } = await supabase
+          .from('citizen_users')
+          .select('*')
+          .eq('id', user.id)
+          .single();
+        if (userData) {
+          setCurrentUser({
+            uid: user.id,
+            email: user.email,
+            ...user.user_metadata,
+            ...userData,
+          });
+        } else {
+          setCurrentUser({
+            uid: user.id,
+            email: user.email,
+            ...user.user_metadata,
+          });
         }
-      } else {
-        console.log('No user authenticated');
+        setIsLoading(false);
+      } else if (isMounted) {
         setCurrentUser(null);
         setIsLoading(false);
       }
+    };
+
+    getUser();
+
+    // Listen for auth state changes
+    const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (session?.user) {
+        setCurrentUser({
+          uid: session.user.id,
+          email: session.user.email,
+          ...session.user.user_metadata,
+        });
+      } else {
+        setCurrentUser(null);
+      }
     });
 
-    return () => unsubscribe();
+    return () => {
+      isMounted = false;
+      listener?.subscription.unsubscribe();
+    };
   }, []);
 
   // Load reports when user is available
