@@ -31,15 +31,15 @@ const Overview = () => {
         // Transform API data to match the expected format
         const transformedReports = data.map(report => ({
           id: report.id,
-          time: formatTime(report.timestamp),
+          time: formatTime(report.formatted_timestamp || report.created_at),
           reporter: report.reporter || 'Unknown Reporter',
-          location: report.geotag_location || 'Location unavailable',
+          location: report.address || report.geotag_location || 'Location unavailable',
           status: determineStatus(report.prediction),
-          fireAlarmLevel: report.alarm_level || 'Unknown',
+          fireAlarmLevel: report.recommended_alarm_level || report.alarm_level || 'Unknown',
           suggestedAlarm: determineSuggestedAlarm(report.number_of_structures_on_fire),
           description: report.cause_of_fire || 'No cause specified',
-          picture: report.photo_url || '/burnhouse.jpg',
-          minutesAgo: calculateMinutesAgo(report.timestamp),
+          picture: report.image_url,
+          minutesAgo: calculateMinutesAgo(report.created_at || report.timestamp),
           // Additional fields from API
           prediction: report.prediction,
           confidence: report.confidence,
@@ -48,7 +48,12 @@ const Overview = () => {
           smokeConfidence: report.smoke_confidence,
           numberOfStructures: report.number_of_structures_on_fire,
           reporterId: report.reporterId,
-          timestamp: report.timestamp
+          timestamp: report.created_at || report.timestamp,
+          // Location data
+          latitude: report.latitude,
+          longitude: report.longitude,
+          address: report.address,
+          geotag_location: report.geotag_location
         }));
         
         console.log('Transformed reports:', transformedReports);
@@ -72,6 +77,11 @@ const Overview = () => {
   const formatTime = (timestamp) => {
     if (!timestamp) return 'Unknown';
     try {
+      // Handle formatted_timestamp from API (already formatted)
+      if (typeof timestamp === 'string' && !timestamp.includes('T') && !timestamp.includes('Z')) {
+        return timestamp;
+      }
+      // Handle ISO timestamps
       const date = new Date(timestamp);
       return date.toLocaleTimeString('en-US', {
         hour: '2-digit',
@@ -87,7 +97,9 @@ const Overview = () => {
   const calculateMinutesAgo = (timestamp) => {
     if (!timestamp) return 0;
     try {
+      // Handle both ISO timestamps and formatted timestamps
       const date = new Date(timestamp);
+      if (isNaN(date.getTime())) return 0;
       const now = new Date();
       const diffMs = now - date;
       return Math.floor(diffMs / (1000 * 60));
@@ -447,7 +459,14 @@ const Overview = () => {
                   {/* Location */}
                   <div>
                     <label className="block text-lg font-medium text-gray-700 mb-2">Location:</label>
-                    <span className="text-xl font-semibold text-gray-900">{selectedReport.location}</span>
+                    <div className="space-y-2">
+                      <span className="text-xl font-semibold text-gray-900">{selectedReport.location}</span>
+                      {selectedReport.geotag_location && selectedReport.geotag_location !== selectedReport.location && (
+                        <div className="text-sm text-gray-500">
+                          Coordinates: {selectedReport.geotag_location}
+                        </div>
+                      )}
+                    </div>
                   </div>
 
                   {/* Cause of Fire */}
@@ -505,7 +524,11 @@ const Overview = () => {
                   <div>
                     <label className="block text-lg font-medium text-gray-700 mb-2">Full Timestamp:</label>
                     <span className="text-lg text-gray-900">
-                      {selectedReport.timestamp ? new Date(selectedReport.timestamp).toLocaleString() : 'Unknown'}
+                      {selectedReport.timestamp ? 
+                        (selectedReport.timestamp.includes('T') || selectedReport.timestamp.includes('Z') ? 
+                          new Date(selectedReport.timestamp).toLocaleString() : 
+                          selectedReport.timestamp) : 
+                        'Unknown'}
                     </span>
                   </div>
                 </div>
