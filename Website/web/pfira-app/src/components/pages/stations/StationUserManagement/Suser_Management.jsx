@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { FiUsers, FiUserPlus, FiEdit2, FiUserX, FiSearch, FiLoader } from 'react-icons/fi';
+import { FiUsers, FiUserPlus, FiEdit2, FiUserX, FiSearch, FiLoader, FiEye } from 'react-icons/fi';
 import { supabase } from '../../../../config/supabase';
+import emailjs from '@emailjs/browser';
 
 /*
  * IMPORTANT: Database Schema Requirements
@@ -25,7 +26,15 @@ const cebuLocations = [
 ];
 
 const Suser_Management = () => {
+  // Initialize EmailJS
+  useEffect(() => {
+    emailjs.init('hDU2Ar_g1pr7Cpg-S');
+    console.log('EmailJS initialized with key:', 'hDU2Ar_g1pr7Cpg-S');
+  }, []);
+
   const [showAddUser, setShowAddUser] = useState(false);
+  const [showProfileModal, setShowProfileModal] = useState(false);
+  const [selectedResponder, setSelectedResponder] = useState(null);
   const [editId, setEditId] = useState(null);
   const [responders, setResponders] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -139,6 +148,9 @@ const Suser_Management = () => {
           if (!passwordUpdated) {
             return; // Stop if password update failed
           }
+          
+          // Send password update email
+          await sendPasswordUpdateEmail(form.email, form.firstName, form.lastName, form.password, form.userPosition);
         }
         
         setResponders(responders.map(r => 
@@ -147,7 +159,11 @@ const Suser_Management = () => {
             : r
         ));
         setEditId(null);
-        alert('Responder updated successfully');
+        
+        const message = form.password && form.password.trim() !== '' 
+          ? 'Responder updated successfully! Password update email sent.'
+          : 'Responder updated successfully!';
+        alert(message);
       } else {
         // Create new responder with Supabase Auth
         const { data: authData, error: authError } = await supabase.auth.signUp({
@@ -189,9 +205,12 @@ const Suser_Management = () => {
           return;
         }
 
+        // Send welcome email with credentials
+        await sendWelcomeEmail(form.email, form.firstName, form.lastName, form.password, form.userPosition);
+        
         // Refresh the responders list
         await fetchResponders();
-        alert('Responder created successfully!');
+        alert('Responder created successfully! Welcome email sent with login credentials.');
       }
       
       setForm({ firstName: '', middleName: '', lastName: '', email: '', phone: '', userPosition: '', password: '' });
@@ -202,6 +221,11 @@ const Suser_Management = () => {
     } finally {
       setSubmitting(false);
     }
+  };
+
+  const handleViewProfile = (responder) => {
+    setSelectedResponder(responder);
+    setShowProfileModal(true);
   };
 
   const handleEdit = (responder) => {
@@ -248,6 +272,73 @@ const Suser_Management = () => {
     }
   };
 
+  const sendWelcomeEmail = async (email, firstName, lastName, password, userPosition) => {
+    try {
+      console.log('🚀 Starting email send process for responder...');
+      console.log('📧 EmailJS configuration:', {
+        serviceId: 'service_717ciwa',
+        templateId: 'template_vfzvmj2',
+        publicKey: 'hDU2Ar_g1pr7Cpg-S'
+      });
+      
+      // EmailJS configuration
+      const serviceId = 'service_717ciwa'; // Your EmailJS service ID
+      const templateId = 'template_vfzvmj2'; // Your EmailJS template ID
+      const publicKey = 'hDU2Ar_g1pr7Cpg-S'; // Your EmailJS public key
+      
+      const templateParams = {
+        to_name: `${firstName} ${lastName}`,
+        user_email: email,
+        user_password: password,
+        user_position: userPosition
+      };
+
+      console.log('📋 Template parameters:', templateParams);
+      console.log('📤 Attempting to send email...');
+
+      const result = await emailjs.send(serviceId, templateId, templateParams, publicKey);
+      console.log('✅ Welcome email sent successfully:', result);
+      console.log('📬 EmailJS response:', result);
+      
+    } catch (error) {
+      console.error('❌ Error sending welcome email:', error);
+      console.error('❌ Error details:', {
+        message: error.message,
+        code: error.code,
+        stack: error.stack
+      });
+      // Don't throw error here as the responder was still created successfully
+      // Email failed but responder was created - no user notification
+    }
+  };
+
+  const sendPasswordUpdateEmail = async (email, firstName, lastName, newPassword, userPosition) => {
+    try {
+      console.log('🚀 Starting password update email process...');
+      
+      // EmailJS configuration
+      const serviceId = 'service_717ciwa';
+      const templateId = 'template_vfzvmj2'; // Using same template for now
+      const publicKey = 'hDU2Ar_g1pr7Cpg-S';
+      
+      const templateParams = {
+        to_name: `${firstName} ${lastName}`,
+        user_email: email,
+        user_password: newPassword,
+        user_position: userPosition
+      };
+
+      console.log('📋 Password update template parameters:', templateParams);
+
+      const result = await emailjs.send(serviceId, templateId, templateParams, publicKey);
+      console.log('✅ Password update email sent successfully:', result);
+      
+    } catch (error) {
+      console.error('❌ Error sending password update email:', error);
+      // Don't throw error here as the password was still updated successfully
+    }
+  };
+
   const handleUpdatePassword = async (id, newPassword) => {
     try {
       // Update password in Supabase Auth
@@ -261,7 +352,6 @@ const Suser_Management = () => {
         return false;
       }
 
-      alert('Password updated successfully');
       return true;
     } catch (error) {
       console.error('Error updating password:', error);
@@ -361,22 +451,29 @@ const Suser_Management = () => {
                         <td className="px-6 py-4 whitespace-nowrap text-gray-500">{responder.email}</td>
                         <td className="px-6 py-4 whitespace-nowrap text-gray-500">{responder.phone}</td>
                         <td className="px-6 py-4 whitespace-nowrap text-gray-500">{responder.user_position}</td>
-                        <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium flex gap-2">
-                          <button
-                            onClick={() => handleEdit(responder)}
-                            className="text-blue-600 hover:text-blue-900"
-                            title="Edit"
-                          >
-                            <FiEdit2 />
-                          </button>
-                          <button
-                            onClick={() => handleDelete(responder.id)}
-                            className="text-red-600 hover:text-red-900"
-                            title="Delete"
-                          >
-                            <FiUserX />
-                          </button>
-                        </td>
+                                                 <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium flex gap-2">
+                           <button
+                             onClick={() => handleViewProfile(responder)}
+                             className="text-green-600 hover:text-green-900"
+                             title="View Profile"
+                           >
+                             <FiEye />
+                           </button>
+                           <button
+                             onClick={() => handleEdit(responder)}
+                             className="text-blue-600 hover:text-blue-900"
+                             title="Edit"
+                           >
+                             <FiEdit2 />
+                           </button>
+                           <button
+                             onClick={() => handleDelete(responder.id)}
+                             className="text-red-600 hover:text-red-900"
+                             title="Delete"
+                           >
+                             <FiUserX />
+                           </button>
+                         </td>
                       </tr>
                     ))
                   )}
@@ -510,10 +607,126 @@ const Suser_Management = () => {
               </form>
             </div>
           </div>
-        )}
-      </div>
-    </div>
-  );
-};
+                 )}
+
+         {/* Profile Modal */}
+         {showProfileModal && selectedResponder && (
+           <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
+             <div className="bg-white rounded-xl shadow-xl max-w-2xl w-full p-6">
+               <div className="flex justify-between items-center mb-6">
+                 <h3 className="text-xl font-semibold text-gray-900">Responder Profile</h3>
+                 <button
+                   onClick={() => { setShowProfileModal(false); setSelectedResponder(null); }}
+                   className="text-gray-400 hover:text-gray-600"
+                 >
+                   <FiUserX className="w-6 h-6" />
+                 </button>
+               </div>
+
+               <div className="space-y-6">
+                 {/* Profile Header */}
+                 <div className="bg-gradient-to-r from-red-50 to-orange-50 rounded-xl p-6 border border-red-100">
+                   <div className="flex items-center space-x-6">
+                     <div className="w-20 h-20 bg-gradient-to-br from-red-500 to-red-600 rounded-full flex items-center justify-center shadow-lg">
+                       <FiUsers className="w-10 h-10 text-white" />
+                     </div>
+                     <div>
+                       <h3 className="text-2xl font-bold text-gray-900 mb-2">
+                         {selectedResponder.first_name} {selectedResponder.middle_name ? selectedResponder.middle_name + ' ' : ''}{selectedResponder.last_name}
+                       </h3>
+                       <p className="text-gray-600 mb-1">{selectedResponder.email}</p>
+                       <span className="inline-flex items-center px-3 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800 border border-green-200">
+                         Active Responder
+                       </span>
+                     </div>
+                   </div>
+                 </div>
+                 
+                 {/* Profile Details */}
+                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                   <div className="bg-white border border-gray-200 rounded-xl p-6 shadow-sm">
+                     <h4 className="text-lg font-semibold text-gray-900 mb-4 flex items-center">
+                       <FiUsers className="w-5 h-5 mr-2 text-red-600" />
+                       Personal Information
+                     </h4>
+                     <div className="space-y-4">
+                       <div>
+                         <span className="text-sm font-medium text-gray-500 block mb-1">Full Name</span>
+                         <p className="text-gray-900">
+                           {selectedResponder.first_name} {selectedResponder.middle_name ? selectedResponder.middle_name + ' ' : ''}{selectedResponder.last_name}
+                         </p>
+                       </div>
+                       <div>
+                         <span className="text-sm font-medium text-gray-500 block mb-1">Email Address</span>
+                         <p className="text-gray-900">{selectedResponder.email}</p>
+                       </div>
+                       <div>
+                         <span className="text-sm font-medium text-gray-500 block mb-1">Phone Number</span>
+                         <p className="text-gray-900">{selectedResponder.phone}</p>
+                       </div>
+                       <div>
+                         <span className="text-sm font-medium text-gray-500 block mb-1">Position</span>
+                         <p className="text-gray-900">{selectedResponder.user_position}</p>
+                       </div>
+                     </div>
+                   </div>
+
+                   <div className="bg-white border border-gray-200 rounded-xl p-6 shadow-sm">
+                     <h4 className="text-lg font-semibold text-gray-900 mb-4 flex items-center">
+                       <FiLoader className="w-5 h-5 mr-2 text-red-600" />
+                       Account Information
+                     </h4>
+                     <div className="space-y-4">
+                       <div>
+                         <span className="text-sm font-medium text-gray-500 block mb-1">Responder ID</span>
+                         <p className="text-gray-900 font-mono text-sm">{selectedResponder.id}</p>
+                       </div>
+                       <div>
+                         <span className="text-sm font-medium text-gray-500 block mb-1">Station ID</span>
+                         <p className="text-gray-900 font-mono text-sm">{selectedResponder.station_id}</p>
+                       </div>
+                       <div>
+                         <span className="text-sm font-medium text-gray-500 block mb-1">Created Date</span>
+                         <p className="text-gray-900">
+                           {selectedResponder.created_at ? new Date(selectedResponder.created_at).toLocaleDateString() : 'Not available'}
+                         </p>
+                       </div>
+                       <div>
+                         <span className="text-sm font-medium text-gray-500 block mb-1">Last Updated</span>
+                         <p className="text-gray-900">
+                           {selectedResponder.updated_at ? new Date(selectedResponder.updated_at).toLocaleDateString() : 'Not available'}
+                         </p>
+                       </div>
+                     </div>
+                   </div>
+                 </div>
+
+                 {/* Action Buttons */}
+                 <div className="flex justify-end space-x-4 pt-6 border-t border-gray-200">
+                   <button
+                     onClick={() => {
+                       setShowProfileModal(false);
+                       setSelectedResponder(null);
+                       handleEdit(selectedResponder);
+                     }}
+                     className="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors font-medium"
+                   >
+                     Edit Profile
+                   </button>
+                   <button
+                     onClick={() => { setShowProfileModal(false); setSelectedResponder(null); }}
+                     className="px-6 py-3 bg-gray-500 text-white rounded-lg hover:bg-gray-600 transition-colors font-medium"
+                   >
+                     Close
+                   </button>
+                 </div>
+               </div>
+             </div>
+           </div>
+         )}
+       </div>
+     </div>
+   );
+ };
 
 export default Suser_Management;

@@ -1,7 +1,5 @@
 import React, { useState, useEffect } from 'react';
 import { FiUsers, FiHome, FiUserCheck, FiUserX, FiEdit2, FiTrash2, FiSearch, FiChevronDown, FiEye, FiFileText, FiX, FiPlus, FiClock, FiUser, FiLoader } from 'react-icons/fi';
-import { db } from '../../../../config/firebase';
-import { collection, getDocs, addDoc, doc, setDoc, query, where } from "firebase/firestore";
 import { supabase } from '../../../../config/supabase';
 import emailjs from '@emailjs/browser';
 
@@ -50,22 +48,29 @@ const Auser_management = () => {
     const fetchUsers = async () => {
       setLoading(true);
       try {
-        // Fetch citizens
-        const citizenSnapshot = await getDocs(collection(db, "citizenUsers"));
-        const citizens = citizenSnapshot.docs.map(doc => {
-          const data = doc.data();
-          console.log('Citizen data from Firebase:', data); // Debug log
+        // Fetch citizens from Supabase
+        const { data: citizensData, error: citizensError } = await supabase
+          .from('citizen_users')
+          .select('*');
+
+        if (citizensError) {
+          console.error('Error fetching citizens from Supabase:', citizensError);
+          throw new Error(`Supabase error: ${citizensError.message}`);
+        }
+
+        const citizens = citizensData.map(data => {
+          console.log('Citizen data from Supabase:', data); // Debug log
           
-          // Construct full name from firstName and lastName
+          // Construct full name from first_name and last_name
           let fullName = 'Unknown User';
-          if (data.firstName && data.lastName) {
-            fullName = `${data.firstName} ${data.lastName}`;
-          } else if (data.firstName) {
-            fullName = data.firstName;
-          } else if (data.lastName) {
-            fullName = data.lastName;
-          } else if (data.displayName) {
-            fullName = data.displayName;
+          if (data.first_name && data.last_name) {
+            fullName = `${data.first_name} ${data.last_name}`;
+          } else if (data.first_name) {
+            fullName = data.first_name;
+          } else if (data.last_name) {
+            fullName = data.last_name;
+          } else if (data.display_name) {
+            fullName = data.display_name;
           } else if (data.email) {
             // Extract name from email as fallback
             const emailName = data.email.split('@')[0];
@@ -73,14 +78,22 @@ const Auser_management = () => {
           }
           
           return {
-            id: doc.id,
-            ...data,
+            id: data.id,
+            firstName: data.first_name,
+            lastName: data.last_name,
+            email: data.email,
+            phoneNumber: data.phone_number,
+            displayName: data.display_name,
+            status: data.status || 'active',
+            reports: data.reports || 0,
+            isVerified: data.is_verified || false,
+            userType: data.user_type || 'citizen',
+            createdAt: data.created_at,
+            updatedAt: data.updated_at,
             name: fullName,
             // Add default values for missing fields
-            lastActivity: data.lastActivity || data.createdAt ? 'Recently active' : 'Unknown',
-            reports: data.reports || 0,
-            status: data.status || 'active',
-            phone: data.phone || data.phoneNumber || 'No phone'
+            lastActivity: data.created_at ? 'Recently active' : 'Unknown',
+            phone: data.phone_number || 'No phone'
           };
         });
 
@@ -114,10 +127,7 @@ const Auser_management = () => {
           };
         });
 
-        // Fetch responder counts for each station
-        const responderSnapshot = await getDocs(collection(db, "responderUsers"));
-
-        // First, let's also check the Supabase responders table
+        // Fetch responder counts for each station from Supabase
         const { data: supabaseResponders, error: respondersError } = await supabase
           .from('responders')
           .select('station_id');
@@ -126,7 +136,6 @@ const Auser_management = () => {
           // Count responders by station_id
           const responderCounts = {};
           
-          // Count from Supabase responders table (this is what you need)
           supabaseResponders.forEach(responder => {
             if (responder.station_id) {
               responderCounts[responder.station_id] = (responderCounts[responder.station_id] || 0) + 1;
@@ -138,18 +147,10 @@ const Auser_management = () => {
             station.responders = responderCounts[station.id] || 0;
           });
         } else {
-          // Fallback to Firebase if needed (though you should migrate fully to Supabase)
-          const responderCounts = {};
-          
-          responderSnapshot.docs.forEach(doc => {
-            const responderData = doc.data();
-            if (responderData.stationName) {
-              responderCounts[responderData.stationName] = (responderCounts[responderData.stationName] || 0) + 1;
-            }
-          });
-          
+          console.error('Error fetching responders:', respondersError);
+          // Set default responder count to 0
           stations.forEach(station => {
-            station.responders = responderCounts[station.stationName] || 0;
+            station.responders = 0;
           });
         }
         
@@ -165,21 +166,46 @@ const Auser_management = () => {
     fetchUsers();
   }, []);
 
-  const toggleStatus = (type, id) => {
-    setUsers(prev => ({
-      ...prev,
-      [type]: prev[type].map(user => 
-        user.id === id ? { ...user, status: user.status === 'active' ? 'inactive' : 'active' } : user
-      )
-    }));
-  };
 
-  const handleDelete = (type, id) => {
+
+  const handleDelete = async (type, id) => {
     if (window.confirm('Are you sure you want to delete this user?')) {
-      setUsers(prev => ({
-        ...prev,
-        [type]: prev[type].filter(user => user.id !== id)
-      }));
+      try {
+        if (type === 'citizens') {
+          // Delete citizen from Supabase
+          const { error } = await supabase
+            .from('citizen_users')
+            .delete()
+            .eq('id', id);
+
+          if (error) {
+            console.error('Error deleting citizen:', error);
+            throw new Error(`Failed to delete citizen: ${error.message}`);
+          }
+        } else {
+          // Delete station from Supabase
+          const { error } = await supabase
+            .from('station_users')
+            .delete()
+            .eq('id', id);
+
+          if (error) {
+            console.error('Error deleting station:', error);
+            throw new Error(`Failed to delete station: ${error.message}`);
+          }
+        }
+
+        // Update local state
+        setUsers(prev => ({
+          ...prev,
+          [type]: prev[type].filter(user => user.id !== id)
+        }));
+
+        alert(`${type === 'citizens' ? 'Citizen' : 'Station'} deleted successfully!`);
+      } catch (error) {
+        console.error('Error deleting user:', error);
+        alert(`Failed to delete ${type === 'citizens' ? 'citizen' : 'station'}: ${error.message}`);
+      }
     }
   };
 
@@ -218,7 +244,26 @@ const Auser_management = () => {
       console.log('Saving profile:', editFormData);
       
       if (activeTab === 'citizens') {
-        // Update citizen profile
+        // Update citizen profile in Supabase
+        const { data, error } = await supabase
+          .from('citizen_users')
+          .update({
+            first_name: editFormData.firstName,
+            last_name: editFormData.lastName,
+            email: editFormData.email,
+            phone_number: editFormData.phone,
+            display_name: `${editFormData.firstName} ${editFormData.lastName}`.trim(),
+            updated_at: new Date().toISOString()
+          })
+          .eq('id', selectedCitizen.id)
+          .select();
+
+        if (error) {
+          console.error('Error updating citizen in Supabase:', error);
+          throw new Error(`Failed to update citizen: ${error.message}`);
+        }
+
+        // Update local state
         setUsers(prev => ({
           ...prev,
           citizens: prev.citizens.map(citizen => 
@@ -226,13 +271,35 @@ const Auser_management = () => {
               ? { 
                   ...citizen, 
                   ...editFormData,
-                  name: `${editFormData.firstName} ${editFormData.lastName}`.trim()
+                  name: `${editFormData.firstName} ${editFormData.lastName}`.trim(),
+                  firstName: editFormData.firstName,
+                  lastName: editFormData.lastName,
+                  phoneNumber: editFormData.phone
                 }
               : citizen
           )
         }));
       } else {
-        // Update station profile
+        // Update station profile in Supabase
+        const { data, error } = await supabase
+          .from('station_users')
+          .update({
+            station_name: editFormData.stationName,
+            address: editFormData.address,
+            phone: editFormData.number,
+            position: editFormData.position,
+            email: editFormData.email,
+            updated_at: new Date().toISOString()
+          })
+          .eq('id', selectedCitizen.id)
+          .select();
+
+        if (error) {
+          console.error('Error updating station in Supabase:', error);
+          throw new Error(`Failed to update station: ${error.message}`);
+        }
+
+        // Update local state
         setUsers(prev => ({
           ...prev,
           stations: prev.stations.map(station => 
@@ -290,7 +357,7 @@ const Auser_management = () => {
     setShowRespondersModal(true);
     
     try {
-      // First try to fetch from Supabase responders table
+      // Fetch from Supabase responders table
       const { data: supabaseResponders, error: supabaseError } = await supabase
         .from('responders')
         .select('*')
@@ -323,28 +390,8 @@ const Auser_management = () => {
           )
         }));
       } else {
-        // Fallback to Firebase query if Supabase fails
-        const responderQuery = query(
-          collection(db, "responderUsers"), 
-          where("stationName", "==", station.stationName)
-        );
-        const responderSnapshot = await getDocs(responderQuery);
-        
-        const responders = responderSnapshot.docs.map(doc => ({
-          id: doc.id,
-          ...doc.data()
-        }));
-        
-        setStationResponders(responders);
-        
-        setUsers(prev => ({
-          ...prev,
-          stations: prev.stations.map(s => 
-            s.id === station.id 
-              ? { ...s, responders: responders.length }
-              : s
-          )
-        }));
+        console.error('Error fetching responders:', supabaseError);
+        setStationResponders([]);
       }
     } catch (error) {
       console.error('Error fetching station responders:', error);
@@ -354,10 +401,57 @@ const Auser_management = () => {
     }
   };
 
-  const handleToggleStatus = (type, id) => {
-    const action = users[type].find(user => user.id === id)?.status === 'active' ? 'disable' : 'enable';
+  const handleToggleStatus = async (type, id) => {
+    const user = users[type].find(user => user.id === id);
+    const action = user?.status === 'active' ? 'disable' : 'enable';
+    
     if (window.confirm(`Are you sure you want to ${action} this ${type === 'citizens' ? 'citizen' : 'station'}?`)) {
-      toggleStatus(type, id);
+      try {
+        const newStatus = user?.status === 'active' ? 'inactive' : 'active';
+        
+        if (type === 'citizens') {
+          // Update citizen status in Supabase
+          const { error } = await supabase
+            .from('citizen_users')
+            .update({ 
+              status: newStatus,
+              updated_at: new Date().toISOString()
+            })
+            .eq('id', id);
+
+          if (error) {
+            console.error('Error updating citizen status:', error);
+            throw new Error(`Failed to update citizen status: ${error.message}`);
+          }
+        } else {
+          // Update station status in Supabase
+          const { error } = await supabase
+            .from('station_users')
+            .update({ 
+              status: newStatus,
+              updated_at: new Date().toISOString()
+            })
+            .eq('id', id);
+
+          if (error) {
+            console.error('Error updating station status:', error);
+            throw new Error(`Failed to update station status: ${error.message}`);
+          }
+        }
+
+        // Update local state
+        setUsers(prev => ({
+          ...prev,
+          [type]: prev[type].map(user => 
+            user.id === id ? { ...user, status: newStatus } : user
+          )
+        }));
+
+        alert(`${type === 'citizens' ? 'Citizen' : 'Station'} ${action}d successfully!`);
+      } catch (error) {
+        console.error('Error toggling status:', error);
+        alert(`Failed to ${action} ${type === 'citizens' ? 'citizen' : 'station'}: ${error.message}`);
+      }
     }
   };
 
@@ -565,26 +659,15 @@ const Auser_management = () => {
         
         console.log('✅ Responder counts refreshed from Supabase');
       } else {
-        // Fallback to Firebase
-        const responderSnapshot = await getDocs(collection(db, "responderUsers"));
-        const responderCounts = {};
-        
-        responderSnapshot.docs.forEach(doc => {
-          const responderData = doc.data();
-          if (responderData.stationName) {
-            responderCounts[responderData.stationName] = (responderCounts[responderData.stationName] || 0) + 1;
-          }
-        });
-        
+        console.error('❌ Error fetching responders:', error);
+        // Set all responder counts to 0
         setUsers(prev => ({
           ...prev,
           stations: prev.stations.map(station => ({
             ...station,
-            responders: responderCounts[station.stationName] || 0
+            responders: 0
           }))
         }));
-        
-        console.log('✅ Responder counts refreshed from Firebase');
       }
     } catch (error) {
       console.error('❌ Error refreshing responder counts:', error);

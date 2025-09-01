@@ -1,20 +1,74 @@
-import React, { useState } from 'react';
-import { FiEdit, FiSettings, FiLock, FiUnlock, FiSave, FiCamera, FiUser } from 'react-icons/fi';
+import React, { useState, useEffect } from 'react';
+import { FiEdit, FiSettings, FiLock, FiUnlock, FiSave, FiCamera, FiUser, FiLoader } from 'react-icons/fi';
+import { supabase } from '../../../../config/supabase';
 import Station_ChangePass from './Station_ChangePass.jsx';
 
 const Station_Profile = () => {
   const [isEditing, setIsEditing] = useState(false);
   const [isDisabled, setIsDisabled] = useState(false);
   const [showChangePassword, setShowChangePassword] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
   const [profileData, setProfileData] = useState({
-    name: 'Station User',
-    email: 'station@cebucity.gov.ph',
-    position: 'Responder',
-    department: 'Cebu City DRRMO',
-    mobile: '9123456789',
-    profileImage: null,
-    lastLogin: 'Today at 2:45 PM'
+    id: '',
+    station_name: '',
+    email: '',
+    address: '',
+    phone: '',
+    position: '',
+    role: 'stationUser',
+    active: true,
+    status: 'active',
+    is_online: false,
+    created_at: '',
+    updated_at: ''
   });
+
+  // Fetch station user data from Supabase
+  const fetchStationProfile = async () => {
+    try {
+      setLoading(true);
+      
+      // Get current user data from localStorage
+      const userData = JSON.parse(localStorage.getItem('userData') || '{}');
+      if (!userData.id) {
+        console.error('❌ No station ID found in userData');
+        alert('Error: Unable to identify current station. Please log in again.');
+        return;
+      }
+
+      console.log('🔍 Fetching station profile for ID:', userData.id);
+      
+      const { data: stationData, error } = await supabase
+        .from('station_users')
+        .select('*')
+        .eq('id', userData.id)
+        .single();
+      
+      if (error) {
+        console.error('❌ Error fetching station profile:', error);
+        alert(`Failed to fetch station profile: ${error.message}`);
+        return;
+      }
+      
+      if (stationData) {
+        setProfileData(stationData);
+        setIsDisabled(!stationData.active);
+        console.log('✅ Station profile loaded:', stationData);
+      }
+      
+    } catch (error) {
+      console.error('❌ Error fetching station profile:', error);
+      alert(`Failed to fetch station profile: ${error.message}`);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Load profile data on component mount
+  useEffect(() => {
+    fetchStationProfile();
+  }, []);
 
   const handleInputChange = (e) => {
     const { name, value } = e.target;
@@ -32,9 +86,85 @@ const Station_Profile = () => {
     }
   };
 
-  const handleSave = () => {
-    setIsEditing(false);
+  const handleSave = async () => {
+    try {
+      setSaving(true);
+      
+      const { error } = await supabase
+        .from('station_users')
+        .update({
+          station_name: profileData.station_name,
+          email: profileData.email,
+          address: profileData.address,
+          phone: profileData.phone,
+          position: profileData.position,
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', profileData.id);
+      
+      if (error) {
+        console.error('❌ Error updating station profile:', error);
+        alert(`Error updating profile: ${error.message}`);
+        return;
+      }
+      
+      console.log('✅ Station profile updated successfully');
+      alert('Profile updated successfully!');
+      setIsEditing(false);
+      
+    } catch (error) {
+      console.error('❌ Error updating station profile:', error);
+      alert(`Error updating profile: ${error.message}`);
+    } finally {
+      setSaving(false);
+    }
   };
+
+  const handleToggleAccountStatus = async () => {
+    try {
+      const newActiveStatus = !isDisabled;
+      
+      const { error } = await supabase
+        .from('station_users')
+        .update({
+          active: newActiveStatus,
+          status: newActiveStatus ? 'active' : 'disabled',
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', profileData.id);
+      
+      if (error) {
+        console.error('❌ Error updating account status:', error);
+        alert(`Error updating account status: ${error.message}`);
+        return;
+      }
+      
+      setIsDisabled(!newActiveStatus);
+      setProfileData(prev => ({
+        ...prev,
+        active: newActiveStatus,
+        status: newActiveStatus ? 'active' : 'disabled'
+      }));
+      
+      console.log('✅ Account status updated successfully');
+      alert(`Account ${newActiveStatus ? 'enabled' : 'disabled'} successfully!`);
+      
+    } catch (error) {
+      console.error('❌ Error updating account status:', error);
+      alert(`Error updating account status: ${error.message}`);
+    }
+  };
+
+  if (loading) {
+    return (
+      <div className="p-6 bg-gray-100 min-h-screen flex items-center justify-center">
+        <div className="bg-white rounded-xl shadow-md p-8 flex items-center space-x-4">
+          <FiLoader className="w-8 h-8 animate-spin text-red-600" />
+          <span className="text-gray-600">Loading station profile...</span>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="p-6 bg-gray-100 min-h-screen">
@@ -47,7 +177,7 @@ const Station_Profile = () => {
               <p className="text-red-100 mt-1">Cebu City Emergency Response System</p>
             </div>
             <button 
-              onClick={() => setIsDisabled(!isDisabled)}
+              onClick={handleToggleAccountStatus}
               className={`px-4 py-2 rounded-lg flex items-center ${isDisabled ? 'bg-yellow-500 hover:bg-yellow-600' : 'bg-gray-700 hover:bg-gray-800'}`}
             >
               {isDisabled ? <FiUnlock className="mr-2" /> : <FiLock className="mr-2" />}
@@ -83,16 +213,23 @@ const Station_Profile = () => {
                 )}
               </div>
               <div className="text-center">
-                <h2 className="text-xl font-bold text-gray-800">{profileData.name}</h2>
-                <p className="text-gray-600">{profileData.position}</p>
-                <p className="text-sm text-gray-500 mt-2">Last login: {profileData.lastLogin}</p>
+                <h2 className="text-xl font-bold text-gray-800">{profileData.station_name || 'Station Name'}</h2>
+                <p className="text-gray-600">{profileData.position || 'Station User'}</p>
+                <p className="text-sm text-gray-500 mt-2">
+                  Status: <span className={`font-medium ${profileData.status === 'active' ? 'text-green-600' : 'text-red-600'}`}>
+                    {profileData.status || 'Unknown'}
+                  </span>
+                </p>
+                <p className="text-sm text-gray-500">
+                  Last updated: {profileData.updated_at ? new Date(profileData.updated_at).toLocaleDateString() : 'Unknown'}
+                </p>
               </div>
             </div>
             {/* Profile Information Section */}
             <div className="w-full md:w-2/3">
               <div className="flex justify-between items-center mb-6">
                 <h3 className="text-lg font-semibold text-gray-800">
-                  Personal Information
+                  Station Information
                 </h3>
                 {!isEditing ? (
                   <button 
@@ -105,26 +242,27 @@ const Station_Profile = () => {
                 ) : (
                   <button 
                     onClick={handleSave}
-                    className="px-3 py-1 bg-green-100 text-green-700 rounded-lg flex items-center hover:bg-green-200"
+                    disabled={saving}
+                    className="px-3 py-1 bg-green-100 text-green-700 rounded-lg flex items-center hover:bg-green-200 disabled:opacity-50"
                   >
                     <FiSave className="mr-2" />
-                    Save Changes
+                    {saving ? 'Saving...' : 'Save Changes'}
                   </button>
                 )}
               </div>
               <div className="space-y-4">
                 <div>
-                  <label className="block text-sm font-medium text-gray-500 mb-1">Full Name</label>
+                  <label className="block text-sm font-medium text-gray-500 mb-1">Station Name</label>
                   {isEditing ? (
                     <input
                       type="text"
-                      name="name"
-                      value={profileData.name}
+                      name="station_name"
+                      value={profileData.station_name || ''}
                       onChange={handleInputChange}
                       className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:border-red-500"
                     />
                   ) : (
-                    <p className="text-gray-800">{profileData.name}</p>
+                    <p className="text-gray-800">{profileData.station_name || 'Not specified'}</p>
                   )}
                 </div>
                 <div>
@@ -133,12 +271,12 @@ const Station_Profile = () => {
                     <input
                       type="email"
                       name="email"
-                      value={profileData.email}
+                      value={profileData.email || ''}
                       onChange={handleInputChange}
                       className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:border-red-500"
                     />
                   ) : (
-                    <p className="text-gray-800">{profileData.email}</p>
+                    <p className="text-gray-800">{profileData.email || 'Not specified'}</p>
                   )}
                 </div>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -148,45 +286,49 @@ const Station_Profile = () => {
                       <input
                         type="text"
                         name="position"
-                        value={profileData.position}
+                        value={profileData.position || ''}
                         onChange={handleInputChange}
                         className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:border-red-500"
                       />
                     ) : (
-                      <p className="text-gray-800">{profileData.position}</p>
+                      <p className="text-gray-800">{profileData.position || 'Not specified'}</p>
                     )}
                   </div>
                   <div>
-                    <label className="block text-sm font-medium text-gray-500 mb-1">Department</label>
-                    {isEditing ? (
-                      <input
-                        type="text"
-                        name="department"
-                        value={profileData.department}
-                        onChange={handleInputChange}
-                        className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:border-red-500"
-                      />
-                    ) : (
-                      <p className="text-gray-800">{profileData.department}</p>
-                    )}
+                    <label className="block text-sm font-medium text-gray-500 mb-1">Role</label>
+                    <p className="text-gray-800">{profileData.role || 'stationUser'}</p>
                   </div>
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-500 mb-1">Mobile Number</label>
+                  <label className="block text-sm font-medium text-gray-500 mb-1">Address</label>
+                  {isEditing ? (
+                    <input
+                      type="text"
+                      name="address"
+                      value={profileData.address || ''}
+                      onChange={handleInputChange}
+                      className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:border-red-500"
+                    />
+                  ) : (
+                    <p className="text-gray-800">{profileData.address || 'Not specified'}</p>
+                  )}
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-500 mb-1">Phone Number</label>
                   {isEditing ? (
                     <div className="flex">
                       <span className="inline-flex items-center px-3 rounded-l-lg border border-r-0 border-gray-300 bg-gray-50 text-gray-500">+63</span>
                       <input
                         type="tel"
-                        name="mobile"
-                        value={profileData.mobile}
+                        name="phone"
+                        value={profileData.phone || ''}
                         onChange={handleInputChange}
                         className="w-full px-4 py-2 rounded-r-lg border border-gray-300 focus:ring-2 focus:ring-red-500 focus:border-red-500"
-                        pattern="[0-9]{10}"
+                        placeholder="9123456789"
                       />
                     </div>
                   ) : (
-                    <p className="text-gray-800">+63{profileData.mobile}</p>
+                    <p className="text-gray-800">{profileData.phone ? `+63${profileData.phone}` : 'Not specified'}</p>
                   )}
                 </div>
                 {isDisabled && (
@@ -220,10 +362,26 @@ const Station_Profile = () => {
               </button>
             </div>
             <div className="border border-gray-200 rounded-lg p-4">
-              <h4 className="font-medium text-gray-800 mb-2">Two-Factor Authentication</h4>
-              <p className="text-gray-600 mb-3">Currently not enabled</p>
-              <button className="px-3 py-1 bg-blue-100 text-blue-700 rounded-lg text-sm hover:bg-blue-200">
-                Enable 2FA
+              <h4 className="font-medium text-gray-800 mb-2">Account Status</h4>
+              <p className="text-gray-600 mb-3">
+                Status: <span className={`font-medium ${profileData.status === 'active' ? 'text-green-600' : 'text-red-600'}`}>
+                  {profileData.status || 'Unknown'}
+                </span>
+              </p>
+              <p className="text-gray-600 mb-3">
+                Online: <span className={`font-medium ${profileData.is_online ? 'text-green-600' : 'text-gray-600'}`}>
+                  {profileData.is_online ? 'Yes' : 'No'}
+                </span>
+              </p>
+              <button 
+                onClick={handleToggleAccountStatus}
+                className={`px-3 py-1 rounded-lg text-sm ${
+                  isDisabled 
+                    ? 'bg-green-100 text-green-700 hover:bg-green-200' 
+                    : 'bg-red-100 text-red-700 hover:bg-red-200'
+                }`}
+              >
+                {isDisabled ? 'Enable Account' : 'Disable Account'}
               </button>
             </div>
           </div>

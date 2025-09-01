@@ -100,9 +100,6 @@ const AdminLayout = ({ children }) => {
       localStorage.removeItem('adminAuth');
       localStorage.removeItem('userData');
       
-      // Show logout message
-      alert('Logged out successfully!');
-      
       // Redirect to login page
       window.location.href = '/login';
     } catch (error) {

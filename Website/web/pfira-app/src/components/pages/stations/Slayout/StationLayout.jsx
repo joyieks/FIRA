@@ -6,12 +6,17 @@ import { IoIosNotifications } from "react-icons/io";
 import { Link, useLocation, Outlet } from 'react-router-dom';
 import { signOut } from 'firebase/auth';
 import { auth } from '../../../../config/firebase';
+import { supabase } from '../../../../config/supabase';
 
 const StationLayout = ({ children }) => {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [profileOpen, setProfileOpen] = useState(false);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [notifications, setNotifications] = useState([]);
+  const [stationData, setStationData] = useState({
+    station_name: 'Loading...',
+    email: 'Loading...'
+  });
   const location = useLocation();
   const profileRef = useRef(null);
   const notificationsRef = useRef(null);
@@ -19,6 +24,49 @@ const StationLayout = ({ children }) => {
   const toggleSidebar = () => setSidebarOpen(!sidebarOpen);
   const toggleProfile = () => setProfileOpen(!profileOpen);
   const toggleNotifications = () => setNotificationsOpen(!notificationsOpen);
+
+  // Fetch station data from localStorage or Supabase
+  const fetchStationData = async () => {
+    try {
+      // First try to get from localStorage
+      const userData = JSON.parse(localStorage.getItem('userData') || '{}');
+      
+      if (userData.id) {
+        // If we have userData, try to fetch from Supabase for latest info
+        const { data: stationInfo, error } = await supabase
+          .from('station_users')
+          .select('station_name, email')
+          .eq('id', userData.id)
+          .single();
+        
+        if (error) {
+          console.error('Error fetching station data:', error);
+          // Fallback to localStorage data
+          setStationData({
+            station_name: userData.station_name || 'Station Name',
+            email: userData.email || 'station@email.com'
+          });
+        } else if (stationInfo) {
+          setStationData({
+            station_name: stationInfo.station_name || 'Station Name',
+            email: stationInfo.email || 'station@email.com'
+          });
+        }
+      } else {
+        // Fallback to default values
+        setStationData({
+          station_name: 'Station Name',
+          email: 'station@email.com'
+        });
+      }
+    } catch (error) {
+      console.error('Error fetching station data:', error);
+      setStationData({
+        station_name: 'Station Name',
+        email: 'station@email.com'
+      });
+    }
+  };
 
   const handleLogout = async () => {
     try {
@@ -33,9 +81,6 @@ const StationLayout = ({ children }) => {
       localStorage.removeItem('stationUser');
       localStorage.removeItem('stationAuth');
       localStorage.removeItem('userData');
-      
-      // Show logout message
-      alert('Logged out successfully!');
       
       // Redirect to login page
       window.location.href = '/login';
@@ -59,6 +104,11 @@ const StationLayout = ({ children }) => {
     };
     window.addEventListener('storage', handleStorageChange);
     return () => window.removeEventListener('storage', handleStorageChange);
+  }, []);
+
+  // Fetch station data on component mount
+  useEffect(() => {
+    fetchStationData();
   }, []);
 
   // Handle click outside for dropdowns
@@ -110,7 +160,14 @@ const StationLayout = ({ children }) => {
       <div className={`${sidebarOpen ? 'w-64' : 'w-20'} bg-red-700 text-white transition-all duration-300 ease-in-out`}>
         <div className="flex items-center justify-between p-4 border-b border-red-800">
           {sidebarOpen ? (
-            <h1 className="text-xl font-bold">Station Dashboard</h1>
+            <div className="flex flex-col">
+              <h1 className="text-lg font-bold text-white truncate max-w-48">
+                {stationData.station_name}
+              </h1>
+              <p className="text-xs text-red-100 truncate max-w-48">
+                {stationData.email}
+              </p>
+            </div>
           ) : (
             null
           )}
@@ -234,7 +291,7 @@ const StationLayout = ({ children }) => {
                   <div className="w-8 h-8 bg-red-700 rounded-full flex items-center justify-center text-white">
                     <FiUser size={16} />
                   </div>
-                  {sidebarOpen && <span className="text-gray-700">Station</span>}
+                  {sidebarOpen && <span className="text-gray-700 truncate max-w-32">{stationData.station_name}</span>}
                 </button>
                 {profileOpen && (
                   <div className="absolute right-0 mt-2 w-48 bg-white rounded-md shadow-lg py-1 z-20">
