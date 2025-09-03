@@ -10,6 +10,8 @@ const Overview = () => {
   const [generalAlarmStates, setGeneralAlarmStates] = useState({});
   const [isLoading, setIsLoading] = useState(true);
   const [lastRefresh, setLastRefresh] = useState(new Date());
+  const [editingStatus, setEditingStatus] = useState({});
+  const [editingFinalAlarm, setEditingFinalAlarm] = useState({});
 
   // API endpoint for fetching reports
   const API_URL = 'https://fire-predictor-api-production.up.railway.app';
@@ -34,9 +36,9 @@ const Overview = () => {
           time: formatTime(report.formatted_timestamp || report.created_at),
           reporter: report.reporter || 'Unknown Reporter',
           location: report.address || report.geotag_location || 'Location unavailable',
-          status: determineStatus(report.prediction),
-          fireAlarmLevel: report.recommended_alarm_level || report.alarm_level || 'Unknown',
-          suggestedAlarm: determineSuggestedAlarm(report.number_of_structures_on_fire),
+          status: report.status || 'On Going',
+          suggestedAlarmLevel: report.recommended_alarm_level || report.alarm_level || 'Unknown',
+          finalAlarmLevel: report.final_fire_alarm_level || '1st Alarm',
           description: report.cause_of_fire || 'No cause specified',
           picture: report.image_url,
           minutesAgo: calculateMinutesAgo(report.created_at || report.timestamp),
@@ -151,6 +153,11 @@ const Overview = () => {
            report.reporter.toLowerCase().includes(searchQuery.toLowerCase()) ||
            report.description.toLowerCase().includes(searchQuery.toLowerCase()) ||
            report.structure?.toLowerCase().includes(searchQuery.toLowerCase());
+  }).sort((a, b) => {
+    // Sort reports from most recent to oldest
+    const dateA = new Date(a.timestamp || 0);
+    const dateB = new Date(b.timestamp || 0);
+    return dateB - dateA; // Descending order (newest first)
   });
 
   const handleReportClick = (report) => {
@@ -174,6 +181,78 @@ const Overview = () => {
 
   const handleManualRefresh = () => {
     fetchReports();
+  };
+
+  // Update status in database
+  const updateReportStatus = async (reportId, newStatus) => {
+    try {
+      const response = await fetch(`${API_URL}/update_report_status`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          report_id: reportId,
+          status: newStatus
+        })
+      });
+      
+      if (response.ok) {
+        // Update local state
+        setReports(prev => prev.map(report => 
+          report.id === reportId ? { ...report, status: newStatus } : report
+        ));
+        console.log(`Status updated for report ${reportId}: ${newStatus}`);
+      } else {
+        console.error('Failed to update status');
+        alert('Failed to update status. Please try again.');
+      }
+    } catch (error) {
+      console.error('Error updating status:', error);
+      alert('Error updating status. Please try again.');
+    }
+  };
+
+  // Update final alarm level in database
+  const updateFinalAlarmLevel = async (reportId, newAlarmLevel) => {
+    try {
+      const response = await fetch(`${API_URL}/update_final_alarm_level`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          report_id: reportId,
+          final_alarm_level: newAlarmLevel
+        })
+      });
+      
+      if (response.ok) {
+        // Update local state
+        setReports(prev => prev.map(report => 
+          report.id === reportId ? { ...report, finalAlarmLevel: newAlarmLevel } : report
+        ));
+        console.log(`Final alarm level updated for report ${reportId}: ${newAlarmLevel}`);
+      } else {
+        console.error('Failed to update final alarm level');
+        alert('Failed to update final alarm level. Please try again.');
+      }
+    } catch (error) {
+      console.error('Error updating final alarm level:', error);
+      alert('Error updating final alarm level. Please try again.');
+    }
+  };
+
+  // Handle status change
+  const handleStatusChange = (reportId, newStatus) => {
+    setEditingStatus(prev => ({ ...prev, [reportId]: false }));
+    updateReportStatus(reportId, newStatus);
+  };
+
+  // Handle final alarm level change
+  const handleFinalAlarmChange = (reportId, newAlarmLevel) => {
+    setEditingFinalAlarm(prev => ({ ...prev, [reportId]: false }));
+    updateFinalAlarmLevel(reportId, newAlarmLevel);
   };
 
   const getStatusColor = (status) => {
@@ -334,8 +413,8 @@ const Overview = () => {
                     <th className="px-4 py-4 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-24">Reporter</th>
                     <th className="px-4 py-4 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-28">Location</th>
                     <th className="px-4 py-4 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-32">Status</th>
-                    <th className="px-4 py-4 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-36">Fire Alarm Level</th>
-                    <th className="px-4 py-4 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-40">Suggested Fire Alarm</th>
+                    <th className="px-4 py-4 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-36">Suggested Alarm Level</th>
+                    <th className="px-4 py-4 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-40">Final Alarm Level</th>
                     <th className="px-4 py-4 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-28">Actions</th>
                   </tr>
                 </thead>
@@ -350,11 +429,7 @@ const Overview = () => {
                     filteredReports.map((report) => (
                       <tr 
                         key={report.id} 
-                        className="hover:bg-gray-50 cursor-pointer transition-colors"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleReportClick(report);
-                        }}
+                        className="hover:bg-gray-50 transition-colors"
                       >
                         <td className="px-4 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
                           {report.time}
@@ -365,37 +440,85 @@ const Overview = () => {
                         <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-900">
                           {report.location}
                         </td>
-                        <td className="px-4 py-4 whitespace-nowrap">
-                          <span className={`px-3 py-1 rounded-md text-xs font-medium border ${getStatusColor(report.status)}`}>
-                            {report.status}
-                          </span>
-                        </td>
-                        <td className="px-4 py-4 whitespace-nowrap">
-                          <span className={`px-3 py-1 rounded-md text-xs font-medium border ${getAlarmLevelColor(report.fireAlarmLevel)}`}>
-                            {report.fireAlarmLevel}
-                          </span>
-                        </td>
-                        <td className="px-4 py-4 whitespace-nowrap">
-                          {report.suggestedAlarm === 'GENERAL ALARM' ? (
-                            <button
+                        <td className="px-4 py-4 whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
+                          {editingStatus[report.id] ? (
+                            <select
+                              value={report.status}
+                              onChange={(e) => handleStatusChange(report.id, e.target.value)}
+                              onBlur={() => setEditingStatus(prev => ({ ...prev, [report.id]: false }))}
+                              onClick={(e) => e.stopPropagation()}
+                              className="px-2 py-1 text-xs border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                              autoFocus
+                            >
+                              <option value="On Going">On Going</option>
+                              <option value="Fire Out">Fire Out</option>
+                            </select>
+                          ) : (
+                            <span 
+                              className={`px-3 py-1 rounded-md text-xs font-medium border cursor-pointer hover:bg-opacity-80 ${getStatusColor(report.status)}`}
                               onClick={(e) => {
                                 e.stopPropagation();
-                                handleGeneralAlarm(report.id);
+                                setEditingStatus(prev => ({ ...prev, [report.id]: true }));
                               }}
-                              className={`px-3 py-1 rounded-md text-xs font-medium text-white transition-all duration-300 transform hover:scale-105 ${
-                                generalAlarmStates[report.id] 
-                                  ? 'bg-red-600 animate-pulse shadow-red-500/50 ring-4 ring-red-400 ring-opacity-75 animate-bounce' 
-                                  : 'bg-red-500 hover:bg-red-600 shadow-red-400/50 hover:ring-2 hover:ring-red-300 hover:ring-opacity-50'
-                              }`}
                             >
-                              {generalAlarmStates[report.id] ? '🚨 GENERAL ALARM ACTIVE 🚨' : 'GENERAL ALARM'}
-                            </button>
+                              {report.status}
+                            </span>
+                          )}
+                        </td>
+                        <td className="px-4 py-4 whitespace-nowrap">
+                          <span className={`px-3 py-1 rounded-md text-xs font-medium border ${getAlarmLevelColor(report.suggestedAlarmLevel)}`}>
+                            {report.suggestedAlarmLevel}
+                          </span>
+                        </td>
+                        <td className="px-4 py-4 whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
+                          {editingFinalAlarm[report.id] ? (
+                            <select
+                              value={report.finalAlarmLevel}
+                              onChange={(e) => handleFinalAlarmChange(report.id, e.target.value)}
+                              onBlur={() => setEditingFinalAlarm(prev => ({ ...prev, [report.id]: false }))}
+                              onClick={(e) => e.stopPropagation()}
+                              className="px-2 py-1 text-xs border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                              autoFocus
+                            >
+                              <option value="1st Alarm">1st Alarm</option>
+                              <option value="2nd Alarm">2nd Alarm</option>
+                              <option value="3rd Alarm">3rd Alarm</option>
+                              <option value="4th Alarm">4th Alarm</option>
+                              <option value="5th Alarm">5th Alarm</option>
+                              <option value="TASK FORCE ALPHA">TASK FORCE ALPHA</option>
+                              <option value="TASK FORCE BRAVO">TASK FORCE BRAVO</option>
+                              <option value="TASK FORCE CHARLIE">TASK FORCE CHARLIE</option>
+                              <option value="TASK FORCE DELTA">TASK FORCE DELTA</option>
+                              <option value="GENERAL ALARM">GENERAL ALARM</option>
+                            </select>
                           ) : (
-                           <span className={`px-3 py-1 rounded-md text-xs font-medium border ${getAlarmLevelColor(report.suggestedAlarm)}`}>
-                             {report.suggestedAlarm}
-                           </span>
-                         )}
-                       </td>
+                            report.finalAlarmLevel === 'GENERAL ALARM' ? (
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleGeneralAlarm(report.id);
+                                }}
+                                className={`px-3 py-1 rounded-md text-xs font-medium text-white transition-all duration-300 transform hover:scale-105 ${
+                                  generalAlarmStates[report.id] 
+                                    ? 'bg-red-600 animate-pulse shadow-red-500/50 ring-4 ring-red-400 ring-opacity-75 animate-bounce' 
+                                    : 'bg-red-500 hover:bg-red-600 shadow-red-400/50 hover:ring-2 hover:ring-red-300 hover:ring-opacity-50'
+                                }`}
+                              >
+                                {generalAlarmStates[report.id] ? '🚨 GENERAL ALARM ACTIVE 🚨' : 'GENERAL ALARM'}
+                              </button>
+                            ) : (
+                              <span 
+                                className={`px-3 py-1 rounded-md text-xs font-medium border cursor-pointer hover:bg-opacity-80 ${getAlarmLevelColor(report.finalAlarmLevel)}`}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setEditingFinalAlarm(prev => ({ ...prev, [report.id]: true }));
+                                }}
+                              >
+                                {report.finalAlarmLevel}
+                              </span>
+                            )
+                          )}
+                        </td>
                         <td className="px-4 py-4 whitespace-nowrap">
                           <button
                             className="px-3 py-1 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors text-xs font-medium"
@@ -418,7 +541,7 @@ const Overview = () => {
 
         {/* Detailed Report Modal */}
         {showReportModal && selectedReport && (
-          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-[9999]">
+          <div className="fixed inset-0 backdrop-blur-sm bg-black bg-opacity-30 flex items-center justify-center p-4 z-50">
             <div className="bg-white rounded-xl shadow-xl max-w-4xl w-full max-h-[90vh] overflow-y-auto">
               <div className="p-8">
                 <div className="flex justify-between items-center mb-8">
@@ -504,8 +627,8 @@ const Overview = () => {
                     </div>
                   </div>
 
-                  {/* Status and Fire Alarm Level */}
-                  <div className="grid grid-cols-1 md-grid-cols-2 gap-8">
+                  {/* Status and Alarm Levels */}
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
                     <div>
                       <label className="block text-lg font-medium text-gray-700 mb-3">Current Status:</label>
                       <span className={`px-4 py-3 rounded-md text-base font-medium border ${getStatusColor(selectedReport.status)}`}>
@@ -513,9 +636,15 @@ const Overview = () => {
                       </span>
                     </div>
                     <div>
-                      <label className="block text-lg font-medium text-gray-700 mb-3">Fire Alarm Level:</label>
-                      <span className={`px-3 py-3 rounded-md text-base font-medium border ${getAlarmLevelColor(selectedReport.fireAlarmLevel)}`}>
-                        {selectedReport.fireAlarmLevel}
+                      <label className="block text-lg font-medium text-gray-700 mb-3">Suggested Alarm Level:</label>
+                      <span className={`px-3 py-3 rounded-md text-base font-medium border ${getAlarmLevelColor(selectedReport.suggestedAlarmLevel)}`}>
+                        {selectedReport.suggestedAlarmLevel}
+                      </span>
+                    </div>
+                    <div>
+                      <label className="block text-lg font-medium text-gray-700 mb-3">Final Alarm Level:</label>
+                      <span className={`px-3 py-3 rounded-md text-base font-medium border ${getAlarmLevelColor(selectedReport.finalAlarmLevel)}`}>
+                        {selectedReport.finalAlarmLevel}
                       </span>
                     </div>
                   </div>

@@ -36,6 +36,7 @@ const CStatus = () => {
   // Emergency reporting states
   const [showEmergencyModal, setShowEmergencyModal] = useState(false);
   const [showSuccessToast, setShowSuccessToast] = useState(false);
+  const [isSubmittingReport, setIsSubmittingReport] = useState(false);
   const [emergencyData, setEmergencyData] = useState({
     cause: '',
     image: null,
@@ -226,7 +227,6 @@ const CStatus = () => {
         const data = await response.json();
         console.log('API Response data received, total reports:', data.length);
         
-        // Process reports to match the expected format
         const processedReports = data.map((report) => {
           // Get display location - use address if available, fallback to coordinates
           const displayLocation = report.address || 
@@ -234,15 +234,10 @@ const CStatus = () => {
                                  (report.latitude && report.longitude ? 
                                    `${report.latitude.toFixed(6)}, ${report.longitude.toFixed(6)}` : 
                                    'Location unavailable');
-
-          // Determine progress based on prediction
-          let progress = 'Unknown';
-          if (report.prediction === 'Fire') {
-            progress = 'On Going';
-          } else if (report.prediction === 'No Fire') {
-            progress = report.alarm_level && report.alarm_level.includes('Fireout') ? 'Fire Out' : 'Under Control';
-          }
-
+        
+          // Use backend status directly instead of computing it
+          let progress = report.status || 'Unknown';
+          
           // Format timestamp
           let displayTimestamp = 'Unknown time';
           if (report.formatted_timestamp) {
@@ -261,7 +256,7 @@ const CStatus = () => {
               displayTimestamp = report.created_at;
             }
           }
-
+        
           return {
             id: report.id,
             // Image handling - API returns image_url
@@ -277,8 +272,9 @@ const CStatus = () => {
               latitude: report.latitude,
               longitude: report.longitude
             } : null,
-            // Status and progress
+            // Status and progress - NOW USING BACKEND STATUS
             progress: progress,
+            status: report.status, // Include raw status field
             prediction: report.prediction,
             confidence: report.confidence,
             // Fire details
@@ -302,7 +298,7 @@ const CStatus = () => {
             formatted_timestamp: report.formatted_timestamp,
             // Description for modal
             description: report.cause_of_fire ? 
-              `Emergency reported: ${report.cause_of_fire}${report.prediction ? `\nPrediction: ${report.prediction}` : ''}${report.confidence ? ` (${report.confidence})` : ''}${report.structure ? `\nStructure: ${report.structure}` : ''}${report.smoke_intensity ? `\nSmoke: ${report.smoke_intensity}` : ''}${report.smoke_confidence ? ` (${report.smoke_confidence})` : ''}${report.alarm_level ? `\nAlarm: ${report.alarm_level}` : ''}` :
+              `Emergency reported: ${report.cause_of_fire}${report.prediction ? `\nPrediction: ${report.prediction}` : ''}${report.confidence ? ` (${report.confidence})` : ''}${report.structure ? `\nStructure: ${report.structure}` : ''}${report.smoke_intensity ? `\nSmoke: ${report.smoke_intensity}` : ''}${report.smoke_confidence ? ` (${report.smoke_confidence})` : ''}${report.alarm_level ? `\nAlarm: ${report.alarm_level}` : ''}${report.status ? `\nStatus: ${report.status}` : ''}` :
               'Emergency report submitted',
           };
         });
@@ -352,19 +348,21 @@ const CStatus = () => {
     }
   };
 
-  const getProgressColor = (progress) => {
-    switch (progress) {
-      case 'On Going':
-        return '#ef4444';
-      case 'Under Control':
-        return '#f59e0b';
-      case 'Fire Out':
-        return '#10b981';
-      default:
-        return '#6b7280';
-    }
-  };
-
+// Also update the getProgressColor function to handle the new status values:
+const getProgressColor = (progress) => {
+  switch (progress) {
+    case 'On Going':
+      return '#ef4444';
+    case 'Under Control':
+      return '#f59e0b';
+    case 'Fire Out':
+      return '#10b981';
+    case 'False Alarm':
+      return '#6b7280';
+    default:
+      return '#6b7280';
+  }
+};
   const handleReportEmergency = () => {
     if (!currentUser?.uid) {
       Alert.alert('Authentication Error', 'Please log in to report an emergency.');
@@ -538,6 +536,7 @@ const CStatus = () => {
     }
 
     try {
+      setIsSubmittingReport(true);
       console.log('Starting emergency submission for user:', currentUser.uid);
       
       // Format location as coordinates string (matches Flask API expectation)
@@ -652,6 +651,8 @@ const CStatus = () => {
       } else {
         Alert.alert('Error', err?.message || 'Something went wrong while submitting the report');
       }
+    } finally {
+      setIsSubmittingReport(false);
     }
   };
 
@@ -784,11 +785,11 @@ const CStatus = () => {
 
     switch (activeTab) {
       case 'Your Reports':
-        reports = yourReports;
+        reports = [...yourReports];
         title = 'Your Reports';
         break;
       case 'Nearby Reports':
-        reports = nearbyReports;
+        reports = [...nearbyReports];
         title = 'Nearby Reports';
         break;
       case 'All':
@@ -796,6 +797,13 @@ const CStatus = () => {
         title = 'All Reports';
         break;
     }
+
+    // Sort reports from most recent to oldest
+    reports.sort((a, b) => {
+      const dateA = new Date(a.created_at || 0);
+      const dateB = new Date(b.created_at || 0);
+      return dateB - dateA; // Descending order (newest first)
+    });
 
     return (
       <View className="flex-1">
@@ -1816,6 +1824,7 @@ const CStatus = () => {
                         setSelectedLocation(null);
                         setSelectedLocationAddress('');
                       }}
+                      disabled={isSubmittingReport}
                     >
                       <Text className="text-center font-semibold text-gray-700">Cancel</Text>
                     </TouchableOpacity>
@@ -1825,16 +1834,36 @@ const CStatus = () => {
                         Keyboard.dismiss();
                         handleSubmitEmergency();
                       }}
-                      disabled={!emergencyData.cause.trim()}
+                      disabled={!emergencyData.cause.trim() || isSubmittingReport}
                       style={{
-                        opacity: !emergencyData.cause.trim() ? 0.6 : 1
+                        opacity: (!emergencyData.cause.trim() || isSubmittingReport) ? 0.6 : 1
                       }}
                     >
-                      <Text className="text-center font-semibold text-white">Submit Report</Text>
+                      {isSubmittingReport ? (
+                        <View className="flex-row items-center justify-center">
+                          <MaterialIcons name="refresh" size={20} color="#ffffff" />
+                          <Text className="text-center font-semibold text-white ml-2">Submitting...</Text>
+                        </View>
+                      ) : (
+                        <Text className="text-center font-semibold text-white">Submit Report</Text>
+                      )}
                     </TouchableOpacity>
                   </View>
                 </ScrollView>
               </View>
+              
+              {/* Loading Overlay */}
+              {isSubmittingReport && (
+                <View className="absolute inset-0 bg-black/50 justify-center items-center">
+                  <View className="bg-white rounded-lg p-6 items-center">
+                    <MaterialIcons name="refresh" size={48} color="#ef4444" />
+                    <Text className="text-lg font-semibold text-gray-800 mt-4">Submitting Report</Text>
+                    <Text className="text-sm text-gray-600 mt-2 text-center">
+                      Please wait while we process your emergency report...
+                    </Text>
+                  </View>
+                </View>
+              )}
             </View>
           </TouchableWithoutFeedback>
         </KeyboardAvoidingView>
