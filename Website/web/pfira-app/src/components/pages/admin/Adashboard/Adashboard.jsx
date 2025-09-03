@@ -3,41 +3,19 @@ import { GoogleMap, LoadScript, Marker, InfoWindow } from '@react-google-maps/ap
 
 const Adashboard = () => {
   const GOOGLE_MAPS_API_KEY = 'AIzaSyBX5taF1AgNhicxw5_BXUJDs6ouniAuiQI';
-  const [userLocation, setUserLocation] = useState(null);
-  const [locationError, setLocationError] = useState(null);
   const [mapLoaded, setMapLoaded] = useState(false);
   const [mapError, setMapError] = useState(null);
   const [fireReports, setFireReports] = useState([]);
   const [selectedReport, setSelectedReport] = useState(null);
   const [reportsLoading, setReportsLoading] = useState(false);
+  const [showAdminInfo, setShowAdminInfo] = useState(false);
 
-  // Get user's current location
-  useEffect(() => {
-    if (navigator.geolocation) {
-      navigator.geolocation.getCurrentPosition(
-        (position) => {
-          const location = {
-            lat: position.coords.latitude,
-            lng: position.coords.longitude
-          };
-          setUserLocation(location);
-          setLocationError(null);
-          console.log('✅ Location detected:', location);
-        },
-        (error) => {
-          console.error('❌ Error getting location:', error);
-          setLocationError('Unable to get your location. Please check your browser settings.');
-        },
-        {
-          enableHighAccuracy: true,
-          timeout: 10000,
-          maximumAge: 300000 // 5 minutes
-        }
-      );
-    } else {
-      setLocationError('Geolocation is not supported by this browser.');
-    }
-  }, []);
+  // Fixed location for Bureau of Fire Protection - Regional Office VII
+  // 7VXR+5VG, 6000 Natalio B. Bacalso Ave, Cebu City, 6000 Cebu
+  const adminLocation = {
+    lat: 10.3157,
+    lng: 123.8854
+  };
 
   // Fetch fire reports from the API
   const fetchFireReports = useCallback(async () => {
@@ -57,7 +35,7 @@ const Adashboard = () => {
         
         console.log('🔥 Reports with valid coordinates:', reportsWithCoords.length);
         
-        // Log each report's location for debugging (same as CMap.jsx)
+        // Log each report's location for debugging
         reportsWithCoords.forEach(report => {
           console.log(`Admin Dashboard Report ${report.id}: ${report.latitude}, ${report.longitude} - ${report.address || report.geotag_location}`);
         });
@@ -86,26 +64,9 @@ const Adashboard = () => {
     return () => clearInterval(refreshInterval);
   }, [fetchFireReports]);
 
-  // Get marker color based on prediction/severity
-  const getMarkerColor = (prediction) => {
-    switch (prediction?.toLowerCase()) {
-      case 'fire':
-        return '#DC2626'; // Red
-      case 'smoke':
-        return '#F59E0B'; // Orange
-      default:
-        return '#EF4444'; // Default red
-    }
-  };
-
   const mapContainerStyle = {
     width: '100vw',
     height: '100vh'
-  };
-
-  const center = {
-    lat: 14.5995,
-    lng: 120.9842
   };
 
   const onLoad = useCallback((map) => {
@@ -134,8 +95,8 @@ const Adashboard = () => {
       >
         <GoogleMap
           mapContainerStyle={mapContainerStyle}
-          center={userLocation || center}
-          zoom={userLocation ? 15 : 12}
+          center={adminLocation}
+          zoom={15}
           onLoad={onLoad}
           onError={onError}
           onUnmount={onUnmount}
@@ -146,21 +107,54 @@ const Adashboard = () => {
             fullscreenControl: true,
           }}
         >
-          {/* User Location Marker */}
-          {userLocation && mapLoaded && (
+          {/* Admin Station Marker - Bureau of Fire Protection Regional Office VII */}
+          {mapLoaded && (
             <Marker
-              position={userLocation}
+              position={adminLocation}
               icon={{
-                url: 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMjQiIGhlaWdodD0iMjQiIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KPGNpcmNsZSBjeD0iMTIiIGN5PSIxMiIgcj0iMTAiIGZpbGw9IiMyNTYzRUIiLz4KPGNpcmNsZSBjeD0iMTIiIGN5PSIxMiIgcj0iNiIgZmlsbD0id2hpdGUiLz4KPC9zdmc+',
-                scaledSize: new window.google.maps.Size(24, 24),
-                anchor: new window.google.maps.Point(12, 12)
+                path: window.google.maps.SymbolPath.CIRCLE,
+                fillColor: '#1E40AF',
+                fillOpacity: 1,
+                strokeColor: '#FFFFFF',
+                strokeWeight: 3,
+                scale: 25,
               }}
+              label={{
+                text: '🏢',
+                fontSize: '20px'
+              }}
+              title="🏢 Click to view BFP Regional Office VII details (Your Location)"
+              zIndex={2000}
+              onClick={() => setShowAdminInfo(true)}
+              cursor="pointer"
             />
+          )}
+
+          {/* Admin Station Info Window */}
+          {showAdminInfo && (
+            <InfoWindow
+              position={adminLocation}
+              onCloseClick={() => setShowAdminInfo(false)}
+            >
+              <div className="p-3 max-w-sm">
+                <h3 className="font-bold text-lg mb-2 text-blue-600">🏢 BFP Regional Office VII</h3>
+                <p className="text-sm text-blue-600 font-medium mb-2">📍 Your Current Location</p>
+                <div className="space-y-1 text-sm text-gray-700">
+                  <p><strong>Address:</strong> 6000 Natalio B. Bacalso Ave</p>
+                  <p><strong>City:</strong> Cebu City, Cebu 6000</p>
+                  <p><strong>Plus Code:</strong> 7VXR+5VG</p>
+                  <p><strong>Coordinates:</strong></p>
+                  <p className="ml-2">Lat: {adminLocation.lat}</p>
+                  <p className="ml-2">Lng: {adminLocation.lng}</p>
+                  <p><strong>Status:</strong> <span className="text-green-600 font-semibold">Active</span></p>
+                </div>
+              </div>
+            </InfoWindow>
           )}
 
           {/* Fire Report Markers */}
           {mapLoaded && fireReports.map((report) => {
-            console.log(`Rendering admin marker for report ${report.id} at:`, report.latitude, report.longitude);
+            console.log(`Rendering fire report marker for ${report.id} at:`, report.latitude, report.longitude);
             return (
               <Marker
                 key={`${report.id}-${report.latitude}-${report.longitude}-${report.address || report.geotag_location || 'no-address'}`}
@@ -259,7 +253,7 @@ const Adashboard = () => {
       {/* Fire Reports Status Panel */}
       <div className="absolute top-4 left-4 bg-white bg-opacity-95 p-4 rounded-lg shadow-lg z-20 min-w-64">
         <div className="text-sm space-y-2">
-          <h3 className="font-bold text-red-600 text-lg">🔥 Fire Reports Dashboard</h3>
+          <h3 className="font-bold text-red-600 text-lg">🚒 Admin Dashboard</h3>
           
           <div className="flex items-center justify-between">
             <span className="text-gray-700">Active Reports:</span>
@@ -282,17 +276,15 @@ const Adashboard = () => {
           </button>
           
           <div className="border-t pt-2 mt-2">
-            <p className="font-semibold text-blue-600">📍 Your Location</p>
-            {userLocation ? (
-              <div className="text-xs text-gray-600">
-                <p>Lat: {userLocation.lat.toFixed(6)}</p>
-                <p>Lng: {userLocation.lng.toFixed(6)}</p>
-              </div>
-            ) : locationError ? (
-              <p className="text-xs text-red-600">{locationError}</p>
-            ) : (
-              <p className="text-xs text-yellow-600">Detecting location...</p>
-            )}
+            <p className="font-semibold text-blue-600">🏢 BFP Regional Office VII</p>
+            <p className="text-xs text-blue-600 font-medium">📍 Your Current Location</p>
+            <div className="text-xs text-gray-600">
+              <p>6000 Natalio B. Bacalso Ave</p>
+              <p>Cebu City, Cebu 6000</p>
+              <p>Plus Code: 7VXR+5VG</p>
+              <p>Lat: {adminLocation.lat}</p>
+              <p>Lng: {adminLocation.lng}</p>
+            </div>
           </div>
         </div>
       </div>

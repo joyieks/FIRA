@@ -1,218 +1,244 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { FiSend, FiPaperclip, FiMic, FiPhone, FiVideo, FiUser, FiMapPin, FiAlertTriangle, FiImage, FiCheck } from 'react-icons/fi';
-import { db, auth, storage } from './../../../../config/firebase';
-import { collection, addDoc, query, orderBy, onSnapshot, serverTimestamp, where, getDocs, updateDoc, doc, arrayUnion, arrayRemove, getDoc } from 'firebase/firestore';
-import { ref as storageRef, uploadBytes, getDownloadURL } from 'firebase/storage';
+import { FiSend, FiPaperclip, FiMic, FiPhone, FiVideo, FiUser, FiMapPin, FiAlertTriangle, FiImage, FiCheck, FiSearch } from 'react-icons/fi';
+import { supabase } from '../../../../config/supabase';
 
 const Afira_chat = () => {
   const [messages, setMessages] = useState([]);
   const [newMessage, setNewMessage] = useState('');
   const [isEmergencyMode, setIsEmergencyMode] = useState(false);
   const [activeTab, setActiveTab] = useState('chat');
-  const [users, setUsers] = useState([]); // stationUsers
-  const [selectedUser, setSelectedUser] = useState(null);
+  const [stations, setStations] = useState([]); // All stations in the system
+  const [unreadStations, setUnreadStations] = useState([]); // Stations with unread messages
+  const [selectedStation, setSelectedStation] = useState(null);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [filteredStations, setFilteredStations] = useState([]);
+  const [filteredUnreadStations, setFilteredUnreadStations] = useState([]);
   const messagesEndRef = useRef(null);
   const imageInputRef = useRef(null);
   const [isUploadingImage, setIsUploadingImage] = useState(false);
-  const [currentUserName, setCurrentUserName] = useState('');
-  const [fallbackAdminEmail, setFallbackAdminEmail] = useState('');
-  // Restore emergency contacts for Contacts tab
-  const emergencyContacts = [
-    { id: 1, name: 'DRRMO Central', status: 'Online', avatar: 'D' },
-    { id: 2, name: 'BFP Station 1', status: 'Online', avatar: 'B' },
-    { id: 3, name: 'CCPO Dispatch', status: 'Offline', avatar: 'C' },
-    { id: 4, name: 'Medical Response', status: 'Online', avatar: 'M' },
-  ];
+  const [currentAdminName, setCurrentAdminName] = useState('Admin');
+  const [isLoading, setIsLoading] = useState(true);
 
-  // Fetch station users for chat list (admins chat with stations)
+  // Fetch all stations from Supabase
   useEffect(() => {
-    const fetchUsers = async () => {
-      const snapshot = await getDocs(collection(db, 'stationUsers'));
-      setUsers(snapshot.docs.map(doc => {
-        const data = doc.data();
-        const name =
-          data.stationName ||
-          data['Station Name'] ||
-          data.name ||
-          data.Username ||
-          "Unnamed User";
-        const email =
-          data.email ||
-          data.Email ||
-          "";
-        return {
-          id: data.uid || doc.id,
-          docId: doc.id,
-          name,
-          email,
-          avatar: name[0] || 'U',
-        };
-      }));
-    };
-    fetchUsers();
-  }, []);
-
-  // Resolve the current admin user's display name
-  useEffect(() => {
-    const resolveName = async () => {
-      const uid = auth.currentUser?.uid;
-      const fallback = auth.currentUser?.displayName || auth.currentUser?.email || 'Admin';
-      if (!uid) {
-        // Try to resolve from adminUser collection if not authenticated
-        try {
-          const adminSnap = await getDocs(collection(db, 'adminUser'));
-          const docMatch = adminSnap.docs.find(d => !!d.data()?.email) || adminSnap.docs[0];
-          if (docMatch) {
-            const d = docMatch.data();
-            setCurrentUserName(d.adminName || fallback);
-            setFallbackAdminEmail(d.email || '');
-          } else {
-            setCurrentUserName(fallback);
-          }
-        } catch {
-          setCurrentUserName(fallback);
-        }
-        return;
-      }
+    const fetchStations = async () => {
       try {
-        const profileRef = doc(db, 'adminUser', uid);
-        const snap = await getDoc(profileRef);
-        if (snap.exists()) {
-          const d = snap.data();
-          const name = d.adminName || d.name || fallback;
-          setCurrentUserName(name || fallback);
-          setFallbackAdminEmail(d.email || '');
-        } else {
-          setCurrentUserName(fallback);
+        setIsLoading(true);
+        const { data: stationsData, error } = await supabase
+          .from('station_users')
+          .select('*')
+          .eq('active', true)
+          .order('station_name', { ascending: true });
+
+        if (error) {
+          console.error('Error fetching stations:', error);
+          return;
         }
-      } catch {
-        setCurrentUserName(fallback);
+
+        const formattedStations = stationsData.map(station => ({
+          id: station.id,
+          name: station.station_name || station.name || 'Unnamed Station',
+          email: station.email,
+          avatar: (station.station_name || station.name || 'U')[0].toUpperCase(),
+          lastMessage: '',
+          lastMessageTime: null,
+          unreadCount: 0
+        }));
+
+        setStations(formattedStations);
+        setFilteredStations(formattedStations);
+      } catch (error) {
+        console.error('Error fetching stations:', error);
+      } finally {
+        setIsLoading(false);
       }
     };
-    resolveName();
+
+    fetchStations();
   }, []);
 
-  // Stable conversation id for two users
-  const getConversationId = (uidA, uidB) => {
-    if (!uidA || !uidB) return null;
-    return [uidA, uidB].sort().join('_');
-  };
-
-  // Real-time messages for selected user
+  // Fetch unread messages for stations
   useEffect(() => {
-    if (!selectedUser) return;
-    
-    setMessages([]); // Clear messages when switching users
-    
-    const currentUserId = auth.currentUser?.uid || '';
-    const currentUserEmail = auth.currentUser?.email || fallbackAdminEmail || '';
-    if (!currentUserId && !currentUserEmail) return;
-    const selectedUserId = selectedUser.id;
-    const selectedUserEmail = selectedUser.email || '';
-    const emailConv = (currentUserEmail && selectedUserEmail) ? [currentUserEmail, selectedUserEmail].sort().join('_') : null;
-    const uidConv = (currentUserId && selectedUserId) ? getConversationId(currentUserId, selectedUserId) : null;
-    const candidateIds = [emailConv, uidConv].filter(Boolean);
-    if (candidateIds.length === 0) return;
-    const q = query(
-      collection(db, 'messages'),
-      where('conversationId', 'in', candidateIds),
-      orderBy('timestamp', 'asc')
-    );
-    const unsubscribe = onSnapshot(q, (querySnapshot) => {
-      const msgs = [];
-      querySnapshot.forEach((d) => {
-        const data = d.data();
-        msgs.push({ id: d.id, ...data });
-      });
-      setMessages(msgs);
-      setTimeout(scrollToBottom, 100);
+    const fetchUnreadMessages = async () => {
+      try {
+        const { data: messagesData, error } = await supabase
+          .from('messages')
+          .select('*')
+          .eq('receiver_type', 'admin')
+          .eq('is_read', false)
+          .order('created_at', { ascending: false });
 
-      // Mark incoming messages as seen
-      const myId = auth.currentUser?.uid;
-      const unseenForMe = msgs.filter(m => m.receiverId === myId && !(m.seenBy || []).includes(myId));
-      unseenForMe.forEach(async (m) => {
-        try {
-          await updateDoc(doc(db, 'messages', m.id), { seenBy: arrayUnion(myId) });
-        } catch {}
-      });
-    });
-    return () => unsubscribe();
-    // eslint-disable-next-line
-  }, [selectedUser]);
+        if (error) {
+          console.error('Error fetching unread messages:', error);
+          return;
+        }
+
+        // Group unread messages by station
+        const unreadByStation = {};
+        messagesData.forEach(message => {
+          const stationId = message.sender_id;
+          if (!unreadByStation[stationId]) {
+            unreadByStation[stationId] = {
+              count: 0,
+              lastMessage: message.text || '',
+              lastMessageTime: message.created_at
+            };
+          }
+          unreadByStation[stationId].count++;
+        });
+
+        // Update stations with unread count and last message
+        const updatedStations = stations.map(station => {
+          const unreadInfo = unreadByStation[station.id];
+          return {
+            ...station,
+            unreadCount: unreadInfo ? unreadInfo.count : 0,
+            lastMessage: unreadInfo ? unreadInfo.lastMessage : station.lastMessage,
+            lastMessageTime: unreadInfo ? unreadInfo.lastMessageTime : station.lastMessageTime
+          };
+        });
+
+        setStations(updatedStations);
+        setFilteredStations(updatedStations);
+
+        // Set unread stations
+        const unreadStationsList = updatedStations.filter(station => station.unreadCount > 0);
+        setUnreadStations(unreadStationsList);
+        setFilteredUnreadStations(unreadStationsList);
+      } catch (error) {
+        console.error('Error fetching unread messages:', error);
+      }
+    };
+
+    if (stations.length > 0) {
+      fetchUnreadMessages();
+    }
+  }, [stations.length]);
+
+  // Filter stations based on search query
+  useEffect(() => {
+    if (activeTab === 'chat') {
+      const filtered = stations.filter(station =>
+        station.name.toLowerCase().includes(searchQuery.toLowerCase())
+      );
+      setFilteredStations(filtered);
+    } else {
+      const filtered = unreadStations.filter(station =>
+        station.name.toLowerCase().includes(searchQuery.toLowerCase())
+      );
+      setFilteredUnreadStations(filtered);
+    }
+  }, [searchQuery, activeTab, stations, unreadStations]);
+
+  // Fetch messages for selected station
+  useEffect(() => {
+    if (!selectedStation) return;
+
+    const fetchMessages = async () => {
+      try {
+        const { data: messagesData, error } = await supabase
+          .from('messages')
+          .select('*')
+          .or(`and(sender_id.eq.${selectedStation.id},receiver_type.eq.admin),and(sender_type.eq.admin,receiver_id.eq.${selectedStation.id})`)
+          .order('created_at', { ascending: true });
+
+        if (error) {
+          console.error('Error fetching messages:', error);
+          return;
+        }
+
+        setMessages(messagesData || []);
+        setTimeout(scrollToBottom, 100);
+      } catch (error) {
+        console.error('Error fetching messages:', error);
+      }
+    };
+
+    fetchMessages();
+  }, [selectedStation]);
+
+  // Real-time subscription for new messages
+  useEffect(() => {
+    if (!selectedStation) return;
+
+    const subscription = supabase
+      .channel(`messages:${selectedStation.id}`)
+      .on('postgres_changes', {
+        event: 'INSERT',
+        schema: 'public',
+        table: 'messages',
+        filter: `or(and(sender_id.eq.${selectedStation.id},receiver_type.eq.admin),and(sender_type.eq.admin,receiver_id.eq.${selectedStation.id}))`
+      }, (payload) => {
+        setMessages(prev => [...prev, payload.new]);
+        setTimeout(scrollToBottom, 100);
+      })
+      .subscribe();
+
+    return () => {
+      subscription.unsubscribe();
+    };
+  }, [selectedStation]);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   };
 
   const handleSendMessage = async () => {
-    if (newMessage.trim() === '' || !selectedUser) return;
+    if (newMessage.trim() === '' || !selectedStation) return;
+
     try {
-      const currentUserId = auth.currentUser?.uid || '';
-      const currentUserEmail = auth.currentUser?.email || fallbackAdminEmail || '';
-      const selectedUserId = selectedUser.id;
-      const selectedUserEmail = selectedUser.email || '';
-      const conversationId = (currentUserEmail && selectedUserEmail)
-        ? [currentUserEmail, selectedUserEmail].sort().join('_')
-        : (currentUserId && selectedUserId ? getConversationId(currentUserId, selectedUserId) : null);
-      if (!conversationId) return;
-      
-      await addDoc(collection(db, 'messages'), {
-        sender: currentUserName || auth.currentUser?.displayName || auth.currentUser?.email || 'Admin',
-        senderId: currentUserId || currentUserEmail || 'admin',
-        senderEmail: currentUserEmail || null,
-        receiverId: selectedUserId,
-        receiverEmail: selectedUserEmail || null,
-        receiverName: selectedUser.name || selectedUser.email || '',
-        text: newMessage,
-        isEmergency: isEmergencyMode,
-        timestamp: serverTimestamp(),
-        userType: 'admin',
-        conversationId,
-        seenBy: [],
-        acknowledgments: [],
-      });
+      const { error } = await supabase
+        .from('messages')
+        .insert({
+          sender_id: 'admin', // Admin ID
+          receiver_id: selectedStation.id,
+          sender_type: 'admin',
+          receiver_type: 'station',
+          text: newMessage,
+          is_emergency: isEmergencyMode,
+          is_read: false
+        });
+
+      if (error) {
+        console.error('Error sending message:', error);
+        alert('Failed to send message');
+        return;
+      }
+
       setNewMessage('');
     } catch (error) {
-      alert('Failed to send message: ' + error.message);
+      console.error('Error sending message:', error);
+      alert('Failed to send message');
     }
   };
 
   const handleSelectImage = async (event) => {
     const file = event.target.files && event.target.files[0];
-    if (!file || !selectedUser) return;
+    if (!file || !selectedStation) return;
+
     setIsUploadingImage(true);
     try {
-      const currentUserId = auth.currentUser?.uid || '';
-      const currentUserEmail = auth.currentUser?.email || fallbackAdminEmail || '';
-      const selectedUserId = selectedUser.id;
-      const selectedUserEmail = selectedUser.email || '';
-      const conversationId = (currentUserEmail && selectedUserEmail)
-        ? [currentUserEmail, selectedUserEmail].sort().join('_')
-        : (currentUserId && selectedUserId ? getConversationId(currentUserId, selectedUserId) : null);
-      if (!conversationId) return;
-      
-      const path = `chatImages/${currentUserId}/${Date.now()}-${file.name}`;
-      const ref = storageRef(storage, path);
-      await uploadBytes(ref, file);
-      const downloadURL = await getDownloadURL(ref);
-      await addDoc(collection(db, 'messages'), {
-        sender: currentUserName || auth.currentUser?.displayName || auth.currentUser?.email || 'Admin',
-        senderId: currentUserId || currentUserEmail || 'admin',
-        senderEmail: currentUserEmail || null,
-        receiverId: selectedUserId,
-        receiverEmail: selectedUserEmail || null,
-        receiverName: selectedUser.name || selectedUser.email || '',
-        text: '',
-        imageUrl: downloadURL,
-        isEmergency: isEmergencyMode,
-        timestamp: serverTimestamp(),
-        userType: 'admin',
-        conversationId,
-        seenBy: [],
-        acknowledgments: [],
-      });
+      // For now, we'll just send a text message indicating image upload
+      // In a full implementation, you'd upload to Supabase Storage
+      const { error } = await supabase
+        .from('messages')
+        .insert({
+          sender_id: 'admin',
+          receiver_id: selectedStation.id,
+          sender_type: 'admin',
+          receiver_type: 'station',
+          text: `[Image: ${file.name}]`,
+          is_emergency: isEmergencyMode,
+          is_read: false
+        });
+
+      if (error) {
+        console.error('Error sending image message:', error);
+        alert('Failed to send image message');
+      }
     } catch (error) {
-      alert('Failed to upload image: ' + error.message);
+      console.error('Error sending image message:', error);
+      alert('Failed to send image message');
     } finally {
       setIsUploadingImage(false);
       if (event.target) {
@@ -228,331 +254,222 @@ const Afira_chat = () => {
     }
   };
 
-  const handleAcknowledge = async (message) => {
-    try {
-      const messageRef = doc(db, 'messages', message.id);
-      const currentUserId = auth.currentUser?.uid || 'admin';
-      
-      // Add current user to acknowledgments if not already there
-      await updateDoc(messageRef, {
-        acknowledgments: arrayUnion(currentUserId)
-      });
-    } catch (error) {
-      console.error('Failed to acknowledge message:', error);
+  const formatTime = (timestamp) => {
+    if (!timestamp) return '';
+    const date = new Date(timestamp);
+    return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  };
+
+  const formatLastMessage = (message) => {
+    if (!message) return 'No messages yet';
+    if (message.length > 50) {
+      return message.substring(0, 50) + '...';
     }
-  };
-
-  // Helper function to check if current user has acknowledged a message
-  const hasUserAcknowledged = (message) => {
-    const currentUserId = auth.currentUser?.uid || 'admin';
-    return (message.acknowledgments || []).includes(currentUserId);
-  };
-
-  // Helper function to get acknowledgment count
-  const getAcknowledgmentCount = (message) => {
-    return (message.acknowledgments || []).length;
-  };
-
-  const handleReactCheck = async (message) => {
-    try {
-      const uid = auth.currentUser?.uid;
-      if (!uid || !message?.id) return;
-      const reactedBy = message.checkReactedBy || [];
-      if (reactedBy.includes(uid)) return; // non-revertable
-      const mref = doc(db, 'messages', message.id);
-      await updateDoc(mref, { checkReactedBy: arrayUnion(uid) });
-    } catch (error) {
-      alert('Failed to react: ' + error.message);
-    }
-  };
-
-  const triggerEmergency = async () => {
-    setIsEmergencyMode(true);
-    try {
-      await addDoc(collection(db, 'messages'), {
-        sender: 'System',
-        senderId: 'system',
-        text: 'EMERGENCY MODE ACTIVATED - Connecting to DRRMO',
-        isEmergency: true,
-        timestamp: serverTimestamp(),
-        userType: 'admin',
-      });
-    } catch (error) {
-      alert('Failed to send emergency message: ' + error.message);
-    }
+    return message;
   };
 
   return (
-    <div className="flex h-screen">
+    <div className="flex h-[90vh] overflow-hidden">
       {/* Sidebar */}
-<div className="w-1/4 bg-white border-r flex flex-col">
-  {/* Sidebar Header */}
-<div className="p-4 border-b border-gray-300">
-  <h2 className="text-lg font-bold text-red-600">Project FIRA</h2>
-  <p className="text-sm text-gray-500">Emergency Communication</p>
-</div>
-
-{/* Tabs */}
-<div className="flex border-b border-gray-300">
-  <button
-    className={`flex-1 py-2 text-center font-medium ${
-      activeTab === 'chat'
-        ? 'text-red-600 border-b-2 border-red-600'
-        : 'text-gray-500 hover:text-gray-700'
-    }`}
-    onClick={() => setActiveTab('chat')}
-  >
-    Chats
-  </button>
-  <button
-    className={`flex-1 py-2 text-center font-medium ${
-      activeTab === 'contacts'
-        ? 'text-red-600 border-b-2 border-red-600'
-        : 'text-gray-500 hover:text-gray-700'
-    }`}
-    onClick={() => setActiveTab('contacts')}
-  >
-    Contacts
-  </button>
-</div>
-
-  {/* Chat tab */}
-  {activeTab === 'chat' && (
-    <div className="overflow-y-auto h-[calc(100vh-12rem)] p-4 space-y-2">
-      {users.map(user => (
-        <div 
-          key={user.id} 
-          onClick={() => setSelectedUser(user)}
-          className={`cursor-pointer p-2 hover:bg-gray-200 rounded-lg flex items-center space-x-2 ${selectedUser?.id === user.id ? 'bg-gray-300' : ''}`}
-        >
-          <div className="w-10 h-10 rounded-full flex items-center justify-center font-bold bg-green-100 text-green-600">
-            {user.avatar}
-          </div>
-          <div>
-            <div className="font-bold">{user.name}</div>
-            <div className="text-sm text-gray-500">{user.email}</div>
+      <div className="w-1/4 bg-white border-r flex flex-col h-[90vh]">
+        <div className="p-2 border-b border-gray-300">
+          <h2 className="text-lg font-bold text-red-600">Project FIRA</h2>
+          <p className="text-sm text-gray-500">Emergency Communication</p>
+        </div>
+        
+        {/* Search Bar */}
+        <div className="p-2 border-b border-gray-300">
+          <div className="relative">
+            <FiSearch className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" size={16} />
+            <input
+              type="text"
+              placeholder={`Search ${activeTab === 'chat' ? 'stations' : 'unread messages'}...`}
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="w-full pl-10 pr-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:border-red-500"
+            />
           </div>
         </div>
-      ))}
-    </div>
-  )}
 
-  {/* Contacts tab */}
-  {activeTab === 'contacts' && (
-    <div className="overflow-y-auto h-[calc(100vh-12rem)] p-4 space-y-2">
-      {emergencyContacts.map(contact => (
-        <div 
-          key={contact.id}
-          className="cursor-pointer p-2 hover:bg-gray-200 rounded-lg"
-          onClick={() => setSelectedUser({ id: contact.id, name: contact.name, email: contact.email })}
-        >
-          <div className="flex items-center space-x-2">
-            <div>
-              <div className="font-bold">{contact.name}</div>
-              <div className="text-sm text-gray-500">{contact.email}</div>
-            </div>
-          </div>
+        <div className="flex border-b border-gray-300">
+          <button
+            className={`flex-1 py-2 text-center font-medium ${activeTab === 'chat' ? 'text-red-600 border-b-2 border-red-600' : 'text-gray-500 hover:text-gray-700'}`}
+            onClick={() => setActiveTab('chat')}
+          >
+            Chats
+          </button>
+          <button
+            className={`flex-1 py-2 text-center font-medium ${activeTab === 'unread' ? 'text-red-600 border-b-2 border-red-600' : 'text-gray-500 hover:text-gray-700'}`}
+            onClick={() => setActiveTab('unread')}
+          >
+            Unread Messages
+          </button>
         </div>
-      ))}
-    </div>
-  )}
-</div>
 
-      
+        {activeTab === 'chat' && (
+          <div className="overflow-y-auto h-[calc(100vh-12rem)] p-4 space-y-2">
+            {isLoading ? (
+              <div className="text-center text-gray-500">Loading stations...</div>
+            ) : filteredStations.length === 0 ? (
+              <div className="text-center text-gray-500">No stations found</div>
+            ) : (
+              filteredStations.map(station => (
+                <div 
+                  key={station.id} 
+                  onClick={() => setSelectedStation(station)}
+                  className={`cursor-pointer p-3 hover:bg-gray-100 rounded-lg flex items-center space-x-3 ${
+                    selectedStation?.id === station.id ? 'bg-gray-200' : ''
+                  }`}
+                >
+                  <div className="w-12 h-12 rounded-full flex items-center justify-center font-bold bg-green-100 text-green-600 text-lg">
+                    {station.avatar}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="font-semibold text-gray-900 truncate">{station.name}</div>
+                    <div className="text-sm text-gray-500 truncate">{station.email}</div>
+                    {station.lastMessage && (
+                      <div className="text-xs text-gray-400 truncate mt-1">
+                        {formatLastMessage(station.lastMessage)}
+                      </div>
+                    )}
+                  </div>
+                  {station.unreadCount > 0 && (
+                    <div className="bg-red-500 text-white text-xs rounded-full px-2 py-1 min-w-[20px] text-center">
+                      {station.unreadCount}
+                    </div>
+                  )}
+                </div>
+              ))
+            )}
+          </div>
+        )}
+
+        {activeTab === 'unread' && (
+          <div className="overflow-y-auto h-[calc(100vh-12rem)] p-4 space-y-2">
+            {filteredUnreadStations.length === 0 ? (
+              <div className="text-center text-gray-500">No unread messages</div>
+            ) : (
+              filteredUnreadStations.map(station => (
+                <div 
+                  key={station.id} 
+                  onClick={() => setSelectedStation(station)}
+                  className={`cursor-pointer p-3 hover:bg-gray-100 rounded-lg flex items-center space-x-3 ${
+                    selectedStation?.id === station.id ? 'bg-gray-200' : ''
+                  }`}
+                >
+                  <div className="w-12 h-12 rounded-full flex items-center justify-center font-bold bg-green-100 text-green-600 text-lg">
+                    {station.avatar}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="font-semibold text-gray-900 truncate">{station.name}</div>
+                    <div className="text-sm text-gray-500 truncate">{station.email}</div>
+                    {station.lastMessage && (
+                      <div className="text-xs text-gray-400 truncate mt-1">
+                        {formatLastMessage(station.lastMessage)}
+                      </div>
+                    )}
+                  </div>
+                  <div className="bg-red-500 text-white text-xs rounded-full px-2 py-1 min-w-[20px] text-center">
+                    {station.unreadCount}
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+        )}
+      </div>
+
       {/* Chat Area */}
-      <div className="flex-1 flex flex-col">
-        {/* Only show chat if a user is selected */}
-        {selectedUser ? (
+      <div className="flex-1 flex flex-col h-[90vh] overflow-hidden">
+        {selectedStation ? (
           <>
-            {/* Chat Header */}
-            <div className={`p-4 border-b border-gray-200 flex items-center justify-between ${
-              isEmergencyMode ? 'bg-red-50' : 'bg-white'
-            }`}>
+            <div className="p-4 border-b border-gray-200 flex items-center justify-between flex-shrink-0 bg-white">
               <div className="flex items-center">
-                <div className="w-10 h-10 rounded-full bg-blue-100 flex items-center justify-center text-blue-600 font-bold mr-3">
-                  {selectedUser.name ? selectedUser.name[0] : (selectedUser.email ? selectedUser.email[0] : '?')}
+                <div className="w-12 h-12 rounded-full bg-green-100 flex items-center justify-center text-green-600 font-bold text-lg mr-3">
+                  {selectedStation.avatar}
                 </div>
                 <div>
-                  <h3 className="font-medium">{selectedUser.name || selectedUser.email}</h3>
-                  <p className="text-sm text-gray-500">{selectedUser.email}</p>
+                  <h3 className="font-semibold text-lg">{selectedStation.name}</h3>
+                  <p className="text-sm text-gray-500">{selectedStation.email}</p>
                 </div>
               </div>
-              <div className="flex space-x-2">
-                {/* Removed video call, map, and call icons */}
-              </div>
             </div>
+
             {/* Messages */}
-            <div className="flex-1 overflow-y-auto p-4 bg-gray-50">
+            <div className="flex-1 overflow-y-auto p-4 pb-16 bg-gray-50">
               {messages.length === 0 ? (
                 <div className="flex flex-col items-center justify-center h-full text-gray-500">
                   <div className="text-6xl mb-4">💬</div>
                   <h3 className="text-lg font-medium mb-2">No messages yet</h3>
                   <p className="text-sm text-center">
-                    Start a conversation with {selectedUser.name || selectedUser.email}
+                    Start a conversation with {selectedStation.name}
                   </p>
                 </div>
               ) : (
-                messages.map((message) => {
-                  const isMine = message.userType === 'admin' || message.senderId === (auth.currentUser?.uid || 'admin');
-                  return (
-                    <div 
-                      key={message.id} 
-                      className={`mb-4 flex ${isMine ? 'justify-end' : 'justify-start'} items-center`}
-                    >
-                      {isMine && (
-                        <button
-                          type="button"
-                          onClick={() => handleAcknowledge(message)}
-                          className={`mr-2 inline-flex items-center text-xs text-green-600 ${hasUserAcknowledged(message) ? 'opacity-100' : 'opacity-60 hover:opacity-100'}`}
-                          aria-label={hasUserAcknowledged(message) ? 'Acknowledged' : 'Acknowledge message'}
-                          title={hasUserAcknowledged(message) ? 'You acknowledged' : 'Acknowledge'}
-                        >
-                          <span className="text-base leading-none">✅</span>
-                          {getAcknowledgmentCount(message) > 0 && <span className="ml-1">{getAcknowledgmentCount(message)}</span>}
-                        </button>
-                      )}
-                      <div className={`max-w-xs md:max-w-md ${isMine ? 'items-end' : 'items-start'}`}>
-                        <div className={`rounded-lg px-4 py-2 ${
-                          isMine 
-                            ? isEmergencyMode 
-                              ? 'bg-red-600 text-white' 
-                              : 'bg-blue-600 text-white'
-                            : message.isEmergency
-                              ? 'bg-red-100 border border-red-200'
-                              : 'bg-white border border-gray-200'
-                        }`}>
-                          {!isMine && (
-                            <div className={`text-xs font-medium mb-1 ${
-                              message.isEmergency ? 'text-red-600' : 'text-gray-500'
-                            }`}>
-                              {message.sender || selectedUser.name || selectedUser.email}
-                            </div>
-                          )}
-                          {message.text && <p className="whitespace-pre-wrap">{message.text}</p>}
-                          {message.imageUrl && (
-                            <img
-                              src={message.imageUrl}
-                              alt="sent attachment"
-                              className="mt-1 max-h-60 rounded-md object-cover"
-                            />
-                          )}
-                          <div className={`text-xs mt-1 text-right ${
-                            isMine 
-                              ? 'text-white text-opacity-80' 
-                              : message.isEmergency 
-                                ? 'text-red-500' 
-                                : 'text-gray-500'
-                          }`}>
-                            {message.timestamp && message.timestamp.toDate ? message.timestamp.toDate().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''}
-                          </div>
-                        </div>
-                        <div className={`mt-0.5 flex items-center ${isMine ? 'justify-end' : 'justify-start'} space-x-2`}>
-                          {isMine ? (
-                            ((message.seenBy || []).includes(selectedUser?.id)) ? (
-                              <span className="inline-flex items-center text-[10px] text-green-600">
-                                <FiCheck className="mr-1" size={12} /> Seen
-                              </span>
-                            ) : (
-                              <span className="inline-flex items-center text-[10px] text-gray-400">
-                                <FiCheck className="mr-1" size={12} /> Sent
-                              </span>
-                            )
-                          ) : null}
+                messages.map((message) => (
+                  <div 
+                    key={message.id} 
+                    className={`mb-4 flex ${message.sender_type === 'admin' ? 'justify-end' : 'justify-start'}`}
+                  >
+                    <div className="max-w-xs md:max-w-md">
+                      <div className={`rounded-lg px-4 py-2 ${
+                        message.sender_type === 'admin' 
+                          ? 'bg-blue-600 text-white' 
+                          : 'bg-white border border-gray-200'
+                      }`}>
+                        {message.text && <p className="whitespace-pre-wrap">{message.text}</p>}
+                        <div className="text-xs mt-2 text-right opacity-70">
+                          {formatTime(message.created_at)}
                         </div>
                       </div>
-                      {!isMine && (
-                        <button
-                          type="button"
-                          onClick={() => handleAcknowledge(message)}
-                          className={`ml-2 inline-flex items-center text-xs text-green-600 ${hasUserAcknowledged(message) ? 'opacity-100' : 'opacity-60 hover:opacity-100'}`}
-                          aria-label={hasUserAcknowledged(message) ? 'Acknowledged' : 'Acknowledge message'}
-                          title={hasUserAcknowledged(message) ? 'You acknowledged' : 'Acknowledge'}
-                        >
-                          <span className="text-base leading-none">✅</span>
-                          {getAcknowledgmentCount(message) > 0 && <span className="ml-1">{getAcknowledgmentCount(message)}</span>}
-                        </button>
-                      )}
                     </div>
-                  );
-                })
+                  </div>
+                ))
               )}
               <div ref={messagesEndRef} />
             </div>
+
             {/* Message Input */}
-            <div className="p-4 border-t border-gray-200 bg-white">
-              {isEmergencyMode && (
-                <div className="bg-red-50 border-l-4 border-red-400 p-3 mb-3 rounded-r-lg">
-                  <div className="flex items-center text-red-800">
-                    <FiAlertTriangle className="mr-2 flex-shrink-0" />
-                    <p className="text-sm">You are in emergency mode. All messages are prioritized.</p>
-                  </div>
-                </div>
-              )}
+            <div className="p-4 border-t border-gray-200 bg-white flex-shrink-0">
               <div className="flex items-center">
-                <button className="p-2 text-gray-500 hover:text-gray-700 mr-2" disabled={isUploadingImage}>
-                  <FiPaperclip size={20} />
-                </button>
-                <input
-                  ref={imageInputRef}
-                  type="file"
-                  accept="image/*"
-                  className="hidden"
-                  onChange={handleSelectImage}
-                />
-                <button
-                  type="button"
-                  onClick={() => imageInputRef.current?.click()}
-                  disabled={isUploadingImage || !selectedUser}
-                  className={`p-2 mr-2 rounded-full ${isUploadingImage ? 'opacity-50 cursor-not-allowed' : 'text-gray-500 hover:text-gray-700'}`}
-                  title="Send image"
+                <button 
+                  type="button" 
+                  onClick={() => imageInputRef.current?.click()} 
+                  disabled={isUploadingImage || !selectedStation}
+                  className="p-2 mr-2 rounded-full text-gray-500 hover:text-gray-700 disabled:opacity-50"
                 >
                   <FiImage size={20} />
                 </button>
-                {/* Removed voice message icon */}
+                <input 
+                  ref={imageInputRef} 
+                  type="file" 
+                  accept="image/*" 
+                  className="hidden" 
+                  onChange={handleSelectImage} 
+                />
                 <div className="flex-1 relative">
                   <textarea
                     value={newMessage}
                     onChange={(e) => setNewMessage(e.target.value)}
                     onKeyPress={handleKeyPress}
-                    placeholder={isEmergencyMode ? "Describe your emergency..." : "Type a message..."}
+                    placeholder="Type a message..."
                     className="w-full border border-gray-300 rounded-lg pl-4 pr-12 py-2 focus:ring-2 focus:ring-red-500 focus:border-red-500 resize-none"
                     rows="1"
                   />
                 </div>
-                <button
-                  onClick={handleSendMessage}
+                <button 
+                  onClick={handleSendMessage} 
                   disabled={!newMessage.trim()}
-                  className={`ml-3 p-2 rounded-full ${
-                    isEmergencyMode
-                      ? 'bg-red-600 text-white hover:bg-red-700'
-                      : 'bg-blue-600 text-white hover:bg-blue-700'
-                  } ${!newMessage.trim() ? 'opacity-50 cursor-not-allowed' : ''}`}
+                  className="ml-3 p-2 rounded-full bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50"
                 >
                   <FiSend size={20} />
                 </button>
-              </div>
-              <div className="mt-2 flex justify-between text-xs text-gray-500">
-                <div>
-                  {isEmergencyMode ? (
-                    <span className="text-red-600 flex items-center">
-                      <FiAlertTriangle className="mr-1" /> Emergency communication
-                    </span>
-                  ) : 'Standard message'}
-                </div>
-                <div>
-                  <button 
-                    onClick={() => setIsEmergencyMode(!isEmergencyMode)}
-                    className="text-red-600 hover:underline"
-                  >
-                    {isEmergencyMode ? 'Exit emergency mode' : 'Switch to emergency mode'}
-                  </button>
-                </div>
               </div>
             </div>
           </>
         ) : (
           <div className="flex-1 flex items-center justify-center text-gray-400 text-lg">
-            Select a user to start chatting.
+            Select a station to start chatting.
           </div>
         )}
       </div>
