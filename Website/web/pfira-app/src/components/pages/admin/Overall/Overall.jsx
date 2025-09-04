@@ -243,16 +243,48 @@ const Overview = () => {
     }
   };
 
-  // Handle status change
+  // Handle status change with confirmation
   const handleStatusChange = (reportId, newStatus) => {
-    setEditingStatus(prev => ({ ...prev, [reportId]: false }));
-    updateReportStatus(reportId, newStatus);
+    const currentReport = reports.find(r => r.id === reportId);
+    const currentStatus = currentReport?.status || 'Unknown';
+    
+    // Show confirmation dialog
+    const confirmed = window.confirm(
+      `Are you sure you want to change the status from "${currentStatus}" to "${newStatus}"?\n\n` +
+      `Report ID: ${reportId}\n` +
+      `Location: ${currentReport?.location || 'Unknown'}\n\n` +
+      `This action will update the emergency response status and may affect resource allocation.`
+    );
+    
+    if (confirmed) {
+      setEditingStatus(prev => ({ ...prev, [reportId]: false }));
+      updateReportStatus(reportId, newStatus);
+    } else {
+      // If user cancels, just close the editing mode without saving
+      setEditingStatus(prev => ({ ...prev, [reportId]: false }));
+    }
   };
 
-  // Handle final alarm level change
+  // Handle final alarm level change with confirmation
   const handleFinalAlarmChange = (reportId, newAlarmLevel) => {
-    setEditingFinalAlarm(prev => ({ ...prev, [reportId]: false }));
-    updateFinalAlarmLevel(reportId, newAlarmLevel);
+    const currentReport = reports.find(r => r.id === reportId);
+    const currentAlarmLevel = currentReport?.finalAlarmLevel || 'Unknown';
+    
+    // Show confirmation dialog
+    const confirmed = window.confirm(
+      `Are you sure you want to change the final alarm level from "${currentAlarmLevel}" to "${newAlarmLevel}"?\n\n` +
+      `Report ID: ${reportId}\n` +
+      `Location: ${currentReport?.location || 'Unknown'}\n\n` +
+      `This action will update the emergency response level and may trigger additional resource deployment.`
+    );
+    
+    if (confirmed) {
+      setEditingFinalAlarm(prev => ({ ...prev, [reportId]: false }));
+      updateFinalAlarmLevel(reportId, newAlarmLevel);
+    } else {
+      // If user cancels, just close the editing mode without saving
+      setEditingFinalAlarm(prev => ({ ...prev, [reportId]: false }));
+    }
   };
 
   const getStatusColor = (status) => {
