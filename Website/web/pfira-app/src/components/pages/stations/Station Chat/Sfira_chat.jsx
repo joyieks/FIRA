@@ -71,25 +71,50 @@ const Sfira_chat = () => {
           .from('admin_users')
           .select('*');
         
-        if (adminError && adminError.message.includes('relation "admin_users" does not exist')) {
-          console.log('⚠️ admin_users table not found, creating mock admin');
-          adminUsers = [{
-            id: 'mock-admin-1',
-            first_name: 'Command',
-            last_name: 'Center',
-            email: 'admin@fira.com'
-          }];
-        } else if (adminError) {
+        if (adminError) {
           console.error('❌ Error fetching admin users:', adminError);
-          adminUsers = [];
+          console.error('❌ Error details:', {
+            message: adminError.message,
+            code: adminError.code,
+            details: adminError.details,
+            hint: adminError.hint
+          });
+          
+          // Check if it's a table not found error
+          if (adminError.message.includes('relation "admin_users" does not exist') || 
+              adminError.code === 'PGRST116') {
+            console.log('⚠️ admin_users table not found, creating mock admin');
+            adminUsers = [{
+              id: 'mock-admin-1',
+              first_name: 'Command',
+              last_name: 'Center',
+              email: 'admin@fira.com'
+            }];
+          } else {
+            // For other errors, still create a mock admin to ensure functionality
+            console.log('⚠️ Database error, creating mock admin for functionality');
+            adminUsers = [{
+              id: 'mock-admin-1',
+              first_name: 'Command',
+              last_name: 'Center',
+              email: 'admin@fira.com'
+            }];
+          }
         } else {
           adminUsers = adminData || [];
           console.log('✅ Admin users fetched:', adminUsers);
           console.log('✅ Admin users count:', adminUsers.length);
-        }
-
-        if (adminUsers.length === 0) {
-          console.log('⚠️ No admin users found in admin_users table');
+          
+          // If no admin users found in database, create a mock one
+          if (adminUsers.length === 0) {
+            console.log('⚠️ No admin users found in admin_users table, creating mock admin');
+            adminUsers = [{
+              id: 'mock-admin-1',
+              first_name: 'Command',
+              last_name: 'Center',
+              email: 'admin@fira.com'
+            }];
+          }
         }
 
         // Fetch ONLY responders assigned to THIS station - CRITICAL FIX
@@ -164,9 +189,10 @@ const Sfira_chat = () => {
         console.log('🔍 Raw stations data:', otherStations);
 
         // Format users from Supabase tables
-        const formattedUsers = [
-          // Admin users
-          ...(adminUsers || []).map(admin => ({
+        console.log('🔍 About to format admin users:', adminUsers);
+        const formattedAdminUsers = (adminUsers || []).map(admin => {
+          console.log('🔍 Processing admin user:', admin);
+          const formatted = {
             id: admin.id,
             name: `${admin.first_name || ''} ${admin.last_name || ''}`.trim() || 'Admin User',
             email: admin.email,
@@ -175,7 +201,15 @@ const Sfira_chat = () => {
             lastMessage: '',
             lastMessageTime: null,
             unreadCount: 0
-          })),
+          };
+          console.log('🔍 Formatted admin user:', formatted);
+          return formatted;
+        });
+        console.log('🔍 All formatted admin users:', formattedAdminUsers);
+
+        const formattedUsers = [
+          // Admin users
+          ...formattedAdminUsers,
           
           // Responders (only those assigned to current station)
           ...(responders || []).map(responder => {
@@ -210,6 +244,9 @@ const Sfira_chat = () => {
 
         console.log('Total formatted users:', formattedUsers);
         console.log('Current station ID:', currentStationId);
+        console.log('🔍 Admin users in final list:', formattedUsers.filter(u => u.type === 'admin'));
+        console.log('🔍 Responder users in final list:', formattedUsers.filter(u => u.type === 'responder'));
+        console.log('🔍 Station users in final list:', formattedUsers.filter(u => u.type === 'station'));
 
         setUsers(formattedUsers);
         setFilteredUsers(formattedUsers);
@@ -232,7 +269,7 @@ const Sfira_chat = () => {
 
       try {
         const { data: messagesData, error } = await supabase
-          .from('message')
+          .from('messages')
           .select('*')
           .eq('receiver_id', currentStationId)
           .eq('is_read', false)
@@ -320,16 +357,37 @@ const Sfira_chat = () => {
 
   // Fetch messages for selected user
   useEffect(() => {
-    if (!selectedUser || !currentStationId) return;
+    console.log('useEffect triggered - selectedUser:', selectedUser, 'currentStationId:', currentStationId);
+    if (!selectedUser || !currentStationId) {
+      console.log('Missing required data - selectedUser:', !!selectedUser, 'currentStationId:', !!currentStationId);
+      return;
+    }
 
     const fetchMessages = async () => {
       try {
         console.log('Fetching messages between:', currentStationId, 'and', selectedUser.id);
         
-        const { data: messagesData, error } = await supabase
-          .from('message')
+        // First, let's try a simpler query to see all messages
+        console.log('Trying to fetch all messages first...');
+        const { data: allMessages, error: allError } = await supabase
+          .from('messages')
           .select('*')
-          .or(`and(sender_id.eq.${selectedUser.id},receiver_id.eq.${currentStationId}),and(sender_id.eq.${currentStationId},receiver_id.eq.${selectedUser.id})`)
+          .order('created_at', { ascending: true });
+        
+        if (allError) {
+          console.error('Error fetching all messages:', allError);
+        } else {
+          console.log('All messages in database:', allMessages);
+        }
+
+        // Now try the specific query
+        const query = `and(sender_id.eq.${selectedUser.id},receiver_id.eq.${currentStationId}),and(sender_id.eq.${currentStationId},receiver_id.eq.${selectedUser.id})`;
+        console.log('Query string:', query);
+        
+        const { data: messagesData, error } = await supabase
+          .from('messages')
+          .select('*')
+          .or(query)
           .order('created_at', { ascending: true });
 
         if (error) {
@@ -338,6 +396,8 @@ const Sfira_chat = () => {
         }
 
         console.log('Messages fetched:', messagesData);
+        console.log('Number of messages fetched:', messagesData?.length || 0);
+        console.log('Setting messages state with:', messagesData || []);
         setMessages(messagesData || []);
         setTimeout(scrollToBottom, 100);
       } catch (error) {
@@ -350,22 +410,61 @@ const Sfira_chat = () => {
 
   // Real-time subscription for new messages
   useEffect(() => {
-    if (!selectedUser || !currentStationId) return;
+    if (!selectedUser || !currentStationId) {
+      console.log('Real-time subscription: Missing selectedUser or currentStationId');
+      return;
+    }
+
+    console.log('Setting up real-time subscription for:', {
+      selectedUser: selectedUser.id,
+      currentStationId: currentStationId,
+      channel: `messages:${selectedUser.id}:${currentStationId}`
+    });
+
+    // Test real-time connection first
+    const testChannel = supabase
+      .channel('test-connection')
+      .on('postgres_changes', {
+        event: '*',
+        schema: 'public',
+        table: 'messages'
+      }, (payload) => {
+        console.log('Test real-time message received:', payload);
+      })
+      .subscribe((status) => {
+        console.log('Test real-time subscription status:', status);
+      });
 
     const subscription = supabase
       .channel(`messages:${selectedUser.id}:${currentStationId}`)
       .on('postgres_changes', {
         event: 'INSERT',
         schema: 'public',
-        table: 'message',
+        table: 'messages',
         filter: `or(and(sender_id.eq.${selectedUser.id},receiver_id.eq.${currentStationId}),and(sender_id.eq.${currentStationId},receiver_id.eq.${selectedUser.id}))`
       }, (payload) => {
-        setMessages(prev => [...prev, payload.new]);
+        console.log('Real-time message received:', payload);
+        setMessages(prev => {
+          console.log('Previous messages:', prev);
+          console.log('Adding new message:', payload.new);
+          const newMessages = [...prev, payload.new];
+          console.log('Updated messages:', newMessages);
+          return newMessages;
+        });
         setTimeout(scrollToBottom, 100);
       })
-      .subscribe();
+      .subscribe((status) => {
+        console.log('Real-time subscription status:', status);
+        if (status === 'SUBSCRIBED') {
+          console.log('✅ Real-time subscription active');
+        } else if (status === 'CHANNEL_ERROR') {
+          console.error('❌ Real-time subscription error');
+        }
+      });
 
     return () => {
+      console.log('Cleaning up real-time subscription');
+      testChannel.unsubscribe();
       subscription.unsubscribe();
     };
   }, [selectedUser, currentStationId]);
@@ -378,7 +477,7 @@ const Sfira_chat = () => {
     if (newMessage.trim() === '' || !selectedUser || !currentStationId) return;
 
     try {
-      console.log('Sending message:', {
+      const messageData = {
         sender_id: currentStationId,
         receiver_id: selectedUser.id,
         sender_type: 'station',
@@ -386,19 +485,16 @@ const Sfira_chat = () => {
         text: newMessage,
         is_emergency: isEmergencyMode,
         is_read: false
-      });
+      };
+
+      console.log('Sending message:', messageData);
+      console.log('Current station ID type:', typeof currentStationId);
+      console.log('Selected user ID type:', typeof selectedUser.id);
+      console.log('Selected user type:', selectedUser.type);
 
       const { data, error } = await supabase
-        .from('message')
-        .insert({
-          sender_id: currentStationId,
-          receiver_id: selectedUser.id,
-          sender_type: 'station',
-          receiver_type: selectedUser.type,
-          text: newMessage,
-          is_emergency: isEmergencyMode,
-          is_read: false
-        })
+        .from('messages')
+        .insert(messageData)
         .select();
 
       if (error) {
@@ -409,6 +505,15 @@ const Sfira_chat = () => {
 
       console.log('Message sent successfully:', data);
       setNewMessage('');
+      
+      // Add the message to the local state immediately for better UX
+      if (data && data[0]) {
+        setMessages(prev => {
+          console.log('Adding sent message to local state:', data[0]);
+          return [...prev, data[0]];
+        });
+        setTimeout(scrollToBottom, 100);
+      }
     } catch (error) {
       console.error('Error sending message:', error);
       alert(`Failed to send message: ${error.message}`);
@@ -424,7 +529,7 @@ const Sfira_chat = () => {
       // For now, we'll just send a text message indicating image upload
       // In a full implementation, you'd upload to Supabase Storage
       const { error } = await supabase
-        .from('message')
+        .from('messages')
         .insert({
           sender_id: currentStationId,
           receiver_id: selectedUser.id,
@@ -680,6 +785,7 @@ const Sfira_chat = () => {
 
             {/* Messages */}
             <div className="flex-1 overflow-y-auto p-4 bg-gray-50">
+              {console.log('Rendering messages, count:', messages.length, 'messages:', messages)}
               {messages.length === 0 ? (
                 <div className="flex flex-col items-center justify-center h-full text-gray-500">
                   <div className="text-6xl mb-4">💬</div>
