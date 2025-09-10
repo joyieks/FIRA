@@ -268,12 +268,28 @@ const Sfira_chat = () => {
       if (!currentStationId || users.length === 0) return;
 
       try {
+        console.log('🔍 Fetching unread messages for station:', currentStationId);
+        
+        // First, let's check ALL messages for this station to see what we have
+        const { data: allMessages, error: allError } = await supabase
+          .from('messages')
+          .select('*')
+          .eq('receiver_id', currentStationId)
+          .order('created_at', { ascending: false });
+        
+        console.log('🔍 ALL messages for this station:', allMessages);
+        console.log('🔍 ALL messages count:', allMessages?.length || 0);
+        
+        // Now check specifically for unread messages
         const { data: messagesData, error } = await supabase
           .from('messages')
           .select('*')
           .eq('receiver_id', currentStationId)
           .eq('is_read', false)
           .order('created_at', { ascending: false });
+
+        console.log('🔍 Unread messages query result:', messagesData);
+        console.log('🔍 Unread messages count:', messagesData?.length || 0);
 
         if (error) {
           console.error('Error fetching unread messages:', error);
@@ -284,6 +300,7 @@ const Sfira_chat = () => {
         const unreadByUser = {};
         messagesData.forEach(message => {
           const userId = message.sender_id;
+          console.log('🔍 Processing unread message from user:', userId, 'text:', message.text, 'is_read:', message.is_read);
           if (!unreadByUser[userId]) {
             unreadByUser[userId] = {
               count: 0,
@@ -293,23 +310,31 @@ const Sfira_chat = () => {
           }
           unreadByUser[userId].count++;
         });
+        
+        console.log('🔍 Grouped unread messages by user:', unreadByUser);
 
         // Update users with unread count and last message
         const updatedUsers = users.map(user => {
           const unreadInfo = unreadByUser[user.id];
-          return {
+          const updatedUser = {
             ...user,
             unreadCount: unreadInfo ? unreadInfo.count : 0,
             lastMessage: unreadInfo ? unreadInfo.lastMessage : user.lastMessage,
             lastMessageTime: unreadInfo ? unreadInfo.lastMessageTime : user.lastMessageTime
           };
+          console.log('🔍 Updated user:', user.name, 'unreadCount:', updatedUser.unreadCount, 'unreadInfo:', unreadInfo);
+          return updatedUser;
         });
 
+        console.log('🔍 Setting users state with:', updatedUsers.length, 'users');
         setUsers(updatedUsers);
         setFilteredUsers(updatedUsers);
 
         // Set unread users
         const unreadUsersList = updatedUsers.filter(user => user.unreadCount > 0);
+        console.log('🔍 All users with unread counts:', updatedUsers.map(u => ({ name: u.name, unreadCount: u.unreadCount })));
+        console.log('🔍 Filtered unread users:', unreadUsersList.map(u => ({ name: u.name, unreadCount: u.unreadCount })));
+        console.log('🔍 Setting unread users state with:', unreadUsersList.length, 'unread users');
         setUnreadUsers(unreadUsersList);
         setFilteredUnreadUsers(unreadUsersList);
       } catch (error) {
@@ -340,6 +365,9 @@ const Sfira_chat = () => {
       });
       setFilteredUsers(filtered);
     } else {
+      console.log('🔍 Filtering unread users - activeTab:', activeTab, 'unreadUsers count:', unreadUsers.length);
+      console.log('🔍 Unread users before filtering:', unreadUsers.map(u => ({ name: u.name, unreadCount: u.unreadCount, type: u.type })));
+      
       filtered = unreadUsers.filter(user => {
         const matchesSearch = user.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
                             user.email.toLowerCase().includes(searchQuery.toLowerCase());
@@ -351,6 +379,8 @@ const Sfira_chat = () => {
         
         return matchesSearch;
       });
+      
+      console.log('🔍 Filtered unread users result:', filtered.map(u => ({ name: u.name, unreadCount: u.unreadCount, type: u.type })));
       setFilteredUnreadUsers(filtered);
     }
   }, [searchQuery, filterType, activeTab, users, unreadUsers]);
@@ -399,6 +429,12 @@ const Sfira_chat = () => {
         console.log('Number of messages fetched:', messagesData?.length || 0);
         console.log('Setting messages state with:', messagesData || []);
         setMessages(messagesData || []);
+        
+        // Mark messages as read when fetching them (when opening a conversation)
+        if (messagesData && messagesData.length > 0) {
+          markMessagesAsRead(selectedUser.id);
+        }
+        
         setTimeout(scrollToBottom, 100);
       } catch (error) {
         console.error('Error fetching messages:', error);
@@ -451,6 +487,60 @@ const Sfira_chat = () => {
           console.log('Updated messages:', newMessages);
           return newMessages;
         });
+        
+        // Update unread count for the current station (receiver) when receiving a message
+        if (payload.new.receiver_id === currentStationId) {
+          const senderId = payload.new.sender_id;
+          console.log('Updating unread count for sender:', senderId, 'because we received a message from them');
+          
+          // Update users list
+          setUsers(prevUsers => 
+            prevUsers.map(user => 
+              user.id === senderId 
+                ? { ...user, unreadCount: (user.unreadCount || 0) + 1 }
+                : user
+            )
+          );
+          
+          // Add to unread users list
+          setUnreadUsers(prevUnread => {
+            const isAlreadyInUnread = prevUnread.some(user => user.id === senderId);
+            if (!isAlreadyInUnread) {
+              const senderUser = users.find(user => user.id === senderId);
+              if (senderUser) {
+                return [...prevUnread, { ...senderUser, unreadCount: (senderUser.unreadCount || 0) + 1 }];
+              }
+            } else {
+              // Update existing unread user's count
+              return prevUnread.map(user => 
+                user.id === senderId 
+                  ? { ...user, unreadCount: (user.unreadCount || 0) + 1 }
+                  : user
+              );
+            }
+            return prevUnread;
+          });
+          
+          // Update filtered unread users
+          setFilteredUnreadUsers(prevFiltered => {
+            const isAlreadyInFiltered = prevFiltered.some(user => user.id === senderId);
+            if (!isAlreadyInFiltered) {
+              const senderUser = users.find(user => user.id === senderId);
+              if (senderUser) {
+                return [...prevFiltered, { ...senderUser, unreadCount: (senderUser.unreadCount || 0) + 1 }];
+              }
+            } else {
+              // Update existing filtered unread user's count
+              return prevFiltered.map(user => 
+                user.id === senderId 
+                  ? { ...user, unreadCount: (user.unreadCount || 0) + 1 }
+                  : user
+              );
+            }
+            return prevFiltered;
+          });
+        }
+        
         setTimeout(scrollToBottom, 100);
       })
       .subscribe((status) => {
@@ -471,6 +561,55 @@ const Sfira_chat = () => {
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  };
+
+  // Mark messages as read when selecting a user
+  const markMessagesAsRead = async (userId) => {
+    if (!currentStationId || !userId) return;
+
+    try {
+      console.log('🔍 Marking messages as read from user:', userId, 'to station:', currentStationId);
+      
+      const { error } = await supabase
+        .from('messages')
+        .update({ is_read: true })
+        .eq('sender_id', userId)
+        .eq('receiver_id', currentStationId)
+        .eq('is_read', false);
+
+      if (error) {
+        console.error('Error marking messages as read:', error);
+      } else {
+        console.log('✅ Messages marked as read successfully');
+        
+        // Update the local state to reflect the read status
+        setUsers(prevUsers => {
+          const updated = prevUsers.map(user => 
+            user.id === userId 
+              ? { ...user, unreadCount: 0 }
+              : user
+          );
+          console.log('🔍 Updated users after marking as read:', updated.map(u => ({ name: u.name, unreadCount: u.unreadCount })));
+          return updated;
+        });
+        
+        // Update unread users list
+        setUnreadUsers(prevUnread => {
+          const filtered = prevUnread.filter(user => user.id !== userId);
+          console.log('🔍 Updated unread users after marking as read:', filtered.map(u => ({ name: u.name, unreadCount: u.unreadCount })));
+          return filtered;
+        });
+        
+        // Update filtered unread users
+        setFilteredUnreadUsers(prevFiltered => {
+          const filtered = prevFiltered.filter(user => user.id !== userId);
+          console.log('🔍 Updated filtered unread users after marking as read:', filtered.map(u => ({ name: u.name, unreadCount: u.unreadCount })));
+          return filtered;
+        });
+      }
+    } catch (error) {
+      console.error('Error marking messages as read:', error);
+    }
   };
 
   const handleSendMessage = async () => {
@@ -512,6 +651,11 @@ const Sfira_chat = () => {
           console.log('Adding sent message to local state:', data[0]);
           return [...prev, data[0]];
         });
+        
+        // Note: When we send a message, the recipient gets an unread message
+        // The recipient's unread count will be updated when they receive the message via real-time
+        // or when they refresh the page and the unread messages are fetched from the database
+        
         setTimeout(scrollToBottom, 100);
       }
     } catch (error) {
@@ -666,7 +810,11 @@ const Sfira_chat = () => {
                   className={`p-4 border-b border-gray-200 hover:bg-gray-50 cursor-pointer flex items-center ${
                     selectedUser?.id === user.id ? 'bg-red-50' : ''
                   }`}
-                  onClick={() => setSelectedUser(user)}
+                  onClick={() => {
+                    setSelectedUser(user);
+                    // Mark messages as read when selecting a user
+                    markMessagesAsRead(user.id);
+                  }}
                 >
                   <div className={`w-12 h-12 rounded-full flex items-center justify-center font-bold mr-3 text-lg ${
                     user.type === 'admin' ? 'bg-blue-100 text-blue-600' : 
@@ -698,8 +846,15 @@ const Sfira_chat = () => {
           </div>
         ) : (
           <div className="flex-1 overflow-y-auto min-h-0">
+            {console.log('Rendering unread tab - filteredUnreadUsers:', filteredUnreadUsers.length, 'users:', filteredUnreadUsers)}
             {filteredUnreadUsers.length === 0 ? (
-              <div className="text-center text-gray-500 py-8">No unread messages</div>
+              <div className="flex flex-col items-center justify-center h-full text-gray-500">
+                <div className="text-6xl mb-4">📭</div>
+                <h3 className="text-lg font-medium mb-2">You have no unread messages!</h3>
+                <p className="text-sm text-center">
+                  All caught up! Check back later for new messages.
+                </p>
+              </div>
             ) : (
               filteredUnreadUsers.map(user => (
                 <div
@@ -707,7 +862,11 @@ const Sfira_chat = () => {
                   className={`p-4 border-b border-gray-200 hover:bg-gray-50 cursor-pointer flex items-center ${
                     selectedUser?.id === user.id ? 'bg-red-50' : ''
                   }`}
-                  onClick={() => setSelectedUser(user)}
+                  onClick={() => {
+                    setSelectedUser(user);
+                    // Mark messages as read when selecting a user
+                    markMessagesAsRead(user.id);
+                  }}
                 >
                   <div className={`w-12 h-12 rounded-full flex items-center justify-center font-bold mr-3 text-lg ${
                     user.type === 'admin' ? 'bg-blue-100 text-blue-600' : 
