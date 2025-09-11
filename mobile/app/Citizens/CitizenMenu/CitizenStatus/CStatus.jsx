@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, ScrollView, TouchableOpacity, Image, Alert, Modal, TextInput, KeyboardAvoidingView, Platform, TouchableWithoutFeedback, Keyboard, RefreshControl } from 'react-native';
+import { View, Text, ScrollView, TouchableOpacity, Image, Alert, Modal, TextInput, KeyboardAvoidingView, Platform, TouchableWithoutFeedback, Keyboard, RefreshControl, ActivityIndicator, Animated } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import MapView, { Marker } from 'react-native-maps';
 import * as ImagePicker from 'expo-image-picker';
@@ -7,17 +7,44 @@ import * as Location from 'expo-location';
 import { supabase } from '../../../config/supabase';
 
 // API endpoints - make sure these match your deployed API
-const API_URL = 'https://fire-predictor-api-production.up.railway.app/predict';
-const GET_REPORTS_URL = 'https://fire-predictor-api-production.up.railway.app/get_reports';
-const UPDATE_REPORT_URL = 'https://fire-predictor-api-production.up.railway.app/update_report';
-const DELETE_REPORT_URL = 'https://fire-predictor-api-production.up.railway.app/delete_report';
+const API_URL = 'https://fire-detection-api-production-f543.up.railway.app/predict';
+const GET_REPORTS_URL = 'https://fire-detection-api-production-f543.up.railway.app/get_reports';
+const UPDATE_REPORT_URL = 'https://fire-detection-api-production-f543.up.railway.app/update_report';
+const DELETE_REPORT_URL = 'https://fire-detection-api-production-f543.up.railway.app/delete_report';
+const UPDATE_STATUS_URL = 'https://fire-detection-api-production-f543.up.railway.app/update_report_status';
+const CANCEL_REPORT_URL = 'https://fire-detection-api-production-f543.up.railway.app/cancel_report';
 
 const CStatus = () => {
-  const [activeTab, setActiveTab] = useState('Your Reports');
+  const [activeTab, setActiveTab] = useState('All');
   const [selectedReport, setSelectedReport] = useState(null);
   const [showModal, setShowModal] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [currentUser, setCurrentUser] = useState(null);
+  
+  // Animated spinner for loading states
+  const spinValue = new Animated.Value(0);
+
+  // Start spinning animation
+  const startSpinning = () => {
+    spinValue.setValue(0);
+    Animated.loop(
+      Animated.timing(spinValue, {
+        toValue: 1,
+        duration: 1000,
+        useNativeDriver: true,
+      })
+    ).start();
+  };
+
+  // Stop spinning animation
+  const stopSpinning = () => {
+    spinValue.stopAnimation();
+  };
+
+  const spin = spinValue.interpolate({
+    inputRange: [0, 1],
+    outputRange: ['0deg', '360deg'],
+  });
 
   // Location picker states
   const [showLocationPicker, setShowLocationPicker] = useState(false);
@@ -37,6 +64,7 @@ const CStatus = () => {
   const [showEmergencyModal, setShowEmergencyModal] = useState(false);
   const [showSuccessToast, setShowSuccessToast] = useState(false);
   const [isSubmittingReport, setIsSubmittingReport] = useState(false);
+  const [submissionProgress, setSubmissionProgress] = useState('');
   const [emergencyData, setEmergencyData] = useState({
     cause: '',
     image: null,
@@ -56,6 +84,11 @@ const CStatus = () => {
   });
   const [showEditLocationPicker, setShowEditLocationPicker] = useState(false);
   const [editLocationAddress, setEditLocationAddress] = useState('');
+
+  // Cancellation reason modal state
+  const [showCancelReasonModal, setShowCancelReasonModal] = useState(false);
+  const [cancelReason, setCancelReason] = useState('');
+  const [reportToCancel, setReportToCancel] = useState(null);
 
   // Reverse geocoding function to get address from coordinates
   const getAddressFromCoordinates = async (latitude, longitude) => {
@@ -303,14 +336,22 @@ const CStatus = () => {
           };
         });
         
+        // Filter out cancelled and fire out reports first
+        const activeReports = processedReports.filter(report => {
+          const status = (report.status || report.progress || '').toString().toLowerCase();
+          const isCancelled = status.includes('cancelled') || status.includes('canceled');
+          const isFireOut = status.includes('fire out');
+          return !isCancelled && !isFireOut;
+        });
+        
         // Filter reports by current user's UID - check both reporterId and user_id
-        const userReports = processedReports.filter(report => {
+        const userReports = activeReports.filter(report => {
           const reporterId = report.reporterId || report.user_id;
           console.log('Checking report:', reporterId, 'against user:', currentUser.uid);
           return reporterId === currentUser.uid;
         });
         
-        const otherReports = processedReports.filter(report => {
+        const otherReports = activeReports.filter(report => {
           const reporterId = report.reporterId || report.user_id;
           return reporterId !== currentUser.uid;
         });
@@ -348,17 +389,77 @@ const CStatus = () => {
     }
   };
 
-// Also update the getProgressColor function to handle the new status values:
-const getProgressColor = (progress) => {
+// Color mapping based on Philippines Bureau of Fire Protection alarm levels
+const getAlarmLevelColor = (alarmLevel) => {
+  if (!alarmLevel) return '#6b7280'; // Gray for unknown
+  
+  const level = alarmLevel.toLowerCase();
+  
+  // Fire alarm levels with appropriate colors
+  if (level.includes('first alarm')) return '#fef3c7'; // Light yellow
+  if (level.includes('second alarm')) return '#fed7aa'; // Light orange
+  if (level.includes('third alarm')) return '#fecaca'; // Light red
+  if (level.includes('fourth alarm')) return '#f87171'; // Medium red
+  if (level.includes('fifth alarm')) return '#ef4444'; // Red
+  if (level.includes('task force alpha')) return '#dc2626'; // Dark red
+  if (level.includes('task force bravo')) return '#b91c1c'; // Darker red
+  if (level.includes('task force charlie')) return '#991b1b'; // Very dark red
+  if (level.includes('task force delta')) return '#7f1d1d'; // Deepest red
+  if (level.includes('general alarm')) return '#450a0a'; // Darkest red
+  
+  // Special cases
+  if (level.includes('fire out')) return '#93c5fd'; // Light blue
+  if (level.includes('under control')) return '#fbbf24'; // Amber
+  if (level.includes('cancelled')) return '#9ca3af'; // Gray
+  if (level.includes('false alarm')) return '#9ca3af'; // Gray
+  
+  return '#6b7280'; // Default gray
+};
+
+// Get text color that contrasts well with background
+const getAlarmLevelTextColor = (alarmLevel) => {
+  if (!alarmLevel) return '#374151';
+  
+  const level = alarmLevel.toLowerCase();
+  
+  // Light backgrounds need dark text
+  if (level.includes('first alarm') || level.includes('second alarm') || level.includes('fire out')) {
+    return '#374151';
+  }
+  
+  // Medium backgrounds can use dark text
+  if (level.includes('third alarm') || level.includes('under control')) {
+    return '#1f2937';
+  }
+  
+  // Gray backgrounds (cancelled, false alarm) need dark text
+  if (level.includes('cancelled') || level.includes('false alarm')) {
+    return '#374151';
+  }
+  
+  // Dark backgrounds need light text
+  return '#ffffff';
+};
+
+// Backward compatibility - updated to prioritize alarm level over progress
+const getProgressColor = (progress, alarmLevel = null) => {
+  // If alarm level is available, use that for color
+  if (alarmLevel) {
+    return getAlarmLevelColor(alarmLevel);
+  }
+  
+  // Fallback to progress-based colors
   switch (progress) {
     case 'On Going':
       return '#ef4444';
     case 'Under Control':
-      return '#f59e0b';
+      return '#fbbf24'; // Amber
     case 'Fire Out':
-      return '#10b981';
+      return '#93c5fd'; // Light blue
+    case 'Cancelled':
+      return '#9ca3af'; // Gray
     case 'False Alarm':
-      return '#6b7280';
+      return '#9ca3af'; // Gray
     default:
       return '#6b7280';
   }
@@ -537,12 +638,15 @@ const getProgressColor = (progress) => {
 
     try {
       setIsSubmittingReport(true);
+      setSubmissionProgress('Preparing submission...');
+      startSpinning();
       console.log('Starting emergency submission for user:', currentUser.uid);
       
       // Format location as coordinates string (matches Flask API expectation)
       const locationString = `${selectedLocation.latitude}, ${selectedLocation.longitude}`;
       console.log('Using selected location:', locationString);
 
+      setSubmissionProgress('Uploading image and data...');
       const formData = new FormData();
       
       // Image upload (matches Flask API 'image' field)
@@ -575,6 +679,7 @@ const getProgressColor = (progress) => {
       console.log('Sending user data:', { uid: currentUser.uid, name: userName });
       console.log('Submitting to API:', API_URL);
       
+      setSubmissionProgress('Sending to emergency services...');
       const controller2 = new AbortController();
       const timeoutId2 = setTimeout(() => controller2.abort(), 30000);
       
@@ -585,6 +690,7 @@ const getProgressColor = (progress) => {
       });
 
       clearTimeout(timeoutId2);
+      setSubmissionProgress('Processing response...');
       const data = await response.json();
       console.log('API response:', data);
       
@@ -627,6 +733,7 @@ const getProgressColor = (progress) => {
 
       console.log('Created new report:', newReport);
 
+      setSubmissionProgress('Finalizing submission...');
       // Add to local state immediately for better UX
       setYourReports(prevReports => [newReport, ...prevReports]);
 
@@ -635,7 +742,7 @@ const getProgressColor = (progress) => {
       setEmergencyData({ cause: '', image: null, numberOfStructures: '' });
       setSelectedLocation(null);
       setSelectedLocationAddress('');
-      setActiveTab('Your Reports');
+      setActiveTab('All');
       setShowSuccessToast(true);
       setTimeout(() => setShowSuccessToast(false), 3000);
       
@@ -652,7 +759,9 @@ const getProgressColor = (progress) => {
         Alert.alert('Error', err?.message || 'Something went wrong while submitting the report');
       }
     } finally {
+      stopSpinning();
       setIsSubmittingReport(false);
+      setSubmissionProgress('');
     }
   };
 
@@ -704,78 +813,99 @@ const getProgressColor = (progress) => {
     const displayProgress = report.progress || 'Unknown';
 
     return (
-      <TouchableOpacity
+      <View
         key={report.id || Math.random()}
         className="bg-white rounded-lg p-4 mb-4 shadow-sm"
-        onPress={() => openReportModal(report)}
-        activeOpacity={0.7}
       >
-        <Image
-          source={imageSource}
-          className="w-full h-44 rounded-lg mb-3"
-          resizeMode="cover"
-          onError={() => {
-            console.log('Image load error for report:', report.id);
-          }}
-        />
-        
-        <View className="flex-row items-center justify-between mb-2">
-          <Text className="text-sm text-gray-500">{displayReporter}</Text>
-          <Text className="text-sm text-gray-500">{displayTimestamp}</Text>
-        </View>
-
-        <Text className="text-gray-800 font-semibold text-base mb-2" numberOfLines={2}>
-          {displayLocation}
-        </Text>
-
-        <View className="flex-row items-center justify-between mb-2">
-          <View
-            className="px-3 py-1 rounded-full"
-            style={{ backgroundColor: getProgressColor(displayProgress) + '20' }}
+        {/* Image with 3-dot menu overlay */}
+        <View className="relative">
+          <TouchableOpacity
+            onPress={() => openReportModal(report)}
+            activeOpacity={0.7}
           >
-            <Text
-              className="text-xs font-medium"
-              style={{ color: getProgressColor(displayProgress) }}
+            <Image
+              source={imageSource}
+              className="w-full h-44 rounded-lg mb-3"
+              resizeMode="cover"
+              onError={() => {
+                console.log('Image load error for report:', report.id);
+              }}
+            />
+          </TouchableOpacity>
+          
+          {/* 3-dot menu button - only show for user's own reports */}
+          {currentUser && 
+           (report.reporterId === currentUser.uid || report.user_id === currentUser.uid) && 
+           !['Cancelled', 'Fire Out'].includes(displayProgress) && (
+            <TouchableOpacity
+              className="absolute top-2 right-2 bg-black bg-opacity-50 rounded-full p-2"
+              onPress={() => {
+                // Show action sheet or modal with Edit/Cancel options
+                Alert.alert(
+                  'Report Actions',
+                  'What would you like to do with this report?',
+                  [
+                    {
+                      text: 'Edit',
+                      onPress: () => handleEditReport(report),
+                      style: 'default'
+                    },
+                    {
+                      text: 'Cancel',
+                      onPress: () => handleCancelReport(report),
+                      style: 'destructive'
+                    },
+                    {
+                      text: 'Cancel Action',
+                      style: 'cancel'
+                    }
+                  ]
+                );
+              }}
             >
-              {displayProgress}
-            </Text>
-          </View>
-          {report.confidence && (
-            <Text className="text-xs text-gray-500">
-              {report.confidence} confidence
-            </Text>
+              <MaterialIcons name="more-vert" size={20} color="#ffffff" />
+            </TouchableOpacity>
           )}
         </View>
-
-        <Text className="text-gray-500 text-xs" numberOfLines={1}>
-          Cause: {displayCause}
-        </Text>
         
-        {/* Edit/Delete buttons for user's own reports */}
-        {activeTab === 'Your Reports' && currentUser && 
-         (report.reporterId === currentUser.uid || report.user_id === currentUser.uid) && (
-          <View className="flex-row justify-end mt-3 space-x-2">
-            <TouchableOpacity
-              className="bg-blue-500 px-3 py-1 rounded-md"
-              onPress={(e) => {
-                e.stopPropagation();
-                handleEditReport(report);
-              }}
-            >
-              <Text className="text-white text-xs font-medium">Edit</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              className="bg-red-500 px-3 py-1 rounded-md"
-              onPress={(e) => {
-                e.stopPropagation();
-                handleDeleteReport(report);
-              }}
-            >
-              <Text className="text-white text-xs font-medium">Delete</Text>
-            </TouchableOpacity>
+        <TouchableOpacity
+          onPress={() => openReportModal(report)}
+          activeOpacity={0.7}
+        >
+          <View className="flex-row items-center justify-between mb-2">
+            <Text className="text-sm text-gray-500">{displayReporter}</Text>
+            <Text className="text-sm text-gray-500">{displayTimestamp}</Text>
           </View>
-        )}
-      </TouchableOpacity>
+
+          <Text className="text-gray-800 font-semibold text-base mb-2" numberOfLines={2}>
+            {displayLocation}
+          </Text>
+
+          <View className="flex-row items-center justify-between mb-2">
+            <View
+              className="px-3 py-1 rounded-full"
+              style={{ backgroundColor: getProgressColor(displayProgress, report.alarm_level || report.recommended_alarm_level) }}
+            >
+              <Text
+                className="text-xs font-medium"
+                style={{ color: getAlarmLevelTextColor(report.alarm_level || report.recommended_alarm_level) || getProgressColor(displayProgress, report.alarm_level || report.recommended_alarm_level) }}
+              >
+                {report.alarm_level || report.recommended_alarm_level || displayProgress}
+              </Text>
+            </View>
+            {report.confidence && (
+              <Text className="text-xs text-gray-500">
+                {report.confidence} confidence
+              </Text>
+            )}
+          </View>
+
+          <Text className="text-gray-500 text-xs" numberOfLines={1}>
+            Cause: {displayCause}
+          </Text>
+        </TouchableOpacity>
+        
+      </View>
     );
   };
 
@@ -797,6 +927,14 @@ const getProgressColor = (progress) => {
         title = 'All Reports';
         break;
     }
+
+    // Filter out cancelled reports
+    reports = reports.filter(report => {
+      const status = report.status || report.progress || '';
+      const isCancelled = status.toLowerCase().includes('cancelled') || 
+                         status.toLowerCase().includes('canceled');
+      return !isCancelled;
+    });
 
     // Sort reports from most recent to oldest
     reports.sort((a, b) => {
@@ -856,8 +994,8 @@ const getProgressColor = (progress) => {
       cause: report.cause_of_fire || report.cause || '',
       numberOfStructures: report.number_of_structures_on_fire?.toString() || '',
       image: null,
-      latitude: report.latitude,
-      longitude: report.longitude,
+      latitude: report.latitude ? parseFloat(report.latitude) : null,
+      longitude: report.longitude ? parseFloat(report.longitude) : null,
       address: currentAddress
     });
     setEditLocationAddress(currentAddress);
@@ -870,10 +1008,21 @@ const getProgressColor = (progress) => {
       Alert.alert('Error', 'Please pin a location on the map');
       return;
     }
+    
+    // Ensure coordinates are numbers
+    const lat = parseFloat(selectedLocation.latitude);
+    const lng = parseFloat(selectedLocation.longitude);
+    
+    // Validate coordinates
+    if (isNaN(lat) || isNaN(lng)) {
+      Alert.alert('Error', 'Invalid location coordinates. Please select a new location.');
+      return;
+    }
+    
     setEditData({
       ...editData,
-      latitude: selectedLocation.latitude,
-      longitude: selectedLocation.longitude,
+      latitude: lat,
+      longitude: lng,
       address: selectedLocationAddress
     });
     setEditLocationAddress(selectedLocationAddress);
@@ -924,47 +1073,192 @@ const getProgressColor = (progress) => {
     }, 100);
   };
 
-  // Handle delete report
-  const handleDeleteReport = (report) => {
-    Alert.alert(
-      'Delete Report',
-      'Are you sure you want to delete this report? This action cannot be undone.',
-      [
-        {
-          text: 'Cancel',
-          style: 'cancel'
-        },
-        {
-          text: 'Delete',
-          style: 'destructive',
-          onPress: () => deleteReport(report.id)
-        }
-      ]
-    );
+  // Updated: prompt for cancellation reason before cancelling
+  const handleCancelReport = (report) => {
+    setReportToCancel(report);
+    setCancelReason('');
+    setShowCancelReasonModal(true);
   };
 
-  // Delete report API call
-  const deleteReport = async (reportId) => {
-    try {
-      const response = await fetch(`${DELETE_REPORT_URL}/${reportId}`, {
-        method: 'DELETE',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-      });
-
-      if (response.ok) {
-        // Remove from local state
-        setYourReports(prev => prev.filter(report => report.id !== reportId));
-        Alert.alert('Success', 'Report deleted successfully');
-      } else {
-        throw new Error('Failed to delete report');
-      }
-    } catch (error) {
-      console.error('Error deleting report:', error);
-      Alert.alert('Error', 'Failed to delete report. Please try again.');
+// 3. COMPLETELY REWRITTEN cancelReport function with proper error handling and DEBUG LOGGING
+const cancelReport = async (reportId) => {
+  try {
+    console.log('🚫 ===== CANCEL REPORT DEBUG START =====');
+    console.log('🚫 Report ID received:', reportId);
+    console.log('🚫 Report ID type:', typeof reportId);
+    console.log('🚫 UPDATE_STATUS_URL:', UPDATE_STATUS_URL);
+    console.log('🚫 Will POST to:', UPDATE_STATUS_URL);
+    
+    if (!reportId) {
+      console.log('❌ ERROR: Report ID is missing or falsy');
+      throw new Error('Report ID is required');
     }
-  };
+    
+    // Create AbortController for timeout functionality
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => {
+      console.log('⏰ Request timed out after 15 seconds');
+      controller.abort();
+    }, 15000);
+    
+    console.log('📡 Making fetch request...');
+    console.log('📡 Method: POST');
+    console.log('📡 Headers:', {
+      'Content-Type': 'application/json',
+      'Accept': 'application/json',
+    });
+    
+    // Show loading state (you can add a loading indicator here)
+    const response = await fetch(UPDATE_STATUS_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+      },
+      body: JSON.stringify({
+        report_id: reportId,
+        status: 'Cancelled',
+        reason: cancelReason,
+        cancelled_by: currentUser?.email || currentUser?.uid || 'Citizen User'
+      }),
+      signal: controller.signal,
+    });
+
+    clearTimeout(timeoutId);
+    console.log('📡 ===== RESPONSE RECEIVED =====');
+    console.log('📡 Response status:', response.status);
+    console.log('📡 Response statusText:', response.statusText);
+    console.log('📡 Response ok:', response.ok);
+    console.log('📡 Response headers:', Object.fromEntries(response.headers.entries()));
+    console.log('📡 Response url:', response.url);
+
+    // Try to get response text for debugging
+    let responseText = '';
+    try {
+      responseText = await response.clone().text();
+      console.log('📡 Raw response text:', responseText);
+    } catch (textError) {
+      console.log('📡 Could not get response text:', textError);
+    }
+
+    // Handle different response statuses
+    if (response.status === 404) {
+      console.log('❌ 404 Error: Report not found');
+      throw new Error('Report not found. It may have already been processed.');
+    }
+    
+    if (response.status >= 500) {
+      console.log('❌ Server Error (5xx):', response.status);
+      throw new Error('Server error. Please try again later.');
+    }
+    
+    if (!response.ok) {
+      console.log('❌ Response not ok, status:', response.status);
+      let errorMessage = `Request failed with status ${response.status}`;
+      try {
+        const errorData = await response.json();
+        console.log('📡 Error response data:', errorData);
+        errorMessage = errorData.error || errorData.message || errorMessage;
+      } catch (parseError) {
+        console.log('❌ Could not parse error response:', parseError);
+        console.log('❌ Raw response for failed parse:', responseText);
+        errorMessage = response.statusText || errorMessage;
+      }
+      throw new Error(errorMessage);
+    }
+
+    // Parse successful response
+    let result;
+    try {
+      result = await response.json();
+      console.log('✅ ===== SUCCESSFUL RESPONSE =====');
+      console.log('✅ Parsed result:', JSON.stringify(result, null, 2));
+    } catch (parseError) {
+      console.log('❌ Response parsing error:', parseError);
+      console.log('❌ Raw response that failed to parse:', responseText);
+      throw new Error('Invalid response from server');
+    }
+
+    console.log('🔄 Updating local state...');
+    console.log('🔄 Looking for report with ID:', reportId);
+    console.log('🔄 Current yourReports count:', yourReports.length);
+    console.log('🔄 Current nearbyReports count:', nearbyReports.length);
+
+    // Remove cancelled report from local state immediately for better UX
+    const removeCancelledReport = (report) => {
+      const isMatch = report.id === reportId || report.id?.toString() === reportId?.toString();
+      console.log(`🔄 Checking report ${report.id} (${typeof report.id}) against ${reportId} (${typeof reportId}): ${isMatch}`);
+      
+      // Return null for cancelled reports to filter them out
+      return isMatch ? null : report;
+    };
+
+    setYourReports(prev => {
+      const updated = prev.map(removeCancelledReport).filter(report => report !== null);
+      console.log('🔄 Updated yourReports from', prev.length, 'to', updated.length);
+      return updated;
+    });
+    
+    setNearbyReports(prev => {
+      const updated = prev.map(removeCancelledReport).filter(report => report !== null);
+      console.log('🔄 Updated nearbyReports from', prev.length, 'to', updated.length);
+      return updated;
+    });
+
+    console.log('✅ Showing success alert...');
+    // Show success message
+    Alert.alert(
+      'Report Cancelled', 
+      result.message || 'Your report has been cancelled successfully. Emergency services have been notified.'
+    );
+
+    // Close reason modal if open
+    setShowCancelReasonModal(false);
+    setCancelReason('');
+    setReportToCancel(null);
+
+    console.log('🔄 Scheduling reports refresh in 2 seconds...');
+    // Optionally refresh reports after a delay to get latest data from server
+    setTimeout(() => {
+      if (currentUser?.uid) {
+        console.log('🔄 Refreshing reports from API...');
+        loadReportsFromApi();
+      } else {
+        console.log('🔄 No current user, skipping refresh');
+      }
+    }, 2000);
+    
+    console.log('✅ ===== CANCEL REPORT DEBUG END (SUCCESS) =====');
+    
+  } catch (error) {
+    console.log('❌ ===== CANCEL REPORT DEBUG END (ERROR) =====');
+    console.error('❌ Full error object:', error);
+    console.error('❌ Error name:', error.name);
+    console.error('❌ Error message:', error.message);
+    console.error('❌ Error stack:', error.stack);
+    
+    // Check if it's an AbortError (timeout)
+    if (error.name === 'AbortError') {
+      console.log('❌ This was a timeout error');
+    }
+    
+    // Provide user-friendly error messages
+    let userMessage = 'Failed to cancel report. ';
+    
+    if (error.name === 'AbortError' || error.message.includes('timeout')) {
+      userMessage += 'The request timed out. Please try again.';
+    } else if (error.message.includes('network') || error.message.includes('fetch')) {
+      userMessage += 'Please check your internet connection.';
+    } else if (error.message.includes('not found')) {
+      userMessage += 'The report could not be found.';
+    } else {
+      userMessage += error.message || 'Please try again later.';
+    }
+    
+    console.log('❌ Showing error alert:', userMessage);
+    Alert.alert('Error', userMessage);
+  }
+};
 
   // Handle image picker for edit
   const handleEditImagePicker = () => {
@@ -1057,14 +1351,25 @@ const getProgressColor = (progress) => {
         
         // Add location data if changed
         if (editData.latitude && editData.longitude) {
+          // Ensure coordinates are numbers
+          const lat = parseFloat(editData.latitude);
+          const lng = parseFloat(editData.longitude);
+          
+          // Validate coordinates
+          if (isNaN(lat) || isNaN(lng)) {
+            console.error('Invalid coordinates:', editData.latitude, editData.longitude);
+            Alert.alert('Error', 'Invalid location coordinates. Please select a new location.');
+            return;
+          }
+          
           console.log('Adding location data to FormData:', {
-            latitude: editData.latitude,
-            longitude: editData.longitude,
+            latitude: lat,
+            longitude: lng,
             address: editData.address
           });
-          formData.append('geotag_location', `${editData.latitude}, ${editData.longitude}`);
-          formData.append('latitude', editData.latitude.toString());
-          formData.append('longitude', editData.longitude.toString());
+          formData.append('geotag_location', `${lat}, ${lng}`);
+          formData.append('latitude', lat.toString());
+          formData.append('longitude', lng.toString());
           if (editData.address) {
             formData.append('address', editData.address);
           }
@@ -1097,14 +1402,25 @@ const getProgressColor = (progress) => {
         
         // Add location data if changed
         if (editData.latitude && editData.longitude) {
+          // Ensure coordinates are numbers
+          const lat = parseFloat(editData.latitude);
+          const lng = parseFloat(editData.longitude);
+          
+          // Validate coordinates
+          if (isNaN(lat) || isNaN(lng)) {
+            console.error('Invalid coordinates:', editData.latitude, editData.longitude);
+            Alert.alert('Error', 'Invalid location coordinates. Please select a new location.');
+            return;
+          }
+          
           console.log('Adding location data to JSON payload:', {
-            latitude: editData.latitude,
-            longitude: editData.longitude,
+            latitude: lat,
+            longitude: lng,
             address: editData.address
           });
-          updatePayload.geotag_location = `${editData.latitude}, ${editData.longitude}`;
-          updatePayload.latitude = parseFloat(editData.latitude);
-          updatePayload.longitude = parseFloat(editData.longitude);
+          updatePayload.geotag_location = `${lat}, ${lng}`;
+          updatePayload.latitude = lat;
+          updatePayload.longitude = lng;
           if (editData.address) {
             updatePayload.address = editData.address;
           }
@@ -1150,10 +1466,10 @@ const getProgressColor = (progress) => {
         image_url: updatedReport.image_url || report.image_url,
         image: updatedReport.image_url ? { uri: updatedReport.image_url } : report.image,
         // Update location data
-        latitude: updatedReport.latitude || editData.latitude || report.latitude,
-        longitude: updatedReport.longitude || editData.longitude || report.longitude,
+        latitude: updatedReport.latitude || (editData.latitude ? parseFloat(editData.latitude) : report.latitude),
+        longitude: updatedReport.longitude || (editData.longitude ? parseFloat(editData.longitude) : report.longitude),
         address: updatedReport.address || editData.address || report.address,
-        geotag_location: updatedReport.geotag_location || (editData.latitude && editData.longitude ? `${editData.latitude}, ${editData.longitude}` : report.geotag_location),
+        geotag_location: updatedReport.geotag_location || (editData.latitude && editData.longitude ? `${parseFloat(editData.latitude)}, ${parseFloat(editData.longitude)}` : report.geotag_location),
         location: updatedReport.address || editData.address || report.location,
         addressString: updatedReport.address || editData.address || report.addressString
       } : report
@@ -1212,6 +1528,14 @@ const getProgressColor = (progress) => {
         {/* Tab Buttons */}
         <View className="flex-row mb-4 bg-white rounded-lg p-1 shadow-sm">
           <TouchableOpacity
+            className={`flex-1 py-3 px-4 rounded-lg ${activeTab === 'All' ? 'bg-[#ff512f]' : 'bg-transparent'}`}
+            onPress={() => setActiveTab('All')}
+          >
+            <Text className={`text-center font-semibold ${activeTab === 'All' ? 'text-white' : 'text-gray-600'}`}>
+              All ({yourReports.length + nearbyReports.length})
+            </Text>
+          </TouchableOpacity>
+          <TouchableOpacity
             className={`flex-1 py-3 px-4 rounded-lg ${activeTab === 'Your Reports' ? 'bg-[#ff512f]' : 'bg-transparent'}`}
             onPress={() => setActiveTab('Your Reports')}
           >
@@ -1225,14 +1549,6 @@ const getProgressColor = (progress) => {
           >
             <Text className={`text-center font-semibold ${activeTab === 'Nearby Reports' ? 'text-white' : 'text-gray-600'}`}>
               Nearby ({nearbyReports.length})
-            </Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            className={`flex-1 py-3 px-4 rounded-lg ${activeTab === 'All' ? 'bg-[#ff512f]' : 'bg-transparent'}`}
-            onPress={() => setActiveTab('All')}
-          >
-            <Text className={`text-center font-semibold ${activeTab === 'All' ? 'text-white' : 'text-gray-600'}`}>
-              All ({yourReports.length + nearbyReports.length})
             </Text>
           </TouchableOpacity>
         </View>
@@ -1841,7 +2157,9 @@ const getProgressColor = (progress) => {
                     >
                       {isSubmittingReport ? (
                         <View className="flex-row items-center justify-center">
-                          <MaterialIcons name="refresh" size={20} color="#ffffff" />
+                          <Animated.View style={{ transform: [{ rotate: spin }] }}>
+                            <MaterialIcons name="refresh" size={20} color="#ffffff" />
+                          </Animated.View>
                           <Text className="text-center font-semibold text-white ml-2">Submitting...</Text>
                         </View>
                       ) : (
@@ -1855,12 +2173,19 @@ const getProgressColor = (progress) => {
               {/* Loading Overlay */}
               {isSubmittingReport && (
                 <View className="absolute inset-0 bg-black/50 justify-center items-center">
-                  <View className="bg-white rounded-lg p-6 items-center">
-                    <MaterialIcons name="refresh" size={48} color="#ef4444" />
+                  <View className="bg-white rounded-lg p-6 items-center mx-4 max-w-sm">
+                    <Animated.View style={{ transform: [{ rotate: spin }] }}>
+                      <MaterialIcons name="refresh" size={48} color="#ef4444" />
+                    </Animated.View>
                     <Text className="text-lg font-semibold text-gray-800 mt-4">Submitting Report</Text>
                     <Text className="text-sm text-gray-600 mt-2 text-center">
-                      Please wait while we process your emergency report...
+                      {submissionProgress || 'Please wait while we process your emergency report...'}
                     </Text>
+                    <View className="mt-4 w-full">
+                      <View className="bg-gray-200 rounded-full h-2">
+                        <View className="bg-red-500 h-2 rounded-full w-3/4 animate-pulse" />
+                      </View>
+                    </View>
                   </View>
                 </View>
               )}
@@ -2082,13 +2407,13 @@ const getProgressColor = (progress) => {
                   <Text className="text-gray-600 text-sm">Status</Text>
                   <View
                     className="px-3 py-2 rounded-full self-start mt-1"
-                    style={{ backgroundColor: getProgressColor(selectedReport.progress) + '20' }}
+                    style={{ backgroundColor: getProgressColor(selectedReport.progress || 'On Going') }}
                   >
                     <Text
                       className="text-sm font-medium"
-                      style={{ color: getProgressColor(selectedReport.progress) }}
+                      style={{ color: (selectedReport.progress === 'Under Control' || selectedReport.progress === 'Fire Out') ? '#374151' : '#ffffff' }}
                     >
-                      {selectedReport.progress || 'Unknown'}
+                      {selectedReport.progress || 'On Going'}
                     </Text>
                   </View>
                 </View>
@@ -2144,12 +2469,12 @@ const getProgressColor = (progress) => {
                   </View>
                 )}
 
-                {/* Emergency Alert Level */}
-                {selectedReport.alarm_level && (
+                {/* Suggested Alarm Level */}
+                {(selectedReport.recommended_alarm_level || selectedReport.alarm_level) && (
                   <View className="mb-3">
-                    <Text className="text-gray-600 text-sm">Emergency Alert Level</Text>
+                    <Text className="text-gray-600 text-sm">Suggested Alarm Level</Text>
                     <View className="bg-red-50 rounded-lg p-3 border border-red-200">
-                      <Text className="text-red-800 font-semibold text-sm">{selectedReport.alarm_level}</Text>
+                      <Text className="text-red-800 font-semibold text-sm">{selectedReport.recommended_alarm_level || selectedReport.alarm_level}</Text>
                     </View>
                   </View>
                 )}
@@ -2206,6 +2531,75 @@ const getProgressColor = (progress) => {
           </View>
         </View>
       )}
+
+      {/* Cancel Reason Modal */}
+      <Modal
+        visible={showCancelReasonModal}
+        animationType="slide"
+        transparent={true}
+        onRequestClose={() => {
+          setShowCancelReasonModal(false);
+          setCancelReason('');
+          setReportToCancel(null);
+        }}
+      >
+        <KeyboardAvoidingView
+          className="flex-1"
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          keyboardVerticalOffset={Platform.OS === 'ios' ? 64 : 0}
+        >
+          <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
+            <View className="flex-1 bg-black/50 justify-end">
+              <View className="bg-white rounded-t-3xl p-6 max-h-[85%]">
+                <ScrollView
+                  keyboardShouldPersistTaps="handled"
+                  showsVerticalScrollIndicator={false}
+                  contentContainerStyle={{ paddingBottom: 24 }}
+                >
+                  <Text className="text-xl font-bold text-gray-800 mb-2">Cancel Report</Text>
+                  <Text className="text-sm text-gray-600 mb-4">
+                    Please provide a reason for cancelling this report. This helps administrators understand why it was cancelled.
+                  </Text>
+                  <TextInput
+                    className="border border-gray-300 rounded-lg p-4 text-gray-800 min-h-[120px]"
+                    placeholder="Enter your reason..."
+                    value={cancelReason}
+                    onChangeText={setCancelReason}
+                    multiline
+                    textAlignVertical="top"
+                    returnKeyType="done"
+                    blurOnSubmit={true}
+                  />
+                  <View className="flex-row space-x-3 mt-4">
+                    <TouchableOpacity
+                      className="flex-1 bg-gray-300 rounded-lg p-4"
+                      onPress={() => {
+                        setShowCancelReasonModal(false);
+                        setCancelReason('');
+                        setReportToCancel(null);
+                      }}
+                    >
+                      <Text className="text-center font-semibold text-gray-700">Back</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      className={`flex-1 rounded-lg p-4 ${cancelReason.trim() ? 'bg-red-600' : 'bg-gray-300'}`}
+                      onPress={() => {
+                        if (!cancelReason.trim() || !reportToCancel) return;
+                        cancelReport(reportToCancel.id);
+                      }}
+                      disabled={!cancelReason.trim() || !reportToCancel}
+                    >
+                      <Text className={`text-center font-semibold ${cancelReason.trim() ? 'text-white' : 'text-gray-500'}`}>
+                        Confirm Cancel
+                      </Text>
+                    </TouchableOpacity>
+                  </View>
+                </ScrollView>
+              </View>
+            </View>
+          </TouchableWithoutFeedback>
+        </KeyboardAvoidingView>
+      </Modal>
     </View>
   );
 };
