@@ -340,62 +340,32 @@ const Overview = () => {
     }
   };
 
-  // Handle status change with confirmation and cancellation lock
+  // Handle status change
   const handleStatusChange = (reportId, newStatus) => {
-    const report = reports.find(r => r.id === reportId);
-    const currentStatus = report?.status || 'Unknown';
-
-    // Prevent editing if report is cancelled
-    if (currentStatus === 'Cancelled') {
-      const cancelledBy = report?.cancelled_by;
-      const cancellationReason = report?.cancellation_reason;
-      console.log('Debug - cancelled_by value:', cancelledBy, 'Type:', typeof cancelledBy);
-      console.log('Debug - report object:', report);
-      
-      if (cancelledBy === 'Admin User' || cancelledBy === 'admin' || cancelledBy === 'Admin') {
-        const reasonText = cancellationReason ? `\n\nReason: ${cancellationReason}` : '';
-        alert(`This report was cancelled by an admin and cannot be edited.${reasonText}`);
-      } else if (cancelledBy) {
-        const reasonText = cancellationReason ? `\n\nReason: ${cancellationReason}` : '';
-        alert(`This report was cancelled by the citizen and cannot be edited.${reasonText}`);
-      } else {
-        const reasonText = cancellationReason ? `\n\nReason: ${cancellationReason}` : '';
-        alert(`This report was cancelled and cannot be edited.${reasonText}`);
-      }
-      setEditingStatus(prev => ({ ...prev, [reportId]: false }));
-      return;
-    }
-
-    // No change
-    if (newStatus === currentStatus) {
-      setEditingStatus(prev => ({ ...prev, [reportId]: false }));
-      return;
-    }
-
-    // If cancelling, show cancellation modal
-    if (newStatus === 'Cancelled') {
-      setReportToCancel(report);
-      setCancelReason('');
-      setShowCancelModal(true);
-      setEditingStatus(prev => ({ ...prev, [reportId]: false }));
-      return;
-    }
-
-    // Confirm before applying status change
-    const confirmed = window.confirm(`Are you sure you want to change status from "${currentStatus}" to "${newStatus}"?`);
-    if (!confirmed) {
-      setEditingStatus(prev => ({ ...prev, [reportId]: false }));
-      return;
-    }
-
     setEditingStatus(prev => ({ ...prev, [reportId]: false }));
     updateReportStatus(reportId, newStatus);
   };
 
-  // Handle final alarm level change
+  // Handle final alarm level change with confirmation
   const handleFinalAlarmChange = (reportId, newAlarmLevel) => {
-    setEditingFinalAlarm(prev => ({ ...prev, [reportId]: false }));
-    updateFinalAlarmLevel(reportId, newAlarmLevel);
+    const currentReport = reports.find(r => r.id === reportId);
+    const currentAlarmLevel = currentReport?.finalAlarmLevel || 'Unknown';
+    
+    // Show confirmation dialog
+    const confirmed = window.confirm(
+      `Are you sure you want to change the final alarm level from "${currentAlarmLevel}" to "${newAlarmLevel}"?\n\n` +
+      `Report ID: ${reportId}\n` +
+      `Location: ${currentReport?.location || 'Unknown'}\n\n` +
+      `This action will update the emergency response level and may trigger additional resource deployment.`
+    );
+    
+    if (confirmed) {
+      setEditingFinalAlarm(prev => ({ ...prev, [reportId]: false }));
+      updateFinalAlarmLevel(reportId, newAlarmLevel);
+    } else {
+      // If user cancels, just close the editing mode without saving
+      setEditingFinalAlarm(prev => ({ ...prev, [reportId]: false }));
+    }
   };
 
   // Cancel report with reason

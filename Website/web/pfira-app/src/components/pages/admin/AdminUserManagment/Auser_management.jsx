@@ -43,6 +43,7 @@ const Auser_management = () => {
   // Sample data matching the mobile interface
   const [users, setUsers] = useState({ stations: [], citizens: [] });
   const [loading, setLoading] = useState(true);
+  const [searchQuery, setSearchQuery] = useState('');
 
   useEffect(() => {
     const fetchUsers = async () => {
@@ -58,44 +59,45 @@ const Auser_management = () => {
           throw new Error(`Supabase error: ${citizensError.message}`);
         }
 
-        const citizens = citizensData.map(data => {
-          console.log('Citizen data from Supabase:', data); // Debug log
-          
-          // Construct full name from first_name and last_name
-          let fullName = 'Unknown User';
-          if (data.first_name && data.last_name) {
-            fullName = `${data.first_name} ${data.last_name}`;
-          } else if (data.first_name) {
-            fullName = data.first_name;
-          } else if (data.last_name) {
-            fullName = data.last_name;
-          } else if (data.display_name) {
-            fullName = data.display_name;
-          } else if (data.email) {
-            // Extract name from email as fallback
-            const emailName = data.email.split('@')[0];
-            fullName = emailName.charAt(0).toUpperCase() + emailName.slice(1);
-          }
-          
-          return {
-            id: data.id,
-            firstName: data.first_name,
-            lastName: data.last_name,
-            email: data.email,
-            phoneNumber: data.phone_number,
-            displayName: data.display_name,
-            status: data.status || 'active',
-            reports: data.reports || 0,
-            isVerified: data.is_verified || false,
-            userType: data.user_type || 'citizen',
-            createdAt: data.created_at,
-            updatedAt: data.updated_at,
-            name: fullName,
-            // Add default values for missing fields
-            lastActivity: data.created_at ? 'Recently active' : 'Unknown',
-            phone: data.phone_number || 'No phone'
-          };
-        });
+        // Update the citizen mapping section in your useEffect
+const citizens = citizensData.map(data => {
+  console.log('Citizen data from Supabase:', data); // Debug log
+  
+  // Construct full name from first_name and last_name
+  let fullName = 'Unknown User';
+  if (data.first_name && data.last_name) {
+    fullName = `${data.first_name} ${data.last_name}`;
+  } else if (data.first_name) {
+    fullName = data.first_name;
+  } else if (data.last_name) {
+    fullName = data.last_name;
+  } else if (data.display_name) {
+    fullName = data.display_name;
+  } else if (data.email) {
+    // Extract name from email as fallback
+    const emailName = data.email.split('@')[0];
+    fullName = emailName.charAt(0).toUpperCase() + emailName.slice(1);
+  }
+  
+  return {
+    id: data.id,
+    firstName: data.first_name,
+    lastName: data.last_name,
+    email: data.email,
+    phoneNumber: data.phone, // Changed from phone_number to phone
+    displayName: data.display_name,
+    status: data.status || 'active',
+    reports: data.reports || 0,
+    isVerified: data.is_verified || false,
+    userType: data.user_type || 'citizen',
+    createdAt: data.created_at,
+    updatedAt: data.updated_at,
+    name: fullName,
+    // Add default values for missing fields
+    lastActivity: data.created_at ? 'Recently active' : 'Unknown',
+    phone: data.phone || 'No phone' // Changed from phone_number to phone
+  };
+});
 
         // Fetch stations from Supabase
         const { data: stationsData, error: stationsError } = await supabase
@@ -155,6 +157,10 @@ const Auser_management = () => {
         }
         
         console.log('📊 Processed stations data:', stations);
+        console.log('📊 Total citizens fetched:', citizens.length);
+        console.log('📊 Total stations fetched:', stations.length);
+        console.log('📊 Citizens data sample:', citizens.slice(0, 2));
+        console.log('📊 Stations data sample:', stations.slice(0, 2));
 
         setUsers({ citizens, stations });
       } catch (error) {
@@ -165,6 +171,29 @@ const Auser_management = () => {
 
     fetchUsers();
   }, []);
+
+  // Filter users based on search query
+  const filteredUsers = users[activeTab]?.filter(user => {
+    if (!searchQuery) return true;
+    
+    const query = searchQuery.toLowerCase();
+    if (activeTab === 'citizens') {
+      return (
+        user.name?.toLowerCase().includes(query) ||
+        user.email?.toLowerCase().includes(query) ||
+        user.phoneNumber?.toLowerCase().includes(query) ||
+        user.displayName?.toLowerCase().includes(query)
+      );
+    } else {
+      return (
+        user.name?.toLowerCase().includes(query) ||
+        user.stationName?.toLowerCase().includes(query) ||
+        user.email?.toLowerCase().includes(query) ||
+        user.address?.toLowerCase().includes(query) ||
+        user.location?.toLowerCase().includes(query)
+      );
+    }
+  }) || [];
 
 
 
@@ -715,7 +744,10 @@ const Auser_management = () => {
           <div className="bg-white rounded-lg shadow mb-6">
             <div className="flex border-b">
                         <button
-              onClick={() => setActiveTab('citizens')}
+              onClick={() => {
+                setActiveTab('citizens');
+                setSearchQuery(''); // Clear search when switching tabs
+              }}
               className={`flex-1 py-4 px-6 text-center font-medium text-sm ${
                 activeTab === 'citizens' 
                   ? 'text-red-600 border-b-2 border-red-600' 
@@ -725,7 +757,10 @@ const Auser_management = () => {
               Citizens ({users.citizens.length})
                         </button>
                         <button
-              onClick={() => setActiveTab('stations')}
+              onClick={() => {
+                setActiveTab('stations');
+                setSearchQuery(''); // Clear search when switching tabs
+              }}
               className={`flex-1 py-4 px-6 text-center font-medium text-sm ${
                 activeTab === 'stations' 
                   ? 'text-red-600 border-b-2 border-red-600' 
@@ -749,8 +784,18 @@ const Auser_management = () => {
                 <input
                   type="text"
                   placeholder={activeTab === 'citizens' ? 'Search citizens...' : 'Search stations...'}
-                  className="pl-10 pr-4 py-3 w-full border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:border-red-500"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  className="pl-10 pr-10 py-3 w-full border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:border-red-500"
                 />
+                {searchQuery && (
+                  <button
+                    onClick={() => setSearchQuery('')}
+                    className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                  >
+                    <FiX className="w-4 h-4" />
+                  </button>
+                )}
               </div>
               <div className="flex gap-2">
                 {activeTab === 'stations' && (
@@ -775,18 +820,31 @@ const Auser_management = () => {
             </div>
           </div>
             
+
           {/* Users List */}
           <div className="bg-white rounded-lg shadow">
             <div className="p-6 border-b">
               <h2 className="text-lg font-semibold text-gray-900">
-                {activeTab === 'citizens' ? 'Citizens' : 'Stations'} ({users[activeTab].length})
+                {activeTab === 'citizens' ? 'Citizens' : 'Stations'} ({filteredUsers.length})
+                {searchQuery && (
+                  <span className="text-sm text-gray-500 ml-2">
+                    (filtered from {users[activeTab]?.length || 0} total)
+                  </span>
+                )}
               </h2>
             </div>
             {loading ? (
               <div className="p-6 text-center text-gray-500">Loading...</div>
+            ) : filteredUsers.length === 0 ? (
+              <div className="p-6 text-center text-gray-500">
+                {searchQuery ? 
+                  `No ${activeTab} found matching "${searchQuery}"` : 
+                  `No ${activeTab} available`
+                }
+              </div>
             ) : (
               <div className="divide-y divide-gray-200">
-                {users[activeTab].map(user => (
+                {filteredUsers.map(user => (
                   <div key={user.id} className="p-6 hover:bg-gray-50">
                     <div className="flex items-center justify-between">
                       <div className="flex items-center space-x-4">

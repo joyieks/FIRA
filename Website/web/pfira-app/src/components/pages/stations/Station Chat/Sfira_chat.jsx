@@ -22,123 +22,20 @@ const Sfira_chat = () => {
   const [isUploadingImage, setIsUploadingImage] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
 
-  // Get current station user info
+  // FIXED: Get current station ID from localStorage - EXACTLY same as User Management
   useEffect(() => {
-    const getCurrentStation = async () => {
-      try {
-        console.log('🔍 getCurrentStation called');
-        
-        // Get current user from localStorage or session
-        const currentUser = JSON.parse(localStorage.getItem('currentUser')) || {};
-        console.log('🔍 currentUser from localStorage:', currentUser);
-        console.log('🔍 currentUser.id:', currentUser.id);
-        console.log('🔍 currentUser.station_name:', currentUser.station_name);
-        console.log('🔍 currentUser.name:', currentUser.name);
-        console.log('🔍 currentUser.email:', currentUser.email);
-        
-        let stationIdToUse = null;
-        let stationNameToUse = 'Station';
-        
-        if (currentUser.id) {
-          console.log('✅ Found currentUser.id in localStorage:', currentUser.id);
-          
-          // --- Attempt 1: Find station by email from localStorage ---
-          if (currentUser.email) {
-            console.log('🔍 Attempting to find station by email:', currentUser.email);
-            const { data: stationByEmail, error: emailError } = await supabase
-              .from('station_users')
-              .select('id, station_name')
-              .eq('email', currentUser.email)
-              .single();
-            
-            if (stationByEmail && !emailError) {
-              stationIdToUse = stationByEmail.id;
-              stationNameToUse = stationByEmail.station_name || 'Station';
-              console.log('✅ Found station by email:', stationByEmail);
-            } else {
-              console.log('⚠️ Could not find station by email or error:', emailError);
-            }
-          }
-          
-          // --- Attempt 2: If not found by email, try by ID from localStorage ---
-          if (!stationIdToUse) {
-            console.log('🔍 Attempting to find station by ID from localStorage:', currentUser.id);
-            const { data: stationById, error: idError } = await supabase
-              .from('station_users')
-              .select('id, station_name')
-              .eq('id', currentUser.id)
-              .single();
-            
-            if (stationById && !idError) {
-              stationIdToUse = stationById.id;
-              stationNameToUse = stationById.station_name || 'Station';
-              console.log('✅ Found station by ID from database:', stationById);
-            } else {
-              console.log('⚠️ Could not find station by ID or error:', idError);
-            }
-          }
-          
-          if (stationIdToUse) {
-            setCurrentStationId(stationIdToUse);
-            setCurrentStationName(stationNameToUse);
-            console.log('✅ Set currentStationId to:', stationIdToUse, 'from localStorage/database lookup');
-          } else {
-            console.log('❌ No matching station found for currentUser.id or email. Falling back to first available.');
-            await getFirstAvailableStation();
-          }
-          
-        } else {
-          console.log('❌ No current user found in localStorage. Falling back to first available station from database.');
-          await getFirstAvailableStation();
-        }
-      } catch (error) {
-        console.error('❌ Error in getCurrentStation:', error);
-        console.log('🔄 Using fallback station ID due to error in getCurrentStation');
-        setCurrentStationId('default-station-123');
-        setCurrentStationName('Default Station');
-      }
-    };
-
-    getCurrentStation();
+    const userData = JSON.parse(localStorage.getItem('userData') || '{}');
+    if (userData.id) {
+      setCurrentStationId(userData.id);
+      setCurrentStationName(userData.station_name || userData.name || 'Station');
+      console.log('🏢 Current station ID (Chat):', userData.id);
+    } else {
+      console.error('❌ No station ID found in userData (Chat)');
+      alert('Error: Unable to identify current station. Please log in again.');
+    }
   }, []);
 
-  // Helper function to get first available station
-  const getFirstAvailableStation = async () => {
-    try {
-      console.log('🔄 Getting first available station from database...');
-      const { data: firstStation, error } = await supabase
-        .from('station_users')
-        .select('*')
-        .limit(1)
-        .single();
-      
-      if (firstStation && !error) {
-        console.log('✅ Found first available station:', firstStation);
-        setCurrentStationId(firstStation.id);
-        setCurrentStationName(firstStation.station_name || 'Station');
-        console.log('✅ Set currentStationId to:', firstStation.id);
-      } else {
-        console.error('❌ No stations found in database or error:', error);
-        // Fallback: use a default station ID for testing
-        console.log('🔄 Using fallback station ID for testing');
-        setCurrentStationId('default-station-123');
-        setCurrentStationName('Default Station');
-      }
-    } catch (error) {
-      console.error('❌ Error fetching first available station:', error);
-      // Fallback: use a default station ID for testing
-      console.log('🔄 Using fallback station ID due to error');
-      setCurrentStationId('default-station-123');
-      setCurrentStationName('Default Station');
-    }
-  };
-
-  // Monitor currentStationId changes
-  useEffect(() => {
-    console.log('🔍 currentStationId changed to:', currentStationId);
-  }, [currentStationId]);
-
-  // Fetch users related to this station
+  // Fixed: Fetch users related to this station
   useEffect(() => {
     console.log('🔍 fetchUsers useEffect triggered, currentStationId:', currentStationId);
     
@@ -155,13 +52,12 @@ const Sfira_chat = () => {
         // Test Supabase connection first
         console.log('🔌 Testing Supabase connection...');
         const { data: testData, error: testError } = await supabase
-          .from('station_users')
+          .from('responders')
           .select('*')
           .limit(1);
         
         if (testError) {
           console.error('❌ Supabase connection failed:', testError);
-          console.error('❌ Error details:', testError.message, testError.details, testError.hint);
           return;
         } else {
           console.log('✅ Supabase connection successful');
@@ -170,80 +66,80 @@ const Sfira_chat = () => {
         
         // Fetch admin users - ALL admin users in the system
         console.log('Fetching from admin_users table...');
-        const { data: adminUsers, error: adminError } = await supabase
+        let adminUsers = [];
+        const { data: adminData, error: adminError } = await supabase
           .from('admin_users')
-          .select('*')
-          .limit(100);
+          .select('*');
         
-        // If admin_users table doesn't exist, create a mock admin
         if (adminError && adminError.message.includes('relation "admin_users" does not exist')) {
-          console.log('⚠️ admin_users table not found, using mock admin');
-          const mockAdmin = [{
+          console.log('⚠️ admin_users table not found, creating mock admin');
+          adminUsers = [{
             id: 'mock-admin-1',
             first_name: 'Command',
             last_name: 'Center',
             email: 'admin@fira.com'
           }];
-          setAdminUsers(mockAdmin);
-        }
-
-        if (adminError) {
+        } else if (adminError) {
           console.error('❌ Error fetching admin users:', adminError);
+          adminUsers = [];
         } else {
+          adminUsers = adminData || [];
           console.log('✅ Admin users fetched:', adminUsers);
-          console.log('✅ Admin users count:', adminUsers?.length || 0);
-          if (!adminUsers || adminUsers.length === 0) {
-            console.log('⚠️ No admin users found in admin_users table');
-          }
+          console.log('✅ Admin users count:', adminUsers.length);
         }
 
-        // Fetch ONLY responders assigned to THIS station
-        console.log('🔍 Current station ID for responder filtering:', currentStationId);
+        if (adminUsers.length === 0) {
+          console.log('⚠️ No admin users found in admin_users table');
+        }
+
+        // Fetch ONLY responders assigned to THIS station - CRITICAL FIX
+        console.log('�� Current station ID for responder filtering:', currentStationId);
         console.log('🔍 Fetching responders where station_id =', currentStationId);
         
-        // First, let's see ALL responders to debug
+        // Debug: Fetch ALL responders first to see what we have
         console.log('🔍 Fetching ALL responders first to see what we have...');
-        const { data: allResponders, error: allResponderError } = await supabase
+        const { data: allResponders, error: allRespondersError } = await supabase
           .from('responders')
-          .select('*')
-          .limit(100);
+          .select('*');
         
-        if (allResponderError) {
-          console.error('❌ Error fetching all responders:', allResponderError);
-        } else {
+        if (!allRespondersError && allResponders) {
           console.log('🔍 ALL responders in database:', allResponders);
-          console.log('🔍 Station IDs in responders table:', allResponders?.map(r => r.station_id) || []);
+          console.log('🔍 Station IDs in responders table:', allResponders.map(r => r.station_id));
           
-          // Check if currentStationId matches any of these
-          const matchingStation = allResponders?.find(r => r.station_id === currentStationId);
-          if (matchingStation) {
+          // Check if our current station ID matches any responder station_id
+          const matchingResponder = allResponders.find(r => r.station_id === currentStationId);
+          if (matchingResponder) {
             console.log('✅ MATCH FOUND! currentStationId matches a responder station_id');
-            console.log('✅ Matching responder:', matchingStation);
+            console.log('✅ Matching responder:', matchingResponder);
           } else {
-            console.log('❌ NO MATCH! currentStationId does NOT match any responder station_id');
+            console.log('❌ NO MATCH! currentStationId does not match any responder station_id');
             console.log('❌ currentStationId:', currentStationId);
-            console.log('❌ Available station_ids:', allResponders?.map(r => r.station_id) || []);
+            console.log('❌ Available station_ids:', allResponders.map(r => r.station_id));
           }
         }
-        
+
         // Now fetch responders for current station
-        console.log('🎯 FINAL CHECK: About to fetch responders for station_id =', currentStationId);
+        console.log('�� FINAL CHECK: About to fetch responders for station_id =', currentStationId);
         console.log('🎯 This should match one of these station IDs from responders table');
         
         const { data: responders, error: responderError } = await supabase
           .from('responders')
           .select('*')
-          .eq('station_id', currentStationId)
-          .limit(100);
+          .eq('station_id', currentStationId);
 
         if (responderError) {
           console.error('❌ Error fetching responders:', responderError);
         } else {
           console.log('✅ Responders fetched for station', currentStationId, ':', responders);
           console.log('✅ Responders count:', responders?.length || 0);
-          if (!responders || responders.length === 0) {
-            console.log('⚠️ No responders found for station ID:', currentStationId);
-            console.log('⚠️ This means no responders are assigned to this station');
+          
+          // Debug: Show which responders belong to this station
+          if (responders && responders.length > 0) {
+            responders.forEach(r => {
+              console.log(`📋 Responder: ${r.first_name} ${r.last_name} (station_id: ${r.station_id})`);
+            });
+          } else {
+            console.log('⚠️ No responders found for station:', currentStationId);
           }
         }
 
@@ -252,6 +148,7 @@ const Sfira_chat = () => {
         const { data: otherStations, error: stationsError } = await supabase
           .from('station_users')
           .select('*')
+          .neq('id', currentStationId) // Exclude current station
           .limit(100);
 
         if (stationsError) {
@@ -259,30 +156,28 @@ const Sfira_chat = () => {
         } else {
           console.log('✅ Other stations fetched:', otherStations);
           console.log('✅ Other stations count:', otherStations?.length || 0);
-          if (!otherStations || otherStations.length === 0) {
-            console.log('⚠️ No stations found in station_users table');
-          }
         }
 
-                // Format REAL users from Supabase tables
+        // Debug logging for raw data
         console.log('🔍 Raw admin users data:', adminUsers);
         console.log('🔍 Raw responders data:', responders);
         console.log('🔍 Raw stations data:', otherStations);
-        
+
+        // Format users from Supabase tables
         const formattedUsers = [
-          ...(adminUsers || []).map(admin => {
-            console.log('🔍 Processing admin:', admin);
-            return {
-              id: admin.id,
-              name: `${admin.first_name || ''} ${admin.last_name || ''}`.trim() || 'Admin User',
-              email: admin.email,
-              type: 'admin',
-              avatar: (admin.first_name || admin.last_name || 'A')[0].toUpperCase(),
-              lastMessage: '',
-              lastMessageTime: null,
-              unreadCount: 0
-            };
-          }),
+          // Admin users
+          ...(adminUsers || []).map(admin => ({
+            id: admin.id,
+            name: `${admin.first_name || ''} ${admin.last_name || ''}`.trim() || 'Admin User',
+            email: admin.email,
+            type: 'admin',
+            avatar: (admin.first_name || admin.last_name || 'A')[0].toUpperCase(),
+            lastMessage: '',
+            lastMessageTime: null,
+            unreadCount: 0
+          })),
+          
+          // Responders (only those assigned to current station)
           ...(responders || []).map(responder => {
             console.log('🔍 Processing responder:', responder);
             return {
@@ -296,8 +191,10 @@ const Sfira_chat = () => {
               unreadCount: 0
             };
           }),
+          
+          // Other stations
           ...(otherStations || []).map(station => {
-            console.log('🔍 Processing station:', station);
+            console.log('�� Processing station:', station);
             return {
               id: station.id,
               name: station.station_name || station.name || 'Unnamed Station',
@@ -313,11 +210,13 @@ const Sfira_chat = () => {
 
         console.log('Total formatted users:', formattedUsers);
         console.log('Current station ID:', currentStationId);
+
         setUsers(formattedUsers);
         setFilteredUsers(formattedUsers);
         setStations(otherStations || []);
+
       } catch (error) {
-        console.error('Error fetching users:', error);
+        console.error('❌ Error fetching users:', error);
       } finally {
         setIsLoading(false);
       }
@@ -333,7 +232,7 @@ const Sfira_chat = () => {
 
       try {
         const { data: messagesData, error } = await supabase
-          .from('messages')
+          .from('message')
           .select('*')
           .eq('receiver_id', currentStationId)
           .eq('is_read', false)
@@ -341,8 +240,8 @@ const Sfira_chat = () => {
 
         if (error) {
           console.error('Error fetching unread messages:', error);
-        return;
-      }
+          return;
+        }
 
         // Group unread messages by user
         const unreadByUser = {};
@@ -361,13 +260,13 @@ const Sfira_chat = () => {
         // Update users with unread count and last message
         const updatedUsers = users.map(user => {
           const unreadInfo = unreadByUser[user.id];
-        return {
+          return {
             ...user,
             unreadCount: unreadInfo ? unreadInfo.count : 0,
             lastMessage: unreadInfo ? unreadInfo.lastMessage : user.lastMessage,
             lastMessageTime: unreadInfo ? unreadInfo.lastMessageTime : user.lastMessageTime
-        };
-      });
+          };
+        });
 
         setUsers(updatedUsers);
         setFilteredUsers(updatedUsers);
@@ -428,7 +327,7 @@ const Sfira_chat = () => {
         console.log('Fetching messages between:', currentStationId, 'and', selectedUser.id);
         
         const { data: messagesData, error } = await supabase
-          .from('messages')
+          .from('message')
           .select('*')
           .or(`and(sender_id.eq.${selectedUser.id},receiver_id.eq.${currentStationId}),and(sender_id.eq.${currentStationId},receiver_id.eq.${selectedUser.id})`)
           .order('created_at', { ascending: true });
@@ -458,7 +357,7 @@ const Sfira_chat = () => {
       .on('postgres_changes', {
         event: 'INSERT',
         schema: 'public',
-        table: 'messages',
+        table: 'message',
         filter: `or(and(sender_id.eq.${selectedUser.id},receiver_id.eq.${currentStationId}),and(sender_id.eq.${currentStationId},receiver_id.eq.${selectedUser.id}))`
       }, (payload) => {
         setMessages(prev => [...prev, payload.new]);
@@ -490,7 +389,7 @@ const Sfira_chat = () => {
       });
 
       const { data, error } = await supabase
-        .from('messages')
+        .from('message')
         .insert({
           sender_id: currentStationId,
           receiver_id: selectedUser.id,
@@ -525,7 +424,7 @@ const Sfira_chat = () => {
       // For now, we'll just send a text message indicating image upload
       // In a full implementation, you'd upload to Supabase Storage
       const { error } = await supabase
-        .from('messages')
+        .from('message')
         .insert({
           sender_id: currentStationId,
           receiver_id: selectedUser.id,
@@ -587,7 +486,7 @@ const Sfira_chat = () => {
         <div className="p-4 border-b border-gray-200">
           <h2 className="text-xl font-bold text-red-600">Project FIRA</h2>
           <p className="text-sm text-gray-500">Emergency Communication</p>
-          
+          <p className="text-xs text-gray-400 mt-1">Station: {currentStationName}</p>
         </div>
         
         {/* Search Bar */}
@@ -657,15 +556,17 @@ const Sfira_chat = () => {
               <div className="text-center text-gray-500 py-8">No users found</div>
             ) : (
               filteredUsers.map(user => (
-              <div
-                key={user.id}
+                <div
+                  key={user.id}
                   className={`p-4 border-b border-gray-200 hover:bg-gray-50 cursor-pointer flex items-center ${
                     selectedUser?.id === user.id ? 'bg-red-50' : ''
                   }`}
-                onClick={() => setSelectedUser(user)}
-              >
+                  onClick={() => setSelectedUser(user)}
+                >
                   <div className={`w-12 h-12 rounded-full flex items-center justify-center font-bold mr-3 text-lg ${
-                    user.type === 'admin' ? 'bg-blue-100 text-blue-600' : 'bg-green-100 text-green-600'
+                    user.type === 'admin' ? 'bg-blue-100 text-blue-600' : 
+                    user.type === 'responder' ? 'bg-green-100 text-green-600' : 
+                    'bg-orange-100 text-orange-600'
                   }`}>
                     {user.avatar}
                   </div>
@@ -680,13 +581,13 @@ const Sfira_chat = () => {
                         {formatLastMessage(user.lastMessage)}
                       </div>
                     )}
-                </div>
+                  </div>
                   {user.unreadCount > 0 && (
                     <div className="bg-red-500 text-white text-xs rounded-full px-2 py-1 min-w-[20px] text-center">
                       {user.unreadCount}
-                </div>
+                    </div>
                   )}
-              </div>
+                </div>
               ))
             )}
           </div>
@@ -704,7 +605,9 @@ const Sfira_chat = () => {
                   onClick={() => setSelectedUser(user)}
                 >
                   <div className={`w-12 h-12 rounded-full flex items-center justify-center font-bold mr-3 text-lg ${
-                    user.type === 'admin' ? 'bg-blue-100 text-blue-600' : 'bg-green-100 text-green-600'
+                    user.type === 'admin' ? 'bg-blue-100 text-blue-600' : 
+                    user.type === 'responder' ? 'bg-green-100 text-green-600' : 
+                    'bg-orange-100 text-orange-600'
                   }`}>
                     {user.avatar}
                   </div>
@@ -719,11 +622,11 @@ const Sfira_chat = () => {
                         {formatLastMessage(user.lastMessage)}
                       </div>
                     )}
-                </div>
+                  </div>
                   <div className="bg-red-500 text-white text-xs rounded-full px-2 py-1 min-w-[20px] text-center">
                     {user.unreadCount}
+                  </div>
                 </div>
-              </div>
               ))
             )}
           </div>
@@ -754,7 +657,9 @@ const Sfira_chat = () => {
             }`}>
               <div className="flex items-center">
                 <div className={`w-12 h-12 rounded-full flex items-center justify-center font-bold mr-3 text-lg ${
-                  selectedUser.type === 'admin' ? 'bg-blue-100 text-blue-600' : 'bg-green-100 text-green-600'
+                  selectedUser.type === 'admin' ? 'bg-blue-100 text-blue-600' : 
+                  selectedUser.type === 'responder' ? 'bg-green-100 text-green-600' : 
+                  'bg-orange-100 text-orange-600'
                 }`}>
                   {selectedUser.avatar}
                 </div>
@@ -773,8 +678,8 @@ const Sfira_chat = () => {
               </div>
             </div>
 
-                         {/* Messages */}
-             <div className="h-170 overflow-y-auto p-4 bg-gray-50">
+            {/* Messages */}
+            <div className="flex-1 overflow-y-auto p-4 bg-gray-50">
               {messages.length === 0 ? (
                 <div className="flex flex-col items-center justify-center h-full text-gray-500">
                   <div className="text-6xl mb-4">💬</div>
@@ -786,39 +691,39 @@ const Sfira_chat = () => {
               ) : (
                 messages.map((message) => {
                   const isMine = message.sender_id === currentStationId;
-                return (
-                  <div 
-                    key={message.id} 
-                    className={`mb-4 flex ${isMine ? 'justify-end' : 'justify-start'} items-center`}
-                  >
-                    <div className={`max-w-xs md:max-w-md ${isMine ? 'items-end' : 'items-start'}`}>
-                      <div className={`rounded-lg px-4 py-2 ${
-                        isMine
-                          ? isEmergencyMode 
-                            ? 'bg-red-600 text-white' 
-                            : 'bg-blue-600 text-white'
-                            : message.is_emergency
-                            ? 'bg-red-100 border border-red-200'
-                            : 'bg-white border border-gray-200'
-                      }`}>
-                        {!isMine && (
+                  return (
+                    <div 
+                      key={message.id} 
+                      className={`mb-4 flex ${isMine ? 'justify-end' : 'justify-start'} items-center`}
+                    >
+                      <div className={`max-w-xs md:max-w-md ${isMine ? 'items-end' : 'items-start'}`}>
+                        <div className={`rounded-lg px-4 py-2 ${
+                          isMine
+                            ? isEmergencyMode 
+                              ? 'bg-red-600 text-white' 
+                              : 'bg-blue-600 text-white'
+                              : message.is_emergency
+                              ? 'bg-red-100 border border-red-200'
+                              : 'bg-white border border-gray-200'
+                        }`}>
+                          {!isMine && (
                             <div className={`text-xs font-medium mb-1 ${
                               message.is_emergency ? 'text-red-600' : 'text-gray-500'
                             }`}>
                               {message.sender_name || selectedUser.name}
-                          </div>
-                        )}
-                        {message.text && <p className="whitespace-pre-wrap">{message.text}</p>}
+                            </div>
+                          )}
+                          {message.text && <p className="whitespace-pre-wrap">{message.text}</p>}
                           <div className={`text-xs mt-2 text-right ${
-                          isMine 
-                            ? 'text-white text-opacity-80' 
-                              : message.is_emergency 
-                              ? 'text-red-500' 
-                              : 'text-gray-500'
-                        }`}>
+                            isMine 
+                              ? 'text-white text-opacity-80' 
+                                : message.is_emergency 
+                                ? 'text-red-500' 
+                                : 'text-gray-500'
+                          }`}>
                             {formatTime(message.created_at)}
+                          </div>
                         </div>
-                      </div>
                       </div>
                     </div>
                   );
