@@ -108,6 +108,62 @@ export const AuthProvider = ({ children }) => {
     }
   };
 
+  // Add a method to handle station login
+  const loginStation = async (userData) => {
+    try {
+      const userType = 'station';
+      const authData = { ...userData, userType };
+
+      console.log('🔐 loginStation called with:', { userType, userData });
+
+      // Store authentication data first
+      await AsyncStorage.setItem('authToken', 'station-token');
+      await AsyncStorage.setItem('userType', userType);
+      await AsyncStorage.setItem('userData', JSON.stringify(authData));
+      await AsyncStorage.setItem('loginTime', Date.now().toString());
+
+      // Update state in a single batch to prevent multiple re-renders
+      setIsAuthenticated(true);
+      setUserType(userType);
+      setUserData(authData);
+
+      console.log('✅ Station authentication set:', { isAuthenticated: true, userType, userData: authData });
+
+      return { success: true, userType };
+    } catch (error) {
+      console.error('❌ Station login error:', error);
+      throw error;
+    }
+  };
+
+  // Add a method to handle responder login
+  const loginResponder = async (userData) => {
+    try {
+      const userType = 'responder';
+      const authData = { ...userData, userType };
+
+      console.log('🔐 loginResponder called with:', { userType, userData });
+
+      // Store authentication data first
+      await AsyncStorage.setItem('authToken', 'responder-token');
+      await AsyncStorage.setItem('userType', userType);
+      await AsyncStorage.setItem('userData', JSON.stringify(authData));
+      await AsyncStorage.setItem('loginTime', Date.now().toString());
+
+      // Update state in a single batch to prevent multiple re-renders
+      setIsAuthenticated(true);
+      setUserType(userType);
+      setUserData(authData);
+
+      console.log('✅ Responder authentication set:', { isAuthenticated: true, userType, userData: authData });
+
+      return { success: true, userType };
+    } catch (error) {
+      console.error('❌ Responder login error:', error);
+      throw error;
+    }
+  };
+
   const logout = async () => {
     try {
       // Clear all stored data
@@ -133,6 +189,8 @@ export const AuthProvider = ({ children }) => {
     isLoading,
     login,
     loginCitizen,
+    loginStation,
+    loginResponder,
     logout,
     checkAuthStatus
   };

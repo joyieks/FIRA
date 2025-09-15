@@ -7,8 +7,8 @@ import emailjs from '@emailjs/browser';
 const Auser_management = () => {
   // Initialize EmailJS
   useEffect(() => {
-    emailjs.init('hDU2Ar_g1pr7Cpg-S');
-    console.log('EmailJS initialized with key:', 'hDU2Ar_g1pr7Cpg-S');
+    emailjs.init('N_WM9SM_s6cRQPVgT');
+    console.log('EmailJS initialized with key:', 'N_WM9SM_s6cRQPVgT');
   }, []);
 
   const [activeTab, setActiveTab] = useState('citizens');
@@ -623,15 +623,15 @@ const citizens = citizensData.map(data => {
     try {
       console.log('🚀 Starting email send process for station...');
       console.log('📧 EmailJS configuration:', {
-        serviceId: 'service_717ciwa',
-        templateId: 'template_vfzvmj2',
-        publicKey: 'hDU2Ar_g1pr7Cpg-S'
+        serviceId: 'service_5k3e6xe',
+        templateId: 'template_ztp029i',
+        publicKey: 'N_WM9SM_s6cRQPVgT'
       });
       
       // EmailJS configuration
-      const serviceId = 'service_717ciwa'; // Your EmailJS service ID
-      const templateId = 'template_vfzvmj2'; // Your EmailJS template ID
-      const publicKey = 'hDU2Ar_g1pr7Cpg-S'; // Your EmailJS public key
+      const serviceId = 'service_5k3e6xe'; // Your EmailJS service ID
+      const templateId = 'template_ztp029i'; // Your EmailJS template ID
+      const publicKey = 'N_WM9SM_s6cRQPVgT'; // Your EmailJS public key
       
       const templateParams = {
         to_name: stationName,

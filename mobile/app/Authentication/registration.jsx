@@ -3,7 +3,6 @@ import { View, Text, TextInput, TouchableOpacity, Image, ScrollView, Alert } fro
 import { useRouter } from 'expo-router';
 import { AntDesign } from '@expo/vector-icons';
 import { supabase } from '../config/supabase';
-import { WebBrowser, Crypto, googleSignInConfig } from '../config/googleSignIn';
 
 const RegistrationComponent = () => {
   const router = useRouter();
@@ -24,10 +23,10 @@ const RegistrationComponent = () => {
   const [resendCountdown, setResendCountdown] = useState(0);
 
   // EmailJS configuration
-  const serviceId = 'service_717ciwa';
-  const templateId = 'template_iefgxnk';
-  const publicKey = 'hDU2Ar_g1pr7Cpg-S';
-  const privateKey = 'toeoBDUw3w6FPgdo7-Rjr';
+  const serviceId = 'service_5k3e6xe';
+  const templateId = 'template_x9i685u';  // Your Password Reset template
+  const publicKey = 'N_WM9SM_s6cRQPVgT';
+  const privateKey = 'EUqRUy4vpBAf6rEiPXndd';
 
   useEffect(() => {
     // Countdown timer for resend button
@@ -55,9 +54,9 @@ const RegistrationComponent = () => {
       };
 
       console.log('📋 Template Params:', templateParams);
-      console.log('📤 Sending email via EmailJS REST API...');
+      console.log('📤 Sending email via EmailJS...');
 
-      // Use EmailJS REST API
+      // Use EmailJS REST API with private key
       const response = await fetch('https://api.emailjs.com/api/v1.0/email/send', {
         method: 'POST',
         headers: {
@@ -67,26 +66,22 @@ const RegistrationComponent = () => {
           service_id: serviceId,
           template_id: templateId,
           user_id: publicKey,
-          accessToken: privateKey,
+          accessToken: privateKey,  // Add private key for strict mode
           template_params: templateParams,
         }),
       });
 
       console.log('📡 Response status:', response.status);
 
-      const responseText = await response.text();
-      console.log('📡 Raw response:', responseText);
-
       if (!response.ok) {
-        let errorMessage = `HTTP ${response.status}: Failed to send email`;
-        try {
-          const errorData = JSON.parse(responseText);
-          errorMessage = `HTTP ${response.status}: ${errorData.message || 'Failed to send email'}`;
-        } catch (parseError) {
-          errorMessage = `HTTP ${response.status}: ${responseText.substring(0, 100)}`;
-        }
-        throw new Error(errorMessage);
+        const errorText = await response.text();
+        console.error('❌ EmailJS Error Response:', errorText);
+        throw new Error('Failed to send verification code. Please try again.');
       }
+
+      // Check if response is successful
+      const responseData = await response.text();
+      console.log('✅ EmailJS Response:', responseData);
 
       // Store the code for verification
       setVerificationCode(code);
@@ -96,8 +91,9 @@ const RegistrationComponent = () => {
       setResendCountdown(60);
       
       return code;
+      
     } catch (error) {
-      console.error('❌ EmailJS REST API Error Details:', error);
+      console.error('❌ EmailJS Error Details:', error);
       throw new Error(`Failed to send verification code: ${error.message}`);
     }
   };
@@ -285,119 +281,6 @@ const RegistrationComponent = () => {
     }
   };
 
-  const handleGoogleSignIn = async () => {
-    try {
-      // Generate a random nonce for security
-      const nonce = await Crypto.digestStringAsync(
-        Crypto.CryptoDigestAlgorithm.SHA256,
-        Math.random().toString(),
-        { encoding: Crypto.CryptoEncoding.HEX }
-      );
-
-      // Create Google OAuth URL
-      const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?` +
-        `client_id=${googleSignInConfig.clientId}&` +
-        `redirect_uri=${encodeURIComponent(googleSignInConfig.redirectUri)}&` +
-        `response_type=id_token&` +
-        `scope=${encodeURIComponent(googleSignInConfig.scopes.join(' '))}&` +
-        `nonce=${nonce}`;
-
-      // Open browser for Google authentication
-      const result = await WebBrowser.openAuthSessionAsync(authUrl, googleSignInConfig.redirectUri);
-
-      if (result.type === 'success') {
-        // Parse the URL to get the id_token
-        const url = result.url;
-        const urlParams = new URLSearchParams(url.split('#')[1]);
-        const idToken = urlParams.get('id_token');
-        
-        if (idToken) {
-          // Sign in to Supabase with Google ID token
-          const { data: authData, error: authError } = await supabase.auth.signInWithIdToken({
-            provider: 'google',
-            token: idToken,
-          });
-
-          if (authError) {
-            console.error('❌ Supabase Google sign-in error:', authError);
-            throw new Error(`Google sign-in failed: ${authError.message}`);
-          }
-
-          const user = authData.user;
-          console.log('✅ Google sign-in successful:', user.id);
-
-          // Check if user exists in citizen_users table
-          const { data: citizenData, error: citizenError } = await supabase
-            .from('citizen_users')
-            .select('*')
-            .eq('email', user.email)
-            .single();
-
-          if (citizenError && citizenError.code !== 'PGRST116') {
-            console.error('❌ Error checking citizen_users:', citizenError);
-            throw new Error('Error checking user data');
-          }
-
-          if (citizenData) {
-            // User exists, redirect to login to use normal flow
-            Alert.alert(
-              'Welcome Back!',
-              'You are already registered. Please use the regular login.',
-              [{ 
-                text: 'Go to Login', 
-                onPress: () => router.replace('/Authentication/login') 
-              }]
-            );
-          } else {
-            // User doesn't exist, create new account and redirect to login
-            const newUserData = {
-              id: user.id,
-              first_name: user.user_metadata?.full_name?.split(' ')[0] || 'Google',
-              last_name: user.user_metadata?.full_name?.split(' ').slice(1).join(' ') || 'User',
-              email: user.email,
-              phone: user.phone || '',
-              display_name: user.user_metadata?.full_name || 'Google User',
-              status: 'active',
-              reports: 0,
-              is_verified: true,
-              google_sign_in: true,
-              created_at: new Date().toISOString(),
-              updated_at: new Date().toISOString()
-            };
-
-            const { data: insertData, error: insertError } = await supabase
-              .from('citizen_users')
-              .insert([newUserData])
-              .select()
-              .single();
-
-            if (insertError) {
-              console.error('❌ Error creating user:', insertError);
-              throw new Error('Failed to create user account');
-            }
-
-            Alert.alert(
-              'Account Created Successfully!',
-              `Welcome to Project FIRA, ${newUserData.first_name}! Please log in to continue.`,
-              [{ 
-                text: 'Login Now', 
-                onPress: () => router.replace('/Authentication/login')
-              }]
-            );
-          }
-        } else {
-          Alert.alert('Error', 'No ID token received from Google.');
-        }
-      } else if (result.type === 'cancel') {
-        Alert.alert('Cancelled', 'You cancelled the Google Sign-In process.');
-      } else {
-        Alert.alert('Error', 'An error occurred during sign-in.');
-      }
-    } catch (error) {
-      console.error('Google Sign-In error:', error);
-      Alert.alert('Error', error.message);
-    }
-  };
 
   const handleChange = (field, value) => {
     setFormData(prev => ({ ...prev, [field]: value }));
@@ -534,38 +417,6 @@ const RegistrationComponent = () => {
         </Text>
       </TouchableOpacity>
 
-      <View className="flex-row items-center mb-6">
-        <View className="flex-1 h-px bg-gray-300" />
-        <Text className="mx-4 text-gray-500 text-sm">or</Text>
-        <View className="flex-1 h-px bg-gray-300" />
-      </View>
-
-      <TouchableOpacity
-        style={{
-          paddingVertical: 16,
-          borderRadius: 12,
-          alignItems: 'center',
-          marginBottom: 16,
-          flexDirection: 'row',
-          justifyContent: 'center',
-          borderWidth: 1,
-          borderColor: '#e5e7eb',
-          backgroundColor: '#ffffff',
-          shadowColor: '#000',
-          shadowOffset: { width: 0, height: 2 },
-          shadowOpacity: 0.1,
-          shadowRadius: 3.84,
-          elevation: 5,
-        }}
-        onPress={handleGoogleSignIn}
-      >
-        <View style={{ width: 24, height: 24, marginRight: 12, justifyContent: 'center', alignItems: 'center' }}>
-          <AntDesign name="google" size={20} color="#dc2626" />
-        </View>
-        <Text style={{ color: '#dc2626', fontWeight: '600', fontSize: 16, letterSpacing: 0.5 }}>
-          Sign up with Google
-        </Text>
-      </TouchableOpacity>
 
       <View className="flex-row justify-center">
         <Text className="text-gray-600">Already have an account? </Text>

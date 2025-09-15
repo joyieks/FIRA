@@ -164,8 +164,8 @@ const ForgotPasswordScreen = () => {
   );
 };
 
-export default ForgotPasswordScreen;
-
-export const options = {
+export default ForgotPasswordScreen;export const options = {
   headerShown: false,
 };
+
+

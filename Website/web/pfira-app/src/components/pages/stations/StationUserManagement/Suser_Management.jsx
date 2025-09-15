@@ -28,8 +28,8 @@ const cebuLocations = [
 const Suser_Management = () => {
   // Initialize EmailJS
   useEffect(() => {
-    emailjs.init('hDU2Ar_g1pr7Cpg-S');
-    console.log('EmailJS initialized with key:', 'hDU2Ar_g1pr7Cpg-S');
+    emailjs.init('N_WM9SM_s6cRQPVgT');
+    console.log('EmailJS initialized with key:', 'N_WM9SM_s6cRQPVgT');
   }, []);
 
   const [showAddUser, setShowAddUser] = useState(false);
@@ -276,15 +276,15 @@ const Suser_Management = () => {
     try {
       console.log('🚀 Starting email send process for responder...');
       console.log('📧 EmailJS configuration:', {
-        serviceId: 'service_717ciwa',
-        templateId: 'template_vfzvmj2',
-        publicKey: 'hDU2Ar_g1pr7Cpg-S'
+        serviceId: 'service_5k3e6xe',
+        templateId: 'template_ztp029i',
+        publicKey: 'N_WM9SM_s6cRQPVgT'
       });
       
       // EmailJS configuration
-      const serviceId = 'service_717ciwa'; // Your EmailJS service ID
-      const templateId = 'template_vfzvmj2'; // Your EmailJS template ID
-      const publicKey = 'hDU2Ar_g1pr7Cpg-S'; // Your EmailJS public key
+      const serviceId = 'service_5k3e6xe'; // Your EmailJS service ID
+      const templateId = 'template_ztp029i'; // Your EmailJS template ID
+      const publicKey = 'N_WM9SM_s6cRQPVgT'; // Your EmailJS public key
       
       const templateParams = {
         to_name: `${firstName} ${lastName}`,
@@ -317,9 +317,9 @@ const Suser_Management = () => {
       console.log('🚀 Starting password update email process...');
       
       // EmailJS configuration
-      const serviceId = 'service_717ciwa';
-      const templateId = 'template_vfzvmj2'; // Using same template for now
-      const publicKey = 'hDU2Ar_g1pr7Cpg-S';
+      const serviceId = 'service_5k3e6xe';
+      const templateId = 'template_ztp029i'; // Using same template for now
+      const publicKey = 'N_WM9SM_s6cRQPVgT';
       
       const templateParams = {
         to_name: `${firstName} ${lastName}`,

@@ -17,10 +17,10 @@ const VerificationCode = () => {
   const { loginCitizen } = useAuth();
 
   // EmailJS config
-  const serviceId = 'service_717ciwa';
-  const templateId = 'template_iefgxnk';
-  const publicKey = 'hDU2Ar_g1pr7Cpg-S';
-  const privateKey = 'toeoBDUw3w6FPgdo7-Rjr';
+  const serviceId = 'service_5k3e6xe';
+  const templateId = 'template_x9i685u';
+  const publicKey = 'N_WM9SM_s6cRQPVgT';
+  const privateKey = 'EUqRUy4vpBAf6rEiPXndd';
 
   useEffect(() => {
     // Get user data from route params or storage

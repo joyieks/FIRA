@@ -25,9 +25,9 @@ import VerificationCode from './Authentication/verificationCode';
 
 ### **EmailJS Configuration:**
 ```javascript
-const serviceId = 'service_717ciwa';
-const templateId = 'template_iefgxnk';
-const publicKey = 'hDU2Ar_g1pr7Cpg-S';
+const serviceId = 'service_5k3e6xe';
+const templateId = 'template_x9i685u';
+const publicKey = 'N_WM9SM_s6cRQPVgT';
 ```
 
 ## 📧 EmailJS Template: `verification-code-template.html`
@@ -48,7 +48,7 @@ const publicKey = 'hDU2Ar_g1pr7Cpg-S';
 
 ### **1. EmailJS Template Setup:**
 1. Go to [EmailJS Dashboard](https://dashboard.emailjs.com/)
-2. Create new template or edit existing `template_iefgxnk`
+2. Create new template or edit existing `template_x9i685u`
 3. Copy the HTML from `verification-code-template.html`
 4. Replace the content in your EmailJS template
 5. Save and publish the template

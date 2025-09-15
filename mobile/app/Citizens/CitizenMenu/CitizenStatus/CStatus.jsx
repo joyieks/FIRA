@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import { View, Text, ScrollView, TouchableOpacity, Image, Alert, Modal, TextInput, KeyboardAvoidingView, Platform, TouchableWithoutFeedback, Keyboard, RefreshControl } from 'react-native';
+import React, { useState, useEffect, useRef } from 'react';
+import { View, Text, ScrollView, TouchableOpacity, Image, Alert, Modal, TextInput, KeyboardAvoidingView, Platform, TouchableWithoutFeedback, Keyboard, RefreshControl, Animated } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import MapView, { Marker } from 'react-native-maps';
 import * as ImagePicker from 'expo-image-picker';
@@ -56,6 +56,41 @@ const CStatus = () => {
   });
   const [showEditLocationPicker, setShowEditLocationPicker] = useState(false);
   const [editLocationAddress, setEditLocationAddress] = useState('');
+  const [isUpdatingReport, setIsUpdatingReport] = useState(false);
+  const [isDeletingReport, setIsDeletingReport] = useState(false);
+
+  // Animation refs for loading spinners
+  const spinValue = useRef(new Animated.Value(0)).current;
+
+  // Start spinning animation
+  const startSpinning = () => {
+    spinValue.setValue(0);
+    Animated.loop(
+      Animated.timing(spinValue, {
+        toValue: 1,
+        duration: 1000,
+        useNativeDriver: true,
+      }),
+    ).start();
+  };
+
+  // Stop spinning animation
+  const stopSpinning = () => {
+    spinValue.stopAnimation();
+  };
+
+  // Create spinning interpolation
+  const spin = spinValue.interpolate({
+    inputRange: [0, 1],
+    outputRange: ['0deg', '360deg'],
+  });
+
+  // Animated Loading Spinner Component
+  const LoadingSpinner = ({ size = 24, color = "#ffffff" }) => (
+    <Animated.View style={{ transform: [{ rotate: spin }] }}>
+      <MaterialIcons name="refresh" size={size} color={color} />
+    </Animated.View>
+  );
 
   // Reverse geocoding function to get address from coordinates
   const getAddressFromCoordinates = async (latitude, longitude) => {
@@ -770,8 +805,17 @@ const getProgressColor = (progress) => {
                 e.stopPropagation();
                 handleDeleteReport(report);
               }}
+              disabled={isDeletingReport}
+              style={{ opacity: isDeletingReport ? 0.6 : 1 }}
             >
-              <Text className="text-white text-xs font-medium">Delete</Text>
+              {isDeletingReport ? (
+                <View className="flex-row items-center">
+                  <LoadingSpinner size={12} color="#ffffff" />
+                  <Text className="text-white text-xs font-medium ml-1">Deleting...</Text>
+                </View>
+              ) : (
+                <Text className="text-white text-xs font-medium">Delete</Text>
+              )}
             </TouchableOpacity>
           </View>
         )}
@@ -946,6 +990,8 @@ const getProgressColor = (progress) => {
   // Delete report API call
   const deleteReport = async (reportId) => {
     try {
+      setIsDeletingReport(true);
+      startSpinning();
       const response = await fetch(`${DELETE_REPORT_URL}/${reportId}`, {
         method: 'DELETE',
         headers: {
@@ -963,6 +1009,9 @@ const getProgressColor = (progress) => {
     } catch (error) {
       console.error('Error deleting report:', error);
       Alert.alert('Error', 'Failed to delete report. Please try again.');
+    } finally {
+      setIsDeletingReport(false);
+      stopSpinning();
     }
   };
 
@@ -1038,6 +1087,8 @@ const getProgressColor = (progress) => {
     console.log('editingReport.id:', editingReport.id);
 
     try {
+      setIsUpdatingReport(true);
+      startSpinning();
       // If image was updated, use FormData for multipart upload
       if (editData.image) {
         const formData = new FormData();
@@ -1134,6 +1185,9 @@ const getProgressColor = (progress) => {
     } catch (error) {
       console.error('Error updating report:', error);
       Alert.alert('Error', 'Failed to update report. Please try again.');
+    } finally {
+      setIsUpdatingReport(false);
+      stopSpinning();
     }
   };
 
@@ -2004,13 +2058,33 @@ const getProgressColor = (progress) => {
                   <TouchableOpacity
                     className="flex-1 bg-blue-600 rounded-lg p-4"
                     onPress={updateReport}
-                    disabled={!editData.cause.trim()}
-                    style={{ opacity: !editData.cause.trim() ? 0.6 : 1 }}
+                    disabled={!editData.cause.trim() || isUpdatingReport}
+                    style={{ opacity: (!editData.cause.trim() || isUpdatingReport) ? 0.6 : 1 }}
                   >
-                    <Text className="text-center font-semibold text-white">Update Report</Text>
+                    {isUpdatingReport ? (
+                      <View className="flex-row items-center justify-center">
+                        <LoadingSpinner size={20} color="#ffffff" />
+                        <Text className="text-center font-semibold text-white ml-2">Updating...</Text>
+                      </View>
+                    ) : (
+                      <Text className="text-center font-semibold text-white">Update Report</Text>
+                    )}
                   </TouchableOpacity>
                 </View>
               </ScrollView>
+              
+              {/* Loading Overlay for Edit Modal */}
+              {isUpdatingReport && (
+                <View className="absolute inset-0 bg-black/50 justify-center items-center">
+                  <View className="bg-white rounded-lg p-6 items-center">
+                    <LoadingSpinner size={48} color="#3b82f6" />
+                    <Text className="text-lg font-semibold text-gray-800 mt-4">Updating Report</Text>
+                    <Text className="text-sm text-gray-600 mt-2 text-center">
+                      Please wait while we update your report...
+                    </Text>
+                  </View>
+                </View>
+              )}
             </View>
           </TouchableWithoutFeedback>
         </KeyboardAvoidingView>
@@ -2202,6 +2276,19 @@ const getProgressColor = (progress) => {
             <MaterialIcons name="check-circle" size={24} color="#ffffff" />
             <Text className="text-white font-semibold ml-3 flex-1">
               Emergency reported successfully!
+            </Text>
+          </View>
+        </View>
+      )}
+
+      {/* Delete Loading Overlay */}
+      {isDeletingReport && (
+        <View className="absolute inset-0 bg-black/50 justify-center items-center z-50">
+          <View className="bg-white rounded-lg p-6 items-center">
+            <LoadingSpinner size={48} color="#ef4444" />
+            <Text className="text-lg font-semibold text-gray-800 mt-4">Deleting Report</Text>
+            <Text className="text-sm text-gray-600 mt-2 text-center">
+              Please wait while we delete your report...
             </Text>
           </View>
         </View>
