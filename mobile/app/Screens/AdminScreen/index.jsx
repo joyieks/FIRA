@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { View, TouchableOpacity, Text } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { Ionicons } from '@expo/vector-icons';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import ASidebarMenu from '../../Admin/ASidebarMenu/ASidebarMenu';
 import AStatus from '../../Admin/AdminMenu/AdminStatus/AStatus';
 import ANotifications from '../../Admin/AdminMenu/AdminNotifications/ANotifications';
@@ -16,6 +17,7 @@ export default function AdminScreen() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [selectedContact, setSelectedContact] = useState(null);
   const [unreadCount, setUnreadCount] = useState(0);
+  const insets = useSafeAreaInsets();
 
   const TABS = [
     { component: <AStatus /> },
@@ -71,17 +73,43 @@ export default function AdminScreen() {
   };
 
   return (
-    <View className="flex-1 bg-gray-100">
-      <View className="flex-1">
+    <View 
+      style={{
+        flex: 1,
+        backgroundColor: '#f3f4f6',
+        paddingBottom: 90 + insets.bottom, // Add space for navbar
+      }}
+    >
+      {/* Main Content */}
+      <View style={{ flex: 1 }}>
         {TABS[activeTab].component}
       </View>
       
       {/* Floating Burger Icon with Title */}
-      <View className="absolute top-12 left-0 right-0 flex-row items-center">
+      <View 
+        style={{
+          position: 'absolute',
+          top: insets.top + 12,
+          left: 0,
+          right: 0,
+          flexDirection: 'row',
+          alignItems: 'center',
+          zIndex: 10,
+        }}
+      >
         {/* Only show burger menu when not in chat OR when no contact is selected */}
         {(activeTab !== 3 || !selectedContact) && (
           <TouchableOpacity
-            className="absolute left-4 w-12 h-12 rounded-full bg-[#ff512f] items-center justify-center"
+            style={{
+              position: 'absolute',
+              left: 16,
+              width: 48,
+              height: 48,
+              borderRadius: 24,
+              backgroundColor: '#ff512f',
+              alignItems: 'center',
+              justifyContent: 'center',
+            }}
             onPress={toggleSidebar}
             activeOpacity={0.8}
           >
@@ -91,8 +119,8 @@ export default function AdminScreen() {
         
         {/* Show regular title for other tabs */}
         {activeTab !== 3 && (
-          <View className="flex-1 items-center justify-center">
-            <Text className="text-xl font-bold text-gray-800">
+          <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
+            <Text style={{ fontSize: 20, fontWeight: 'bold', color: '#1f2937' }}>
               {getTabTitle(activeTab)}
             </Text>
           </View>

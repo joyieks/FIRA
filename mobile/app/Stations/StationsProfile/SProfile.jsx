@@ -2,53 +2,27 @@ import React, { useState } from 'react';
 import { View, Text, Image, ScrollView, TouchableOpacity } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
-import SSettings from './SSettings';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useAuth } from '../../config/AuthContext';
 
 const SProfile = () => {
   const router = useRouter();
+  const insets = useSafeAreaInsets();
+  const { userData } = useAuth();
   const [showDeactivate, setShowDeactivate] = useState(false);
-  const [showSettings, setShowSettings] = useState(false);
+  
+  // Use real user data from AuthContext with fallbacks (only database fields)
   const profile = {
-    name: 'Station User',
-    email: 'station@gmail.com',
-    phone: '+1 (555) 123-4567',
-    address: '123 Safety St, Firetown, FT 12345',
-    barangay: 'Guadalupe',
-    birthdate: '1992-03-20',
-    gender: 'Male',
-    contactNumber: '09123456789',
-    position: 'Station Officer',
+    name: userData?.displayName || userData?.firstName || userData?.station_name || 'Station User',
+    email: userData?.email || 'station@gmail.com',
+    phone: userData?.phoneNumber || 'No phone number',
+    address: userData?.address || 'No address provided',
+    position: userData?.position || 'Station Officer',
+    status: userData?.status || 'Active',
+    isOnline: userData?.isOnline || false,
   };
 
-  // Calculate age from birthdate
-  const getAge = (birthdate) => {
-    const birth = new Date(birthdate);
-    if (!isNaN(birth.getTime())) {
-      const today = new Date();
-      let age = today.getFullYear() - birth.getFullYear();
-      const m = today.getMonth() - birth.getMonth();
-      if (m < 0 || (m === 0 && today.getDate() < birth.getDate())) {
-        age--;
-      }
-      return age.toString();
-    }
-    return '';
-  };
 
-  if (showSettings) {
-    return (
-      <View className="flex-1 bg-gray-100">
-        {/* Back Button */}
-        <View className="flex-row items-center pt-12 px-4 pb-2 bg-gray-100">
-          <TouchableOpacity onPress={() => setShowSettings(false)} className="p-2 rounded-full bg-white shadow">
-            <MaterialIcons name="arrow-back" size={24} color="#374151" />
-          </TouchableOpacity>
-          <Text className="text-lg font-semibold text-gray-800 ml-4">Settings</Text>
-        </View>
-        <SSettings />
-      </View>
-    );
-  }
 
   return (
     <View className="flex-1 bg-gray-100">
@@ -63,27 +37,22 @@ const SProfile = () => {
           <Text className="text-2xl font-bold text-gray-800 mb-1">{profile.name}</Text>
           <Text className="text-base text-gray-500 mb-1">{profile.position}</Text>
         </View>
-        {/* Edit and Settings Buttons - moved outside header for stacking */}
+        {/* Edit Button - moved outside header for stacking */}
         <View className="absolute right-6 top-6 z-50 flex-row" style={{ pointerEvents: 'auto', alignSelf: 'flex-end' }}>
           <TouchableOpacity className="p-2 rounded-full bg-gray-100 active:bg-gray-200" onPress={() => {}}>
             <MaterialIcons name="edit" size={24} color="#ff512f" />
-          </TouchableOpacity>
-          <TouchableOpacity className="p-2 rounded-full bg-gray-100 active:bg-gray-200 ml-2" onPress={() => setShowSettings(true)}>
-            <MaterialIcons name="settings" size={24} color="#ff512f" />
           </TouchableOpacity>
         </View>
 
         {/* Contact Information Section */}
         <View className="bg-white m-4 rounded-2xl p-6 shadow-sm">
-          <Text className="text-lg font-bold text-gray-800 mb-4">Contact Information</Text>
+          <Text className="text-lg font-bold text-gray-800 mb-4">Station Information</Text>
           <ProfileField icon="email" label="Email" value={profile.email} />
           <ProfileField icon="phone" label="Phone" value={profile.phone} />
           <ProfileField icon="home" label="Address" value={profile.address} multiline />
-          <ProfileField icon="location-on" label="Barangay" value={profile.barangay} />
-          <ProfileField icon="event" label="Birthdate" value={profile.birthdate} />
-          <ProfileField icon="calendar-today" label="Age" value={getAge(profile.birthdate)} />
-          <ProfileField icon="person" label="Gender" value={profile.gender} />
-          <ProfileField icon="phone-android" label="Contact Number" value={profile.contactNumber} />
+          <ProfileField icon="work" label="Position" value={profile.position} />
+          <ProfileField icon="check-circle" label="Status" value={profile.status} />
+          <ProfileField icon="wifi" label="Online Status" value={profile.isOnline ? 'Online' : 'Offline'} />
         </View>
 
         {/* Action Buttons */}
@@ -101,8 +70,8 @@ const SProfile = () => {
           <Text className="ml-2 text-lg font-semibold text-white">Log Out</Text>
         </TouchableOpacity>
         </View>
-        {/* Extra space at the bottom for safe area */}
-        <View style={{ height: 50 }} />
+        {/* Extra space at the bottom for navbar and safe area */}
+        <View style={{ height: 160 + insets.bottom }} />
         {/* Deactivate Modal */}
         {showDeactivate && (
           <View className="absolute top-0 left-0 right-0 bottom-0 flex-1 justify-center items-center bg-black/40 z-50">

@@ -27,12 +27,12 @@ const ASidebarMenu = ({ activeTab, setActiveTab, isOpen, onToggle }) => {
     Animated.parallel([
       Animated.timing(slideAnim, {
         toValue: isOpen ? 0 : -width * 0.8,
-        duration: 300,
+        duration: 250,
         useNativeDriver: true,
       }),
       Animated.timing(overlayOpacity, {
-        toValue: isOpen ? 0.5 : 0,
-        duration: 300,
+        toValue: isOpen ? 0.3 : 0,
+        duration: 250,
         useNativeDriver: true,
       }),
     ]).start();
@@ -69,18 +69,18 @@ const ASidebarMenu = ({ activeTab, setActiveTab, isOpen, onToggle }) => {
     <>
       {/* Overlay - only show when sidebar is open */}
       {isOpen && (
-        <Animated.View
+        <TouchableOpacity
           style={{
             position: 'absolute',
             top: 0,
             left: 0,
             right: 0,
             bottom: 0,
-            backgroundColor: 'rgba(0, 0, 0, 0.5)',
-            opacity: overlayOpacity,
+            backgroundColor: 'rgba(0, 0, 0, 0.3)',
             zIndex: 1000,
           }}
-          onTouchEnd={onToggle}
+          activeOpacity={1}
+          onPress={onToggle}
         />
       )}
 

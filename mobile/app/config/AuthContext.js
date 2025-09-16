@@ -24,20 +24,33 @@ export const AuthProvider = ({ children }) => {
 
   const checkAuthStatus = async () => {
     try {
+      console.log('🔍 Checking auth status...');
       const authToken = await AsyncStorage.getItem('authToken');
       const storedUserType = await AsyncStorage.getItem('userType');
       const storedUserData = await AsyncStorage.getItem('userData');
 
+      console.log('📱 Stored auth data:', { authToken: !!authToken, storedUserType, storedUserData: !!storedUserData });
+
       if (authToken && storedUserType) {
+        console.log('✅ Valid auth data found, setting authenticated state');
         setIsAuthenticated(true);
         setUserType(storedUserType);
         if (storedUserData) {
           setUserData(JSON.parse(storedUserData));
         }
+      } else {
+        console.log('❌ No valid auth data found, setting unauthenticated state');
+        setIsAuthenticated(false);
+        setUserType(null);
+        setUserData(null);
       }
     } catch (error) {
-      console.error('Error checking auth status:', error);
+      console.error('❌ Error checking auth status:', error);
+      setIsAuthenticated(false);
+      setUserType(null);
+      setUserData(null);
     } finally {
+      console.log('🏁 Auth status check completed, setting isLoading to false');
       setIsLoading(false);
     }
   };
@@ -166,6 +179,8 @@ export const AuthProvider = ({ children }) => {
 
   const logout = async () => {
     try {
+      console.log('🚪 Logging out user...');
+      
       // Clear all stored data
       await AsyncStorage.multiRemove([
         'authToken',
@@ -174,12 +189,27 @@ export const AuthProvider = ({ children }) => {
         'loginTime'
       ]);
 
+      console.log('🗑️ AsyncStorage cleared');
+
+      // Clear authentication state
       setIsAuthenticated(false);
       setUserType(null);
       setUserData(null);
+      
+      console.log('✅ Logout completed successfully, state cleared:', { 
+        isAuthenticated: false, 
+        userType: null, 
+        userData: null 
+      });
     } catch (error) {
-      console.error('Logout error:', error);
+      console.error('❌ Logout error:', error);
+      throw error;
     }
+  };
+
+  const resetLoading = () => {
+    console.log('🔄 Manually resetting loading state');
+    setIsLoading(false);
   };
 
   const value = {
@@ -192,7 +222,8 @@ export const AuthProvider = ({ children }) => {
     loginStation,
     loginResponder,
     logout,
-    checkAuthStatus
+    checkAuthStatus,
+    resetLoading
   };
 
   return (

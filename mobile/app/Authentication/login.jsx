@@ -17,15 +17,29 @@ const LoginComponent = () => {
   const [toastMessage, setToastMessage] = useState('');
   const [toastType, setToastType] = useState('success'); // 'success' or 'error'
   const router = useRouter();
-  const { login: authLogin, loginCitizen, loginStation, loginResponder } = useAuth();
+  const { login: authLogin, loginCitizen, loginStation, loginResponder, isLoading, resetLoading } = useAuth();
 
-  // Clear toast on component mount/unmount
+  // Clear toast on component mount/unmount and reset loading if stuck
   useEffect(() => {
+    // If we're on the login screen and still loading, reset the loading state
+    if (isLoading) {
+      console.log('🔄 Login component: Resetting stuck loading state');
+      const resetTimer = setTimeout(() => {
+        resetLoading();
+      }, 1000);
+      
+      return () => {
+        clearTimeout(resetTimer);
+        setShowToast(false);
+        setToastMessage('');
+      };
+    }
+    
     return () => {
       setShowToast(false);
       setToastMessage('');
     };
-  }, []);
+  }, [isLoading, resetLoading]);
 
   const validateEmail = (text) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(text);
 
@@ -262,8 +276,24 @@ const LoginComponent = () => {
       className="flex-1 bg-white"
     >
       <View className="flex-1 px-8 justify-center">
-        <TouchableOpacity style={{ position: 'absolute', top: 40, left: 20, zIndex: 10 }} onPress={() => router.back()}>
-          <AntDesign name="arrowleft" size={32} color="#dc2626" />
+        <TouchableOpacity 
+          style={{ 
+            position: 'absolute', 
+            top: 50, 
+            left: 20, 
+            zIndex: 10,
+            backgroundColor: 'rgba(255, 255, 255, 0.9)',
+            borderRadius: 20,
+            padding: 8,
+            shadowColor: '#000',
+            shadowOffset: { width: 0, height: 2 },
+            shadowOpacity: 0.1,
+            shadowRadius: 4,
+            elevation: 3
+          }} 
+          onPress={() => router.replace('/get-started/getstarted')}
+        >
+          <MaterialIcons name="arrow-back" size={24} color="#dc2626" />
         </TouchableOpacity>
 
         <View className="items-center mb-12">

@@ -1,8 +1,10 @@
 import React from 'react';
 import { View, Text, TouchableOpacity, ScrollView } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 const SSettings = () => {
+  const insets = useSafeAreaInsets();
   const settingsOptions = [
     { icon: 'notifications', title: 'Notifications', subtitle: 'Manage notification preferences' },
     { icon: 'security', title: 'Privacy & Security', subtitle: 'Manage your privacy settings' },
@@ -13,7 +15,10 @@ const SSettings = () => {
   ];
 
   return (
-    <ScrollView className="flex-1 bg-gray-50">
+    <ScrollView 
+      className="flex-1 bg-gray-50"
+      contentContainerStyle={{ paddingBottom: 160 + insets.bottom }}
+    >
       <View className="p-4 pt-32">
         
         {settingsOptions.map((option, index) => (
