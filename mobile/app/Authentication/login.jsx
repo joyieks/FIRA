@@ -18,7 +18,7 @@ const LoginComponent = () => {
   const [toastMessage, setToastMessage] = useState('');
   const [toastType, setToastType] = useState('success'); // 'success' or 'error'
   const router = useRouter();
-  const { login: authLogin, loginCitizen } = useAuth();
+  const { login: authLogin, loginCitizen, loginResponder } = useAuth();
 
   // Clear toast on component mount/unmount
   useEffect(() => {
@@ -98,8 +98,8 @@ const LoginComponent = () => {
         return;
       }
 
-      // For all other emails, try Supabase Auth (citizens)
-      console.log('🔍 Trying Supabase Auth for citizen login:', email);
+      // For all other emails, try Supabase Auth first
+      console.log('🔍 Trying Supabase Auth for login:', email);
       
       const { data: authData, error: authError } = await supabase.auth.signInWithPassword({
         email: email.toLowerCase(),
@@ -115,9 +115,53 @@ const LoginComponent = () => {
       }
 
       const user = authData.user;
-      console.log('✅ Supabase Auth successful, checking citizen_users table...');
+      console.log('✅ Supabase Auth successful, checking user type...');
 
-      // Check if this user exists in 'citizen_users' table
+      // First check if this user exists in 'responders' table
+      const { data: responderData, error: responderError } = await supabase
+        .from('responders')
+        .select('*')
+        .eq('email', email.toLowerCase())
+        .single();
+
+      if (responderError && responderError.code !== 'PGRST116') {
+        if (__DEV__) {
+          console.log('🔍 Error checking responders table:', responderError.message);
+        }
+        throw new Error('Error checking user data');
+      }
+
+      if (responderData) {
+        console.log('✅ User found in responders table:', responderData);
+        
+        // Convert Supabase data format to match your app's expected format for responders
+        const userData = {
+          uid: responderData.id,
+          firstName: responderData.first_name,
+          lastName: responderData.last_name,
+          email: responderData.email,
+          phoneNumber: responderData.phone,
+          userType: 'responder',
+          displayName: `${responderData.first_name} ${responderData.last_name}`,
+          position: responderData.user_position,
+          stationId: responderData.station_id,
+          createdAt: responderData.created_at
+        };
+
+        // Clear any existing toast before login
+        setShowToast(false);
+        setToastMessage('');
+        
+        // Use the new loginResponder method for database responders
+        await loginResponder(userData);
+        
+        // Show success toast after successful login
+        displayToast(`Welcome to Project FIRA, ${userData.firstName || 'Responder'}! 🚑`, 'success');
+        return;
+      }
+
+      // If not a responder, check if this user exists in 'citizen_users' table
+      console.log('🔍 User not found in responders table, checking citizen_users...');
       const { data: citizenData, error: citizenError } = await supabase
         .from('citizen_users')
         .select('*')
@@ -159,8 +203,8 @@ const LoginComponent = () => {
         // Show success toast after successful login
         displayToast(`Welcome to Project FIRA, ${userData.firstName || 'User'}! 👋`, 'success');
       } else {
-        console.log('❌ User not found in citizen_users table');
-        displayToast('No user record found. Please register first.', 'error');
+        console.log('❌ User not found in any user table');
+        displayToast('User not found in record. Please contact your station administrator.', 'error');
       }
     } catch (error) {
       // Only log to console in development, don't use console.error to avoid error overlay
