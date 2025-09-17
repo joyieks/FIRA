@@ -3,8 +3,7 @@ import { View, Text, TextInput, TouchableOpacity, KeyboardAvoidingView, Platform
 import { useRouter } from 'expo-router';
 import { AntDesign } from '@expo/vector-icons';
 import { MaterialIcons } from '@expo/vector-icons';
-import { auth } from '../../config/firebase';
-import { sendPasswordResetEmail } from 'firebase/auth';
+import { supabase } from '../../config/supabase';
 
 const ForgotPasswordScreen = () => {
   const [email, setEmail] = useState('');
@@ -37,37 +36,19 @@ const ForgotPasswordScreen = () => {
     setEmailError('');
 
     try {
-      // Use Firebase's built-in password reset email
-      await sendPasswordResetEmail(auth, email);
-      
+      const { error } = await supabase.auth.resetPasswordForEmail(email, {
+        redirectTo: 'https://dummy.redirect/handle-reset',
+      });
+      if (error) throw error;
+
       displayToast('Password reset email sent! Check your inbox.', 'success');
-      
-      // Show success message and redirect back to login
+
       setTimeout(() => {
         router.replace('/Authentication/login');
       }, 3000);
-      
     } catch (error) {
       console.error('Error sending password reset email:', error);
-      
-      // Handle specific Firebase Auth errors
-      let errorMessage = 'Failed to send password reset email. Please try again.';
-      
-      switch (error.code) {
-        case 'auth/user-not-found':
-          errorMessage = 'No account found with this email address.';
-          break;
-        case 'auth/invalid-email':
-          errorMessage = 'Please enter a valid email address.';
-          break;
-        case 'auth/too-many-requests':
-          errorMessage = 'Too many requests. Please try again later.';
-          break;
-        default:
-          errorMessage = error.message || errorMessage;
-      }
-      
-      displayToast(errorMessage, 'error');
+      displayToast(error.message || 'Failed to send password reset email. Please try again.', 'error');
     } finally {
       setIsLoading(false);
     }

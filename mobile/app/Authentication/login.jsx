@@ -17,7 +17,7 @@ const LoginComponent = () => {
   const [toastMessage, setToastMessage] = useState('');
   const [toastType, setToastType] = useState('success'); // 'success' or 'error'
   const router = useRouter();
-  const { login: authLogin, loginCitizen, loginStation, loginResponder, isLoading, resetLoading } = useAuth();
+  const { login: authLogin, loginAdmin, loginCitizen, loginStation, loginResponder, isLoading, resetLoading } = useAuth();
 
   // Clear toast on component mount/unmount and reset loading if stuck
   useEffect(() => {
@@ -92,13 +92,7 @@ const LoginComponent = () => {
     if (!isValid) return;
 
     try {
-      // First check if it's a hardcoded user (admin, station, responder)
-      if (email === 'admin@gmail.com' && password === 'admin') {
-        const result = await authLogin(email, password);
-        displayToast('Welcome to Project FIRA! 🔥', 'success');
-        return;
-      }
-      
+      // Check for hardcoded station and responder credentials (these don't use Supabase Auth)
       if (email === 'stations@gmail.com' && password === 'stations') {
         const result = await authLogin(email, password);
         displayToast('Welcome to Project FIRA! 🚒', 'success');
@@ -111,7 +105,7 @@ const LoginComponent = () => {
         return;
       }
 
-      // For all other emails, try Supabase Auth (citizens, stations, responders)
+      // For all other emails, try Supabase Auth (admin, citizens, stations, responders)
       console.log('🔍 Trying Supabase Auth for login:', email);
       
       const { data: authData, error: authError } = await supabase.auth.signInWithPassword({
@@ -130,7 +124,70 @@ const LoginComponent = () => {
       const user = authData.user;
       console.log('✅ Supabase Auth successful, checking user tables...');
 
-      // Check if this user exists in 'station_users' table first
+      // Check if this user exists in 'admin_users' table first
+      const { data: adminData, error: adminError } = await supabase
+        .from('admin_users')
+        .select('*')
+        .eq('email', email.toLowerCase())
+        .single();
+
+      if (adminData) {
+        console.log('✅ User found in admin_users table:', adminData);
+        
+        // Convert Supabase data format to match your app's expected format
+        const userData = {
+          uid: adminData.id,
+          firstName: adminData.first_name,
+          lastName: adminData.last_name,
+          email: adminData.email,
+          userType: 'admin',
+          displayName: `${adminData.first_name} ${adminData.last_name}`.trim(),
+          role: adminData.role,
+          status: adminData.status,
+          createdAt: adminData.created_at,
+          updatedAt: adminData.updated_at
+        };
+
+        // Clear any existing toast before login
+        setShowToast(false);
+        setToastMessage('');
+        
+        await loginAdmin(userData);
+        
+        // Show success toast after successful login
+        displayToast(`Welcome to Project FIRA, ${userData.displayName}! 🔥`, 'success');
+        return;
+      }
+
+      // Check if this user exists in 'citizen_users' table FIRST (to avoid misrouting to station)
+      const { data: citizenData, error: citizenError } = await supabase
+        .from('citizen_users')
+        .select('*')
+        .eq('email', email.toLowerCase())
+        .single();
+
+      if (citizenData) {
+        console.log('✅ User found in citizen_users table:', citizenData);
+        const userData = {
+          uid: citizenData.id,
+          firstName: citizenData.first_name,
+          lastName: citizenData.last_name,
+          email: citizenData.email,
+          phoneNumber: citizenData.phone || citizenData.phone_number,
+          userType: 'citizen',
+          displayName: citizenData.display_name,
+          status: citizenData.status,
+          reports: citizenData.reports,
+          isVerified: citizenData.is_verified,
+          createdAt: citizenData.created_at
+        };
+        setShowToast(false); setToastMessage('');
+        await loginCitizen(userData);
+        displayToast(`Welcome to Project FIRA, ${userData.firstName || 'User'}! 👋`, 'success');
+        return;
+      }
+
+      // Check if this user exists in 'station_users' table
       const { data: stationData, error: stationError } = await supabase
         .from('station_users')
         .select('*')
@@ -205,40 +262,8 @@ const LoginComponent = () => {
         return;
       }
 
-      // Check if this user exists in 'citizen_users' table
-      const { data: citizenData, error: citizenError } = await supabase
-        .from('citizen_users')
-        .select('*')
-        .eq('email', email.toLowerCase())
-        .single();
-
-      if (citizenData) {
-        console.log('✅ User found in citizen_users table:', citizenData);
-        
-        // Convert Supabase data format to match your app's expected format
-        const userData = {
-          uid: citizenData.id,
-          firstName: citizenData.first_name,
-          lastName: citizenData.last_name,
-          email: citizenData.email,
-          phoneNumber: citizenData.phone || citizenData.phone_number,
-          userType: 'citizen',
-          displayName: citizenData.display_name,
-          status: citizenData.status,
-          reports: citizenData.reports,
-          isVerified: citizenData.is_verified,
-          createdAt: citizenData.created_at
-        };
-
-        // Clear any existing toast before login
-        setShowToast(false);
-        setToastMessage('');
-        
-        await loginCitizen(userData);
-        
-        // Show success toast after successful login
-        displayToast(`Welcome to Project FIRA, ${userData.firstName || 'User'}! 👋`, 'success');
-      } else {
+      // If no records found at all
+      {
         console.log('❌ User not found in any user table');
         displayToast('No user record found. Please register first.', 'error');
       }

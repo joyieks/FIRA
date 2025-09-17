@@ -60,19 +60,16 @@ export const AuthProvider = ({ children }) => {
       let userType = null;
       let userData = null;
 
-      // Check for specific credentials
+      // Check for specific hardcoded credentials (station and responder only)
       if (email === 'stations@gmail.com' && password === 'stations') {
         userType = 'station';
-        userData = { email, userType };
-      } else if (email === 'admin@gmail.com' && password === 'admin') {
-        userType = 'admin';
         userData = { email, userType };
       } else if (email === 'responder@gmail.com' && password === 'responder') {
         userType = 'responder';
         userData = { email, userType };
       } else {
-        // For citizen users, we'll handle them in the login component
-        // and they'll be authenticated through Firebase Auth
+        // For admin and citizen users, they'll be authenticated through Supabase Auth
+        // and handled in the login component
         throw new Error('Invalid credentials');
       }
 
@@ -89,6 +86,34 @@ export const AuthProvider = ({ children }) => {
       return { success: true, userType };
     } catch (error) {
       console.error('Login error:', error);
+      throw error;
+    }
+  };
+
+  // Add a method to handle admin login
+  const loginAdmin = async (userData) => {
+    try {
+      const userType = 'admin';
+      const authData = { ...userData, userType };
+
+      console.log('🔐 loginAdmin called with:', { userType, userData });
+
+      // Store authentication data first
+      await AsyncStorage.setItem('authToken', 'admin-token');
+      await AsyncStorage.setItem('userType', userType);
+      await AsyncStorage.setItem('userData', JSON.stringify(authData));
+      await AsyncStorage.setItem('loginTime', Date.now().toString());
+
+      // Update state in a single batch to prevent multiple re-renders
+      setIsAuthenticated(true);
+      setUserType(userType);
+      setUserData(authData);
+
+      console.log('✅ Admin authentication set:', { isAuthenticated: true, userType, userData: authData });
+
+      return { success: true, userType };
+    } catch (error) {
+      console.error('❌ Admin login error:', error);
       throw error;
     }
   };
@@ -218,6 +243,7 @@ export const AuthProvider = ({ children }) => {
     userData,
     isLoading,
     login,
+    loginAdmin,
     loginCitizen,
     loginStation,
     loginResponder,

@@ -3,8 +3,7 @@ import { View, Text, ScrollView, TouchableOpacity, Image, Modal, Alert, TextInpu
 import { MaterialIcons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
 import * as Location from 'expo-location';
-import { auth, db } from '../../../config/firebase';
-import { doc, getDoc } from 'firebase/firestore';
+import { useAuth } from '../../../config/AuthContext';
 
 // TODO: Replace with your deployed API endpoint
 const API_URL = 'https://fire-predictor-api-production.up.railway.app/predict';
@@ -15,40 +14,21 @@ const CStatus = () => {
   const [showModal, setShowModal] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [currentUser, setCurrentUser] = useState(null);
+  const { isAuthenticated, userData } = useAuth();
 
   // Sample data for reports
   const [yourReports, setYourReports] = useState([]);
   const [nearbyReports, setNearbyReports] = useState([]);
 
-  // Authentication state listener - This fixes the main issue
+  // Use Supabase auth context instead of Firebase auth
   useEffect(() => {
-    const unsubscribe = auth.onAuthStateChanged(async (user) => {
-      console.log('Auth state changed:', user ? user.uid : 'No user');
-      
-      if (user) {
-        try {
-          const userDoc = await getDoc(doc(db, 'citizenUsers', user.uid));
-          if (userDoc.exists()) {
-            const userData = { ...userDoc.data(), uid: user.uid };
-            console.log('User data loaded:', userData);
-            setCurrentUser(userData);
-          } else {
-            console.log('User document not found, using basic user data');
-            setCurrentUser({ uid: user.uid });
-          }
-        } catch (error) {
-          console.log('Error getting user info:', error);
-          setCurrentUser({ uid: user.uid });
-        }
-      } else {
-        console.log('No user authenticated');
-        setCurrentUser(null);
-        setIsLoading(false);
-      }
-    });
-
-    return () => unsubscribe();
-  }, []);
+    console.log('CitizenStatus: auth context changed', { isAuthenticated, hasUserData: !!userData });
+    if (isAuthenticated && userData?.uid) {
+      setCurrentUser({ uid: userData.uid, firstName: userData.firstName, lastName: userData.lastName });
+    } else {
+      setCurrentUser(null);
+    }
+  }, [isAuthenticated, userData?.uid]);
 
   // Load reports when user is available
   useEffect(() => {

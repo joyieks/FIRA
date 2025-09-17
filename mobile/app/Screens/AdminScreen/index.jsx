@@ -4,7 +4,7 @@ import { MaterialIcons } from '@expo/vector-icons';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import ASidebarMenu from '../../Admin/ASidebarMenu/ASidebarMenu';
-import AStatus from '../../Admin/AdminMenu/AdminStatus/AStatus';
+import AOverview from '../../Admin/AdminMenu/AdminOverview/AOverview';
 import ANotifications from '../../Admin/AdminMenu/AdminNotifications/ANotifications';
 import AMap from '../../Admin/AdminMenu/AdminMap/AMap';
 import AFiraChat from '../../Admin/AdminMenu/AdminChat/AFiraChat';
@@ -20,7 +20,7 @@ export default function AdminScreen() {
   const insets = useSafeAreaInsets();
 
   const TABS = [
-    { component: <AStatus /> },
+    { component: <AOverview /> },
     { component: <AMap /> },
     { component: <ANotifications onUnreadCountChange={setUnreadCount} /> },
     { component: <AFiraChat onContactSelect={setSelectedContact} /> },
@@ -29,9 +29,11 @@ export default function AdminScreen() {
     { component: <ASettings /> },
   ];
 
-  const toggleSidebar = () => {
-    setSidebarOpen(!sidebarOpen);
+  const openSidebar = () => {
+    // Force immediate open and avoid race with previous close
+    setSidebarOpen(true);
   };
+  const closeSidebar = () => setSidebarOpen(false);
 
   const getTabTitle = (tabIndex) => {
     const titles = [
@@ -82,10 +84,14 @@ export default function AdminScreen() {
     >
       {/* Main Content */}
       <View style={{ flex: 1 }}>
-        {TABS[activeTab].component}
+        {activeTab === 1 ? (
+          <AMap isSidebarOpen={sidebarOpen} />
+        ) : (
+          TABS[activeTab].component
+        )}
       </View>
       
-      {/* Floating Burger Icon with Title */}
+      {/* Floating Burger Icon (no section headers as requested) */}
       <View 
         style={{
           position: 'absolute',
@@ -94,10 +100,11 @@ export default function AdminScreen() {
           right: 0,
           flexDirection: 'row',
           alignItems: 'center',
-          zIndex: 10,
+          zIndex: 10000,
+          elevation: 20,
         }}
+        pointerEvents="auto"
       >
-        {/* Only show burger menu when not in chat OR when no contact is selected */}
         {(activeTab !== 3 || !selectedContact) && (
           <TouchableOpacity
             style={{
@@ -109,21 +116,15 @@ export default function AdminScreen() {
               backgroundColor: '#ff512f',
               alignItems: 'center',
               justifyContent: 'center',
+              zIndex: 11000,
             }}
-            onPress={toggleSidebar}
+            onPress={openSidebar}
             activeOpacity={0.8}
+            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            pointerEvents="auto"
           >
             <MaterialIcons name="menu" size={24} color="#ffffff" />
           </TouchableOpacity>
-        )}
-        
-        {/* Show regular title for other tabs */}
-        {activeTab !== 3 && (
-          <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
-            <Text style={{ fontSize: 20, fontWeight: 'bold', color: '#1f2937' }}>
-              {getTabTitle(activeTab)}
-            </Text>
-          </View>
         )}
       </View>
       
@@ -131,7 +132,8 @@ export default function AdminScreen() {
         activeTab={activeTab} 
         setActiveTab={setActiveTab} 
         isOpen={sidebarOpen} 
-        onToggle={toggleSidebar} 
+        onToggle={closeSidebar} 
+        // Ensure the drawer only opens from explicit button, not gestures
       />
     </View>
   );
