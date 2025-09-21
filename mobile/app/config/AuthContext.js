@@ -173,7 +173,6 @@ export const AuthProvider = ({ children }) => {
       throw error;
     }
   };
-
   // Add a method to handle responder login
   const loginResponder = async (userData) => {
     try {

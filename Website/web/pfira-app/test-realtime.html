@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Test Supabase Real-time</title>
+    <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
+</head>
+<body>
+    <h1>Supabase Real-time Test</h1>
+    <div id="status">Testing connection...</div>
+    <div id="messages"></div>
+    <button onclick="sendTestMessage()">Send Test Message</button>
+
+    <script>
+        // Supabase configuration
+        const supabaseUrl = 'https://wedqhgsgrxnvbhklzhnnet.supabase.co';
+        const supabaseAnonKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndlZHFoc2dyeG52YmhrbHpobmV0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTYyNzYzNzcsImV4cCI6MjA3MTg1MjM3N30.MimeT7vfd8M5mLByJqSRBFby_OpyODfegoMouIlf7mU';
+
+        // Initialize Supabase
+        const supabase = createClient(supabaseUrl, supabaseAnonKey);
+
+        // Test real-time connection
+        const channel = supabase
+            .channel('test-realtime')
+            .on('postgres_changes', {
+                event: '*',
+                schema: 'public',
+                table: 'messages'
+            }, (payload) => {
+                console.log('Real-time message received:', payload);
+                document.getElementById('messages').innerHTML += 
+                    `<div>Real-time: ${JSON.stringify(payload)}</div>`;
+            })
+            .subscribe((status) => {
+                console.log('Real-time status:', status);
+                document.getElementById('status').innerHTML = 
+                    `Real-time status: ${status}`;
+            });
+
+        // Function to send test message
+        async function sendTestMessage() {
+            try {
+                const { data, error } = await supabase
+                    .from('messages')
+                    .insert({
+                        sender_id: 'test-sender',
+                        receiver_id: 'test-receiver',
+                        sender_type: 'station',
+                        receiver_type: 'station',
+                        text: 'Test message from real-time test',
+                        is_emergency: false,
+                        is_read: false
+                    });
+
+                if (error) {
+                    console.error('Error sending test message:', error);
+                    document.getElementById('messages').innerHTML += 
+                        `<div style="color: red;">Error: ${error.message}</div>`;
+                } else {
+                    console.log('Test message sent:', data);
+                    document.getElementById('messages').innerHTML += 
+                        `<div style="color: green;">Test message sent: ${JSON.stringify(data)}</div>`;
+                }
+            } catch (error) {
+                console.error('Error:', error);
+                document.getElementById('messages').innerHTML += 
+                    `<div style="color: red;">Error: ${error.message}</div>`;
+            }
+        }
+
+        // Cleanup on page unload
+        window.addEventListener('beforeunload', () => {
+            channel.unsubscribe();
+        });
+    </script>
+</body>
+</html>

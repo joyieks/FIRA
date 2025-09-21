@@ -17,6 +17,7 @@ const LoginComponent = () => {
   const [toastMessage, setToastMessage] = useState('');
   const [toastType, setToastType] = useState('success'); // 'success' or 'error'
   const router = useRouter();
+
   const { login: authLogin, loginAdmin, loginCitizen, loginStation, loginResponder, isLoading, resetLoading } = useAuth();
 
   // Clear toast on component mount/unmount and reset loading if stuck
@@ -131,6 +132,12 @@ const LoginComponent = () => {
         .eq('email', email.toLowerCase())
         .single();
 
+      if (adminError && adminError.code !== 'PGRST116') {
+        if (__DEV__) {
+          console.log('🔍 Error checking admin_users table:', adminError.message);
+        }
+      }
+
       if (adminData) {
         console.log('✅ User found in admin_users table:', adminData);
         
@@ -159,12 +166,61 @@ const LoginComponent = () => {
         return;
       }
 
-      // Check if this user exists in 'citizen_users' table FIRST (to avoid misrouting to station)
+      // Check if this user exists in 'responders' table
+      const { data: responderData, error: responderError } = await supabase
+        .from('responders')
+        .select('*')
+        .eq('email', email.toLowerCase())
+        .single();
+
+      if (responderError && responderError.code !== 'PGRST116') {
+        if (__DEV__) {
+          console.log('🔍 Error checking responders table:', responderError.message);
+        }
+      }
+
+      if (responderData) {
+        console.log('✅ User found in responders table:', responderData);
+        
+        // Convert Supabase data format to match your app's expected format for responders
+        const userData = {
+          uid: responderData.id,
+          firstName: responderData.first_name,
+          lastName: responderData.last_name,
+          email: responderData.email,
+          phoneNumber: responderData.phone,
+          userType: 'responder',
+          displayName: `${responderData.first_name} ${responderData.last_name}`,
+          position: responderData.user_position,
+          stationId: responderData.station_id,
+          createdAt: responderData.created_at
+        };
+
+        // Clear any existing toast before login
+        setShowToast(false);
+        setToastMessage('');
+        
+        // Use the loginResponder method for database responders
+        await loginResponder(userData);
+        
+        // Show success toast after successful login
+        displayToast(`Welcome to Project FIRA, ${userData.firstName || 'Responder'}! 🚑`, 'success');
+        return;
+      }
+
+      // Check if this user exists in 'citizen_users' table
+      console.log('🔍 User not found in admin/responders tables, checking citizen_users...');
       const { data: citizenData, error: citizenError } = await supabase
         .from('citizen_users')
         .select('*')
         .eq('email', email.toLowerCase())
         .single();
+
+      if (citizenError && citizenError.code !== 'PGRST116') {
+        if (__DEV__) {
+          console.log('🔍 Error checking citizen_users table:', citizenError.message);
+        }
+      }
 
       if (citizenData) {
         console.log('✅ User found in citizen_users table:', citizenData);
@@ -181,18 +237,27 @@ const LoginComponent = () => {
           isVerified: citizenData.is_verified,
           createdAt: citizenData.created_at
         };
-        setShowToast(false); setToastMessage('');
+        
+        setShowToast(false); 
+        setToastMessage('');
         await loginCitizen(userData);
         displayToast(`Welcome to Project FIRA, ${userData.firstName || 'User'}! 👋`, 'success');
         return;
       }
 
       // Check if this user exists in 'station_users' table
+      console.log('🔍 User not found in admin/responders/citizens tables, checking station_users...');
       const { data: stationData, error: stationError } = await supabase
         .from('station_users')
         .select('*')
         .eq('email', email.toLowerCase())
         .single();
+
+      if (stationError && stationError.code !== 'PGRST116') {
+        if (__DEV__) {
+          console.log('🔍 Error checking station_users table:', stationError.message);
+        }
+      }
 
       if (stationData) {
         console.log('✅ User found in station_users table:', stationData);
@@ -224,49 +289,10 @@ const LoginComponent = () => {
         return;
       }
 
-      // Check if this user exists in 'responder_users' table
-      const { data: responderData, error: responderError } = await supabase
-        .from('responder_users')
-        .select('*')
-        .eq('email', email.toLowerCase())
-        .single();
+      // If no records found in any table
+      console.log('❌ User not found in any user table');
+      displayToast('User not found in record. Please contact your administrator.', 'error');
 
-      if (responderData) {
-        console.log('✅ User found in responder_users table:', responderData);
-        
-        // Convert Supabase data format to match your app's expected format
-        const userData = {
-          uid: responderData.id,
-          firstName: responderData.first_name,
-          lastName: responderData.last_name,
-          email: responderData.email,
-          phoneNumber: responderData.phone,
-          userType: 'responder',
-          displayName: `${responderData.first_name} ${responderData.last_name}`.trim(),
-          status: responderData.status,
-          stationId: responderData.station_id,
-          stationName: responderData.station_name,
-          position: responderData.position,
-          isOnline: responderData.is_online,
-          createdAt: responderData.created_at
-        };
-
-        // Clear any existing toast before login
-        setShowToast(false);
-        setToastMessage('');
-        
-        await loginResponder(userData);
-        
-        // Show success toast after successful login
-        displayToast(`Welcome to Project FIRA, ${userData.displayName}! 🚑`, 'success');
-        return;
-      }
-
-      // If no records found at all
-      {
-        console.log('❌ User not found in any user table');
-        displayToast('No user record found. Please register first.', 'error');
-      }
     } catch (error) {
       // Only log to console in development, don't use console.error to avoid error overlay
       if (__DEV__) {
@@ -293,7 +319,6 @@ const LoginComponent = () => {
       displayToast(errorMessage, 'error');
     }
   };
-
 
   return (
     <KeyboardAvoidingView
