@@ -38,10 +38,6 @@ const RegistrationComponent = () => {
 
   const sendVerificationCode = async (email, firstName) => {
     try {
-      console.log('🚀 Starting verification code send...');
-      console.log('📧 Email:', email);
-      console.log('👤 First Name:', firstName);
-      
       // Generate 6-digit verification code
       const code = Math.random().toString().slice(2, 8);
       const expirationTime = new Date(Date.now() + 15 * 60 * 1000).toLocaleTimeString();
@@ -52,9 +48,6 @@ const RegistrationComponent = () => {
         time: expirationTime,
         user_email: email
       };
-
-      console.log('📋 Template Params:', templateParams);
-      console.log('📤 Sending email via EmailJS...');
 
       // Use EmailJS REST API with private key
       const response = await fetch('https://api.emailjs.com/api/v1.0/email/send', {
@@ -71,8 +64,6 @@ const RegistrationComponent = () => {
         }),
       });
 
-      console.log('📡 Response status:', response.status);
-
       if (!response.ok) {
         const errorText = await response.text();
         console.error('❌ EmailJS Error Response:', errorText);
@@ -81,11 +72,9 @@ const RegistrationComponent = () => {
 
       // Check if response is successful
       const responseData = await response.text();
-      console.log('✅ EmailJS Response:', responseData);
 
       // Store the code for verification
       setVerificationCode(code);
-      console.log('💾 Verification code stored:', code);
       
       // Start resend countdown (60 seconds)
       setResendCountdown(60);
@@ -169,8 +158,6 @@ const RegistrationComponent = () => {
       setIsLoading(true);
       
       // Create Supabase Auth account
-      console.log('🔄 Creating Supabase Auth account...');
-      
       const { data: authData, error: authError } = await supabase.auth.signUp({
         email: formData.email.toLowerCase(),
         password: formData.password,
@@ -190,8 +177,6 @@ const RegistrationComponent = () => {
         throw new Error(`Failed to create auth account: ${authError.message}`);
       }
   
-      console.log('✅ Supabase Auth account created:', authData.user.id);
-  
       // Confirm the user's email through our custom database function
       const { error: confirmError } = await supabase.rpc('confirm_user_email', {
         user_id: authData.user.id
@@ -199,8 +184,6 @@ const RegistrationComponent = () => {
   
       if (confirmError) {
         console.error('⚠️ Could not confirm email:', confirmError);
-      } else {
-        console.log('✅ Email confirmed successfully');
       }
   
       // Create user data for citizen_users table
@@ -228,8 +211,6 @@ const RegistrationComponent = () => {
         throw new Error(`Failed to create user profile: ${error.message}`);
       }
   
-      console.log('✅ User profile created in Supabase:', data[0]);
-      
       // Hide verification screen immediately
       setShowVerification(false);
       

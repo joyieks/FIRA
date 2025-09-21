@@ -18,7 +18,6 @@ const AProfile = () => {
     email: userData?.email || '',
     phone: userData?.phone || '',
     address: userData?.address || '',
-    contactNumber: userData?.contactNumber || userData?.phone || '',
     position: userData?.role || 'System Administrator',
     profileImage: userData?.profileImage || null,
   });
@@ -33,7 +32,6 @@ const AProfile = () => {
         email: userData.email || '',
         phone: userData.phone || '',
         address: userData.address || '',
-        contactNumber: userData.contactNumber || userData.phone || '',
         position: userData.role || 'System Administrator',
         profileImage: userData.profileImage || profile.profileImage,
       };
@@ -118,7 +116,6 @@ const AProfile = () => {
               // Navigate to login screen after clearing auth state
               router.replace('/Authentication/login');
             } catch (error) {
-              console.error('Logout error:', error);
               Alert.alert('Error', 'Failed to logout. Please try again.');
             }
           },
@@ -204,13 +201,6 @@ const AProfile = () => {
             isEditing={isEditing}
             onChangeText={(text) => updateField('address', text)}
             multiline
-          />
-          <EditableProfileField 
-            icon="phone-android" 
-            label="Contact Number" 
-            value={isEditing ? editedProfile.contactNumber : profile.contactNumber}
-            isEditing={isEditing}
-            onChangeText={(text) => updateField('contactNumber', text)}
           />
         </View>
 

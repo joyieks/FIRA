@@ -11,7 +11,6 @@ export default function AuthGuard({ children }) {
   useEffect(() => {
     const loadingTimeout = setTimeout(() => {
       if (isLoading) {
-        console.log('⚠️ AuthGuard: Loading state timeout, forcing reset');
         resetLoading();
       }
     }, 5000); // 5 second timeout
@@ -20,12 +19,8 @@ export default function AuthGuard({ children }) {
   }, [isLoading, resetLoading]);
 
   useEffect(() => {
-    console.log('🔄 AuthGuard useEffect triggered:', { isAuthenticated, userType, isLoading });
-    
     if (!isLoading) {
       if (isAuthenticated) {
-        console.log('🎯 AuthGuard: User is authenticated, redirecting to:', userType);
-        
         // Add a small delay to ensure smooth navigation and prevent glitching
         const navigationTimeout = setTimeout(() => {
           // Redirect authenticated users to their appropriate screen
@@ -43,7 +38,6 @@ export default function AuthGuard({ children }) {
               router.replace('/Screens/CitizenScreen');
               break;
             default:
-              console.log('⚠️ AuthGuard: Unknown userType:', userType);
               // If userType is not recognized, redirect to get-started
               router.replace('/get-started/getstarted');
           }
@@ -51,7 +45,6 @@ export default function AuthGuard({ children }) {
 
         return () => clearTimeout(navigationTimeout);
       } else {
-        console.log('🚪 AuthGuard: User is not authenticated, staying on current screen');
         // For unauthenticated users, just render the children (login screen)
         // No need to redirect as they should already be on the login screen
       }

@@ -17,12 +17,14 @@ const RProfile = () => {
   const [showDatePicker, setShowDatePicker] = useState(false);
 
   // Use real user data from authentication context with foreign key data
+  // Use real user data from authentication context with foreign key data
   const [profile, setProfile] = useState({
     name: userData?.displayName || `${userData?.firstName || ''} ${userData?.lastName || ''}`.trim() || 'Responder',
     email: userData?.email || '',
     address: userData?.address || '', // Foreign Key: station_users.address -> responders.address
     birthdate: userData?.birthdate || '',
     gender: userData?.gender || '',
+    stationName: userData?.stationName || '', // Foreign Key: station_users.station_name -> responders.station_name
     stationContactNumber: userData?.stationContactNumber || userData?.station_contact_number || '', // Foreign Key: station_users.phone -> responders.station_contact_number
     contactNumber: userData?.phoneNumber || userData?.phone || '', // Responder's personal contact number
     position: userData?.position || userData?.userType || 'Responder',
@@ -37,6 +39,7 @@ const RProfile = () => {
       if (userData) {
         let stationPhone = '';
         let stationAddress = '';
+        let stationName = '';
         
         // If the responder has station_id, fetch the station data to get phone and address
         if (userData.stationId) {
@@ -50,6 +53,7 @@ const RProfile = () => {
             if (stationData && !error) {
               stationPhone = stationData.phone || '';
               stationAddress = stationData.address || '';
+              stationName = stationData.station_name || '';
             }
           } catch (error) {
             // Silently handle station data fetch error
@@ -59,13 +63,14 @@ const RProfile = () => {
         const updatedProfile = {
           name: userData.displayName || `${userData.firstName || ''} ${userData.lastName || ''}`.trim() || 'Responder',
           email: userData.email || '',
-          address: stationAddress, // Foreign Key: station_users.address -> responders.address
+          address: stationAddress || userData.address || '', // Use station address first, fallback to user address
           birthdate: userData.birthdate || '',
           gender: userData.gender || '',
-          stationContactNumber: stationPhone, // Foreign Key: station_users.phone -> responders.station_contact_number
+          stationName: stationName || userData.stationName || '', // Foreign Key: station_users.station_name -> responders.station_name
+          stationContactNumber: stationPhone || userData.stationContactNumber || '', // Foreign Key: station_users.phone -> responders.station_contact_number
           contactNumber: userData.phoneNumber || userData.phone || '', // Responder's personal contact
           position: userData.position || userData.userType || 'Responder',
-          profileImage: userData.profileImage || profile.profileImage,
+          profileImage: userData.profileImage || null,
         };
         
         setProfile(updatedProfile);
@@ -108,11 +113,34 @@ const RProfile = () => {
     }
   };
 
-  const handleEditToggle = () => {
+  const handleEditToggle = async () => {
     if (isEditing) {
-      // Save changes
-      setProfile({...editedProfile});
-      Alert.alert('Success', 'Profile updated successfully!');
+      try {
+        // Save changes to database
+        const { data, error } = await supabase
+          .from('responders')
+          .update({
+            birthdate: editedProfile.birthdate,
+            gender: editedProfile.gender,
+            age: editedProfile.birthdate ? getAge(editedProfile.birthdate) : null,
+            // Also update other editable fields that might have changed
+            phone: editedProfile.contactNumber
+          })
+          .eq('id', userData.uid)
+          .select();
+
+        if (error) {
+          Alert.alert('Error', `Failed to update profile: ${error.message}`);
+          return;
+        }
+
+        // Update local state only after successful database save
+        setProfile({...editedProfile});
+        Alert.alert('Success', 'Profile updated successfully!');
+      } catch (error) {
+        Alert.alert('Error', 'Failed to update profile. Please try again.');
+        return;
+      }
     } else {
       // Enter edit mode
       setEditedProfile({...profile});
@@ -247,6 +275,8 @@ const RProfile = () => {
           <Text className="text-lg font-bold text-gray-800 mb-4">Contact Information</Text>
           {/* Email - Non-editable */}
           <ProfileField icon="email" label="Email" value={profile.email} />
+          {/* Station - Foreign Key: station_users.station_name -> responders.station_name */}
+          <ProfileField icon="business" label="Station" value={profile.stationName || 'No Station Assigned'} />
           {/* Station Phone - Foreign Key: station_users.phone -> responders.station_contact_number */}
           <EditableProfileField 
             icon="phone" 

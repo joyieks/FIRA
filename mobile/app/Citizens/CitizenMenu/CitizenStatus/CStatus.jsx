@@ -22,7 +22,6 @@ const CStatus = () => {
 
   // Use Supabase auth context instead of Firebase auth
   useEffect(() => {
-    console.log('CitizenStatus: auth context changed', { isAuthenticated, hasUserData: !!userData });
     if (isAuthenticated && userData?.uid) {
       setCurrentUser({ uid: userData.uid, firstName: userData.firstName, lastName: userData.lastName });
     } else {
@@ -33,11 +32,9 @@ const CStatus = () => {
   // Load reports when user is available
   useEffect(() => {
     if (currentUser?.uid) {
-      console.log('Current user available, loading reports...');
       loadReportsFromFirebase();
     } else if (currentUser === null) {
       // User is explicitly null (not authenticated)
-      console.log('No user authenticated, clearing reports');
       setYourReports([]);
       setNearbyReports([]);
       setIsLoading(false);
@@ -46,14 +43,12 @@ const CStatus = () => {
 
   const loadReportsFromFirebase = async (retryCount = 0) => {
     if (!currentUser?.uid) {
-      console.log('No current user UID, skipping reports load');
       setIsLoading(false);
       return;
     }
 
     try {
       setIsLoading(true);
-      console.log('Loading reports for user:', currentUser.uid);
       
       // Add timeout to prevent hanging
       const controller = new AbortController();
@@ -68,16 +63,13 @@ const CStatus = () => {
       });
 
       clearTimeout(timeoutId);
-      console.log('API Response status:', response.status);
       
       if (response.ok) {
         const data = await response.json();
-        console.log('API Response data received, total reports:', data.length);
         
         // Filter reports by current user's UID
         const userReports = data.filter(report => {
           const reporterId = report.reporterId || report.user_id;
-          console.log('Checking report:', reporterId, 'against user:', currentUser.uid);
           return reporterId === currentUser.uid;
         });
         
@@ -86,27 +78,20 @@ const CStatus = () => {
           return reporterId !== currentUser.uid;
         });
         
-        console.log('User reports found:', userReports.length);
-        console.log('Other reports found:', otherReports.length);
-        
         setYourReports(userReports);
         setNearbyReports(otherReports);
       } else {
         throw new Error(`API returned status: ${response.status}`);
       }
     } catch (error) {
-      console.log('Error loading reports:', error);
-      
       // Retry logic for network issues
       if (retryCount < 3 && error.name !== 'AbortError') {
-        console.log(`Retrying... attempt ${retryCount + 1}`);
         setTimeout(() => {
           loadReportsFromFirebase(retryCount + 1);
         }, 2000 * (retryCount + 1)); // Exponential backoff
         return;
       } else {
         // Final fallback
-        console.log('Failed to load reports after retries');
         setYourReports([]);
         setNearbyReports([]);
         
@@ -228,8 +213,6 @@ const CStatus = () => {
     }
 
     try {
-      console.log('Starting emergency submission for user:', currentUser.uid);
-      
       // Get current location first
       let currentLocation = 'Location unavailable';
       try {
@@ -240,10 +223,8 @@ const CStatus = () => {
             timeout: 10000,
           });
           currentLocation = `${location.coords.latitude}, ${location.coords.longitude}`;
-          console.log('Location captured:', currentLocation);
         }
       } catch (locationError) {
-        console.log('Location error:', locationError);
         currentLocation = 'Location unavailable';
       }
 
@@ -272,10 +253,6 @@ const CStatus = () => {
         : 'Anonymous User';
       formData.append('user_name', userName);
       
-      console.log('Sending user data:', { uid: currentUser.uid, name: userName });
-
-      console.log('Submitting to API:', API_URL);
-      
       // Add timeout for submission as well
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 second timeout for upload
@@ -288,7 +265,6 @@ const CStatus = () => {
 
       clearTimeout(timeoutId);
       const data = await response.json();
-      console.log('API response:', data);
       
       if (!response.ok) {
         throw new Error(data?.error || 'Failed to submit emergency');
@@ -306,8 +282,6 @@ const CStatus = () => {
         cause: emergencyData.cause,
       };
 
-      console.log('Created new report:', newReport);
-
       // Add to local state immediately for better UX
       setYourReports(prevReports => [newReport, ...prevReports]);
 
@@ -323,7 +297,6 @@ const CStatus = () => {
       }, 2000);
       
     } catch (err) {
-      console.log('Submission error:', err);
       if (err.name === 'AbortError') {
         Alert.alert('Timeout', 'Submission is taking too long. Please check your internet connection.');
       } else {

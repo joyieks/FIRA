@@ -71,7 +71,6 @@ export default function CMap() {
   // Fetch reports from API
   const fetchReports = async () => {
     try {
-      console.log('Fetching reports from API...');
       const response = await fetch(GET_REPORTS_URL, {
         headers: {
           'Cache-Control': 'no-cache',
@@ -81,7 +80,6 @@ export default function CMap() {
       
       if (response.ok) {
         const data = await response.json();
-        console.log('Fetched reports for map:', data.length);
         
         // Filter reports that have valid coordinates AND are not cancelled or fire out
         const reportsWithCoords = data.filter(report => {
@@ -91,8 +89,6 @@ export default function CMap() {
           const isFireOut = statusText.includes('fire out');
           return hasCoords && !isCancelled && !isFireOut;
         });
-        
-        console.log('Reports with valid coordinates:', reportsWithCoords.length);
         
         // Log each report's location for debugging
         reportsWithCoords.forEach(report => {

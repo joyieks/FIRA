@@ -23,7 +23,6 @@ const LoginComponent = () => {
   useEffect(() => {
     // If we're on the login screen and still loading, reset the loading state
     if (isLoading) {
-      console.log('🔄 Login component: Resetting stuck loading state');
       const resetTimer = setTimeout(() => {
         resetLoading();
       }, 1000);
@@ -106,23 +105,16 @@ const LoginComponent = () => {
       }
 
       // For all other emails, try Supabase Auth (admin, citizens, stations, responders)
-      console.log('🔍 Trying Supabase Auth for login:', email);
-      
       const { data: authData, error: authError } = await supabase.auth.signInWithPassword({
         email: email.toLowerCase(),
         password: password
       });
 
       if (authError) {
-        // Only log to console in development, don't use console.error to avoid error overlay
-        if (__DEV__) {
-          console.log('🔍 Supabase Auth failed:', authError.message);
-        }
         throw authError;
       }
 
       const user = authData.user;
-      console.log('✅ Supabase Auth successful, checking user tables...');
 
       // Check if this user exists in 'admin_users' table first
       const { data: adminData, error: adminError } = await supabase
@@ -167,7 +159,6 @@ const LoginComponent = () => {
         .single();
 
       if (citizenData) {
-        console.log('✅ User found in citizen_users table:', citizenData);
         const userData = {
           uid: citizenData.id,
           firstName: citizenData.first_name,
@@ -195,8 +186,6 @@ const LoginComponent = () => {
         .single();
 
       if (stationData) {
-        console.log('✅ User found in station_users table:', stationData);
-        
         // Convert Supabase data format to match your app's expected format
         const userData = {
           uid: stationData.id,
@@ -231,28 +220,14 @@ const LoginComponent = () => {
         .select('*')
         .eq('email', email.toLowerCase());
 
-      console.log('🔍 Responder search results by email:', { 
-        searchEmail: email.toLowerCase(), 
-        responderData, 
-        responderError: responderError?.message,
-        resultCount: responderData?.length 
-      });
-
       // If no results by email, try searching by the Supabase Auth user ID
       if (!responderData || responderData.length === 0) {
-        console.log('🔍 No email match, trying to find by auth user ID:', authData.user.id);
         const { data: responderByIdData, error: responderByIdError } = await supabase
           .from('responders')
           .select('*')
           .eq('id', authData.user.id)
           .single();
           
-        console.log('🔍 Responder search by ID results:', { 
-          searchId: authData.user.id, 
-          responderByIdData, 
-          responderByIdError: responderByIdError?.message 
-        });
-        
         if (responderByIdData) {
           responderData = [responderByIdData];
           responderError = null;
@@ -263,14 +238,6 @@ const LoginComponent = () => {
       const foundResponder = responderData && responderData.length > 0 ? responderData[0] : null;
 
       if (foundResponder) {
-        console.log('✅ User found in responders table:', foundResponder);
-        console.log('🔍 Responder fields check:', {
-          personal_phone: foundResponder.phone,
-          station_contact_number: foundResponder.station_contact_number,
-          address: foundResponder.address,
-          station_id: foundResponder.station_id
-        });
-        
         // Convert Supabase data format to match your app's expected format
         const userData = {
           uid: foundResponder.id,
@@ -292,12 +259,6 @@ const LoginComponent = () => {
           createdAt: foundResponder.created_at
         };
 
-        console.log('📋 Final userData being sent to profile:', {
-          personalPhone: userData.phoneNumber,
-          stationPhone: userData.stationContactNumber,
-          address: userData.address
-        });
-
         // Clear any existing toast before login
         setShowToast(false);
         setToastMessage('');
@@ -310,40 +271,8 @@ const LoginComponent = () => {
       }
 
       // If no records found at all
-      {
-        console.log('❌ User not found in any user table');
-        console.log('🔍 Debug info:', {
-          searchedEmail: email.toLowerCase(),
-          authUserEmail: authData?.user?.email,
-          authUserId: authData?.user?.id
-        });
-        
-        // Let's check if there are ANY responders in the table for debugging
-        const { data: allResponders, error: allRespondersError } = await supabase
-          .from('responders')
-          .select('email')
-          .limit(5);
-          
-        console.log('📋 Sample responder emails in database:', allResponders?.map(r => r.email));
-        console.log('🔍 Responder table query error:', allRespondersError?.message);
-        
-        // Let's also check if the table exists and what columns it has
-        const { data: tableInfo, error: tableError } = await supabase
-          .from('responders')
-          .select('*')
-          .limit(1);
-          
-        console.log('📊 Responder table structure sample:', tableInfo);
-        console.log('🔍 Table access error:', tableError?.message);
-        
-        displayToast('No user record found. Please register first.', 'error');
-      }
+      throw new Error('User not found in any user table');
     } catch (error) {
-      // Only log to console in development, don't use console.error to avoid error overlay
-      if (__DEV__) {
-        console.log('🔍 Login attempt failed:', error.message);
-      }
-      
       // Handle specific Supabase Auth errors
       let errorMessage = 'Login failed. Please check your credentials.';
       

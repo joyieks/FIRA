@@ -11,7 +11,6 @@ export default function SMap() {
   useEffect(() => {
     (async () => {
       try {
-        console.log('🗺️ Requesting location permissions...');
         let { status } = await Location.requestForegroundPermissionsAsync();
         
         if (status !== 'granted') {
@@ -20,7 +19,6 @@ export default function SMap() {
           return;
         }
 
-        console.log('📍 Getting current location...');
         let location = await Location.getCurrentPositionAsync({
           accuracy: Location.Accuracy.High,
           timeout: 10000,
