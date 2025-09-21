@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { FiSearch, FiFilter, FiClock, FiMapPin, FiUser, FiAlertTriangle, FiBell, FiTrendingUp, FiX, FiRefreshCw } from 'react-icons/fi';
+import { supabase } from '../../../../config/supabase';
 
 const Overview = () => {
   const [searchQuery, setSearchQuery] = useState('');
@@ -16,14 +17,46 @@ const Overview = () => {
   // API endpoint for fetching reports
   const API_URL = 'https://fire-predictor-api-production.up.railway.app';
 
+  // Fetch AI suggested alarms from messages
+  const fetchAISuggestedAlarms = async () => {
+    try {
+      console.log('🤖 Fetching AI suggested alarms from messages...');
+      
+      const { data: messages, error } = await supabase
+        .from('messages')
+        .select('id, text, ai_suggested_alarm, created_at, sender_type, receiver_type')
+        .not('ai_suggested_alarm', 'is', null)
+        .order('created_at', { ascending: false })
+        .limit(50); // Get recent messages with AI suggestions
+
+      if (error) {
+        console.error('Error fetching AI suggested alarms:', error);
+        return [];
+      }
+
+      console.log('🤖 AI suggested alarms fetched:', messages);
+      return messages || [];
+    } catch (error) {
+      console.error('Error fetching AI suggested alarms:', error);
+      return [];
+    }
+  };
+
   // Fetch reports from Firebase via Flask API
   const fetchReports = async () => {
     try {
       setIsLoading(true);
       console.log('Fetching reports from:', `${API_URL}/get_reports`);
       
-      const response = await fetch(`${API_URL}/get_reports`);
+      // Fetch both regular reports and AI suggested alarms in parallel
+      const [response, aiAlarms] = await Promise.all([
+        fetch(`${API_URL}/get_reports`),
+        fetchAISuggestedAlarms()
+      ]);
+      
       console.log('Response status:', response.status);
+      
+      let allReports = [];
       
       if (response.ok) {
         const data = await response.json();
@@ -58,15 +91,50 @@ const Overview = () => {
           geotag_location: report.geotag_location
         }));
         
+        allReports = [...transformedReports];
         console.log('Transformed reports:', transformedReports);
-        setReports(transformedReports);
-        setLastRefresh(new Date());
       } else {
         console.log('API returned error status:', response.status);
         const errorData = await response.text();
         console.log('Error response:', errorData);
-        setReports([]);
       }
+
+      // Add AI suggested alarms as separate entries
+      if (aiAlarms && aiAlarms.length > 0) {
+        const aiReports = aiAlarms.map((message, index) => ({
+          id: `ai-${message.id}`,
+          time: formatTime(message.created_at),
+          reporter: `AI Analysis (${message.sender_type})`,
+          location: 'Chat System',
+          status: 'AI Suggested',
+          suggestedAlarmLevel: message.ai_suggested_alarm,
+          finalAlarmLevel: 'Pending',
+          description: `AI Analysis: "${message.text.substring(0, 100)}${message.text.length > 100 ? '...' : ''}"`,
+          picture: null,
+          minutesAgo: calculateMinutesAgo(message.created_at),
+          // Additional fields
+          prediction: 'AI Analysis',
+          confidence: 'High',
+          structure: null,
+          smokeIntensity: null,
+          smokeConfidence: null,
+          numberOfStructures: null,
+          reporterId: message.sender_id,
+          timestamp: message.created_at,
+          // Location data
+          latitude: null,
+          longitude: null,
+          address: 'Chat System',
+          geotag_location: 'Chat System',
+          isAIAnalysis: true
+        }));
+        
+        allReports = [...allReports, ...aiReports];
+        console.log('🤖 Added AI suggested alarms:', aiReports);
+      }
+      
+      setReports(allReports);
+      setLastRefresh(new Date());
     } catch (error) {
       console.log('Error loading reports:', error);
       setReports([]);
@@ -292,17 +360,27 @@ const Overview = () => {
       case 'On Going': return 'bg-red-100 text-red-800 border-red-200';
       case 'Under Control': return 'bg-yellow-100 text-yellow-800 border-yellow-200';
       case 'Fire Out': return 'bg-green-100 text-green-800 border-green-200';
+      case 'AI Suggested': return 'bg-blue-100 text-blue-800 border-blue-200';
       default: return 'bg-gray-100 text-gray-800 border-gray-200';
     }
   };
 
   const getAlarmLevelColor = (level) => {
     switch (level) {
+      case 'First Alarm': return 'bg-blue-100 text-blue-800 border-blue-200';
       case '1st Alarm': return 'bg-blue-100 text-blue-800 border-blue-200';
+      case 'Second Alarm': return 'bg-orange-100 text-orange-800 border-orange-200';
       case '2nd Alarm': return 'bg-orange-100 text-orange-800 border-orange-200';
+      case 'Third Alarm': return 'bg-red-100 text-red-800 border-red-200';
       case '3rd Alarm': return 'bg-red-100 text-red-800 border-red-200';
+      case 'Fourth Alarm': return 'bg-purple-100 text-purple-800 border-purple-200';
       case '4th Alarm': return 'bg-purple-100 text-purple-800 border-purple-200';
+      case 'Fifth Alarm': return 'bg-indigo-100 text-indigo-800 border-indigo-200';
       case '5th Alarm': return 'bg-indigo-100 text-indigo-800 border-indigo-200';
+      case 'Task Force Alpha': return 'bg-pink-100 text-pink-800 border-pink-200';
+      case 'Task Force Bravo': return 'bg-pink-100 text-pink-800 border-pink-200';
+      case 'Task Force Charlie': return 'bg-pink-100 text-pink-800 border-pink-200';
+      case 'Task Force Delta Echo Hotel India': return 'bg-pink-100 text-pink-800 border-pink-200';
       case 'TASK FORCE': return 'bg-pink-100 text-pink-800 border-pink-200';
       case 'General Alarm': return 'bg-red-600 text-white border-red-700';
       default: return 'bg-gray-100 text-gray-800 border-gray-200';

@@ -3,6 +3,7 @@ import { View, Text, TextInput, TouchableOpacity, ScrollView, KeyboardAvoidingVi
 import { Ionicons } from '@expo/vector-icons';
 import { supabase } from '../../../config/supabase';
 import { useAuth } from '../../../config/AuthContext';
+import { analyzeMessageForFireAlarm, updateMessageWithAIAnalysis } from '../../../services/openaiService';
 
 export default function RChatPage({ contact, onBack }) {
   const { userData } = useAuth();
@@ -186,6 +187,24 @@ export default function RChatPage({ contact, onBack }) {
       if (data && data[0]) {
         setMessages(prev => [...prev, data[0]]);
         setTimeout(scrollToBottom, 100);
+
+        // AI Analysis: Analyze the message for fire alarm level
+        try {
+          console.log('🤖 Starting AI analysis for responder message:', messageText);
+          const analysis = await analyzeMessageForFireAlarm(messageText);
+          console.log('🤖 AI Analysis result:', analysis);
+          
+          if (analysis.suggested_alarm) {
+            // Update the message with AI analysis
+            await updateMessageWithAIAnalysis(data[0].id, analysis, supabase);
+            console.log('✅ Responder message updated with AI suggested alarm:', analysis.suggested_alarm);
+          } else {
+            console.log('ℹ️ No fire-related content detected in responder message');
+          }
+        } catch (aiError) {
+          console.error('❌ AI analysis failed for responder message:', aiError);
+          // Don't show error to user, just log it
+        }
       }
     } catch (error) {
       console.error('Error sending message:', error);

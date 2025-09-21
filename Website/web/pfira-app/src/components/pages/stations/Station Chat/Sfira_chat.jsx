@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { FiSend, FiPaperclip, FiUser, FiAlertTriangle, FiImage, FiCheck, FiSearch, FiFilter } from 'react-icons/fi';
 import { supabase } from '../../../../config/supabase';
+import { analyzeMessageForFireAlarm, updateMessageWithAIAnalysis } from '../../../../services/openaiService';
 
 const Sfira_chat = () => {
   const [messages, setMessages] = useState([]);
@@ -21,6 +22,7 @@ const Sfira_chat = () => {
   const imageInputRef = useRef(null);
   const [isUploadingImage, setIsUploadingImage] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
+  const [refreshUnreadTick, setRefreshUnreadTick] = useState(0); // bump to refetch unread
 
   // FIXED: Get current station ID from localStorage - EXACTLY same as User Management
   useEffect(() => {
@@ -345,7 +347,38 @@ const Sfira_chat = () => {
     if (users.length > 0) {
       fetchUnreadMessages();
     }
-  }, [currentStationId, users.length]);
+  }, [currentStationId, users.length, refreshUnreadTick]);
+
+  // Global real-time listener for ANY new messages sent to this station (updates unread instantly)
+  useEffect(() => {
+    if (!currentStationId) return;
+
+    const globalChannel = supabase
+      .channel(`messages:inbox:${currentStationId}`)
+      .on('postgres_changes', {
+        event: 'INSERT',
+        schema: 'public',
+        table: 'messages',
+        filter: `receiver_id=eq.${currentStationId}`
+      }, (payload) => {
+        const incoming = payload.new;
+        // If we're currently viewing this sender, append to thread and mark as read
+        if (selectedUser && incoming.sender_id === selectedUser.id) {
+          setMessages(prev => [...prev, incoming]);
+          // Mark as read and keep unread counters clean
+          markMessagesAsRead(incoming.sender_id);
+          return;
+        }
+
+        // Otherwise, trigger a fresh unread fetch to avoid stale state
+        setRefreshUnreadTick(t => t + 1);
+      })
+      .subscribe();
+
+    return () => {
+      globalChannel.unsubscribe();
+    };
+  }, [currentStationId, selectedUser, users]);
 
   // Filter users based on search query and filter type
   useEffect(() => {
@@ -433,6 +466,8 @@ const Sfira_chat = () => {
         // Mark messages as read when fetching them (when opening a conversation)
         if (messagesData && messagesData.length > 0) {
           markMessagesAsRead(selectedUser.id);
+          // Also refresh unread aggregates immediately
+          setRefreshUnreadTick(t => t + 1);
         }
         
         setTimeout(scrollToBottom, 100);
@@ -606,6 +641,9 @@ const Sfira_chat = () => {
           console.log('🔍 Updated filtered unread users after marking as read:', filtered.map(u => ({ name: u.name, unreadCount: u.unreadCount })));
           return filtered;
         });
+
+        // Force a refresh of unread aggregates for safety
+        setRefreshUnreadTick(t => t + 1);
       }
     } catch (error) {
       console.error('Error marking messages as read:', error);
@@ -657,6 +695,24 @@ const Sfira_chat = () => {
         // or when they refresh the page and the unread messages are fetched from the database
         
         setTimeout(scrollToBottom, 100);
+
+        // AI Analysis: Analyze the message for fire alarm level
+        try {
+          console.log('🤖 Starting AI analysis for message:', newMessage);
+          const analysis = await analyzeMessageForFireAlarm(newMessage);
+          console.log('🤖 AI Analysis result:', analysis);
+          
+          if (analysis.suggested_alarm) {
+            // Update the message with AI analysis
+            await updateMessageWithAIAnalysis(data[0].id, analysis, supabase);
+            console.log('✅ Message updated with AI suggested alarm:', analysis.suggested_alarm);
+          } else {
+            console.log('ℹ️ No fire-related content detected in message');
+          }
+        } catch (aiError) {
+          console.error('❌ AI analysis failed:', aiError);
+          // Don't show error to user, just log it
+        }
       }
     } catch (error) {
       console.error('Error sending message:', error);

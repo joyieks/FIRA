@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { FiSend, FiPaperclip, FiMic, FiPhone, FiVideo, FiUser, FiMapPin, FiAlertTriangle, FiImage, FiCheck, FiSearch } from 'react-icons/fi';
 import { supabase } from '../../../../config/supabase';
+import { analyzeMessageForFireAlarm, updateMessageWithAIAnalysis } from '../../../../services/openaiService';
 
 const Afira_chat = () => {
   const [messages, setMessages] = useState([]);
@@ -187,7 +188,7 @@ const Afira_chat = () => {
     if (newMessage.trim() === '' || !selectedStation) return;
 
     try {
-      const { error } = await supabase
+      const { data, error } = await supabase
         .from('messages')
         .insert({
           sender_id: 'admin', // Admin ID
@@ -197,7 +198,8 @@ const Afira_chat = () => {
           text: newMessage,
           is_emergency: isEmergencyMode,
           is_read: false
-        });
+        })
+        .select();
 
       if (error) {
         console.error('Error sending message:', error);
@@ -206,6 +208,26 @@ const Afira_chat = () => {
       }
 
       setNewMessage('');
+
+      // AI Analysis: Analyze the message for fire alarm level
+      if (data && data[0]) {
+        try {
+          console.log('🤖 Starting AI analysis for admin message:', newMessage);
+          const analysis = await analyzeMessageForFireAlarm(newMessage);
+          console.log('🤖 AI Analysis result:', analysis);
+          
+          if (analysis.suggested_alarm) {
+            // Update the message with AI analysis
+            await updateMessageWithAIAnalysis(data[0].id, analysis, supabase);
+            console.log('✅ Admin message updated with AI suggested alarm:', analysis.suggested_alarm);
+          } else {
+            console.log('ℹ️ No fire-related content detected in admin message');
+          }
+        } catch (aiError) {
+          console.error('❌ AI analysis failed for admin message:', aiError);
+          // Don't show error to user, just log it
+        }
+      }
     } catch (error) {
       console.error('Error sending message:', error);
       alert('Failed to send message');
