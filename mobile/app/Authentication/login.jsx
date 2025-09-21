@@ -132,14 +132,14 @@ const LoginComponent = () => {
         .single();
 
       if (adminData) {
-        console.log('✅ User found in admin_users table:', adminData);
-        
         // Convert Supabase data format to match your app's expected format
         const userData = {
           uid: adminData.id,
           firstName: adminData.first_name,
           lastName: adminData.last_name,
           email: adminData.email,
+          phone: adminData.phone,
+          address: adminData.address,
           userType: 'admin',
           displayName: `${adminData.first_name} ${adminData.last_name}`.trim(),
           role: adminData.role,

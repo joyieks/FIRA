@@ -52,7 +52,7 @@ const RProfile = () => {
               stationAddress = stationData.address || '';
             }
           } catch (error) {
-            console.error('Error fetching station data:', error);
+            // Silently handle station data fetch error
           }
         }
         
@@ -177,7 +177,6 @@ const RProfile = () => {
               // Navigate to login screen
               router.replace('/Authentication/login');
             } catch (error) {
-              console.error('Logout error:', error);
               Alert.alert('Error', 'Failed to logout. Please try again.');
             }
           },
