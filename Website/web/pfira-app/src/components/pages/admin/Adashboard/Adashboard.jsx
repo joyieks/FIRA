@@ -42,6 +42,7 @@ const Adashboard = () => {
   const [selectedStation, setSelectedStation] = useState(null); // Selected station for details modal
   const [stationResponders, setStationResponders] = useState([]); // Responders for selected station
   const [loadingResponders, setLoadingResponders] = useState(false); // Loading state for responders
+  const [clusterIndex, setClusterIndex] = useState(0); // Pager index for clustered reports
   const noFireNotifiedRef = useRef(new Set()); // track notified report IDs to avoid duplicates
 
   // Helpers to hide "No Fire" + "No Smoke" reports and notify citizen once
@@ -387,6 +388,139 @@ const Adashboard = () => {
     
     // Dark backgrounds need light text
     return '#ffffff';
+  };
+
+  // AI-Assisted Duplicate Report Consolidation
+  const haversineDistanceMeters = (lat1, lon1, lat2, lon2) => {
+    const toRad = (value) => (value * Math.PI) / 180;
+    const R = 6371000; // meters
+    const dLat = toRad(lat2 - lat1);
+    const dLon = toRad(lon2 - lon1);
+    const a =
+      Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+      Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) *
+      Math.sin(dLon / 2) * Math.sin(dLon / 2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    return R * c;
+  };
+
+  // Generate custom marker icon with badge for clustered reports
+  const getMarkerIconWithBadge = (report) => {
+    const reportStrength = report.reportStrength || 1;
+    const markerColor = getMarkerColor(report);
+    
+    // If only 1 report, use the standard icon
+    if (reportStrength === 1) {
+      return {
+        path: window.google.maps.SymbolPath.CIRCLE,
+        fillColor: markerColor,
+        fillOpacity: 1,
+        strokeColor: '#FFFFFF',
+        strokeWeight: 4,
+        scale: 30,
+      };
+    }
+
+    // Create SVG with badge for multiple reports
+    const svg = `
+      <svg width="60" height="60" xmlns="http://www.w3.org/2000/svg">
+        <!-- Main marker circle -->
+        <circle cx="30" cy="30" r="28" fill="${markerColor}" stroke="#FFFFFF" stroke-width="4"/>
+        <!-- Fire emoji area (centered) -->
+        <text x="30" y="40" font-size="32" text-anchor="middle">🔥</text>
+        <!-- Badge circle in upper right corner -->
+        <circle cx="48" cy="12" r="12" fill="#EF4444" stroke="#FFFFFF" stroke-width="2"/>
+        <!-- Badge text -->
+        <text x="48" y="17" font-size="14" font-weight="bold" text-anchor="middle" fill="#FFFFFF">${reportStrength}</text>
+      </svg>
+    `;
+    
+    return {
+      url: 'data:image/svg+xml;charset=UTF-8,' + encodeURIComponent(svg),
+      scaledSize: new window.google.maps.Size(60, 60),
+      anchor: new window.google.maps.Point(30, 30)
+    };
+  };
+
+  const clusterReports = (reports = []) => {
+    const consolidated = [];
+    const getTimestampMs = (report) => {
+      const candidates = [
+        report?.updated_at,
+        report?.timestamp,
+        report?.created_at
+      ];
+      for (const c of candidates) {
+        if (c) {
+          const t = new Date(c).getTime();
+          if (!isNaN(t)) return t;
+        }
+      }
+      return null;
+    };
+
+    reports.forEach((report) => {
+      const lat = parseFloat(report.latitude);
+      const lng = parseFloat(report.longitude);
+      if (isNaN(lat) || isNaN(lng)) return;
+
+      const tsMs = getTimestampMs(report);
+      const reportDate = tsMs ? new Date(tsMs) : null;
+
+      let matchedIndex = -1;
+      consolidated.some((cluster, idx) => {
+        const dist = haversineDistanceMeters(
+          lat,
+          lng,
+          parseFloat(cluster.latitude),
+          parseFloat(cluster.longitude)
+        );
+        if (dist > 50) return false;
+
+        if (reportDate && cluster.latestTimestamp) {
+          const diffMinutes = Math.abs(reportDate.getTime() - cluster.latestTimestamp.getTime()) / 60000;
+          if (diffMinutes <= 10) {
+            matchedIndex = idx;
+            return true;
+          }
+        }
+        return false;
+      });
+
+      if (matchedIndex !== -1) {
+        const cluster = consolidated[matchedIndex];
+        cluster.reports.push(report);
+        cluster.reportStrength = (cluster.reportStrength || 1) + 1;
+
+        const currentLatest = cluster.latestTimestamp;
+        const shouldUpdateRep = reportDate && (!currentLatest || reportDate > currentLatest);
+        if (shouldUpdateRep) {
+          cluster.representativeReport = report;
+          cluster.latitude = report.latitude;
+          cluster.longitude = report.longitude;
+        }
+
+        if (reportDate && (!currentLatest || reportDate > currentLatest)) {
+          cluster.latestTimestamp = reportDate;
+          cluster.formatted_timestamp = report.formatted_timestamp || report.timestamp || report.updated_at || report.created_at;
+        }
+
+        if (report.image_url) {
+          cluster.representativeImageUrl = report.image_url;
+        }
+      } else {
+        consolidated.push({
+          ...report,
+          reports: [report],
+          reportStrength: 1,
+          representativeReport: report,
+          representativeImageUrl: report.image_url,
+          latestTimestamp: reportDate
+        });
+      }
+    });
+
+    return consolidated;
   };
 
   // Fetch fire reports from the API
@@ -1243,24 +1377,31 @@ const Adashboard = () => {
         return;
       }
 
+      // Check if this is a clustered report - get all reports in the cluster
+      const reportsToAssign = selectedReport.reports && selectedReport.reports.length > 0
+        ? selectedReport.reports
+        : [selectedReport];
+
       // If assigning to a station, check if station is busy
       if (assigneeType === 'station') {
         const busyCheck = await checkStationIsBusy(assigneeId);
         
         if (busyCheck.isBusy) {
           // Station is busy - set assignment to pending and show waiting modal
-          const payload = {
-            report_id: selectedReport.id,
+          // Assign ALL reports in the cluster
+          const assignments = reportsToAssign.map(report => ({
+            report_id: report.id,
             assignee_type: assigneeType,
             assignee_id: assigneeId,
             assigned_at: new Date().toISOString(),
             status: 'pending', // Set to pending for approval
-            assignment_source: 'manual' // Admin manually assigned
-          };
+            assignment_source: 'manual', // Admin manually assigned
+            note: assignmentNote && assignmentNote.trim() ? assignmentNote.trim() : null
+          }));
           
           const { error } = await supabase
             .from('report_assignments')
-            .upsert({ ...payload, note: assignmentNote && assignmentNote.trim() ? assignmentNote.trim() : null }, { onConflict: 'report_id,assignee_id' });
+            .upsert(assignments, { onConflict: 'report_id,assignee_id' });
           
           if (error) {
             // Check if error is due to missing columns (migration not run)
@@ -1286,12 +1427,18 @@ const Adashboard = () => {
           });
           setShowWaitingApprovalModal(true);
 
-          // Create notification for the assigned station
+          // Create notification for the assigned station (use representative report)
           try {
-            const locationInfo = selectedReport.address || selectedReport.geotag_location || 'Location unavailable';
-            const reporterName = selectedReport.reporter_name || selectedReport.reporter || 'Unknown Reporter';
-            const title = `🚨 New Fire Report Assignment - Action Required`;
-            const message = `Command Center is assigning you a report.\n\nLocation: ${locationInfo}\nReporter: ${reporterName}\n\nWill you accept this assignment?`;
+            const representativeReport = selectedReport.representativeReport || selectedReport;
+            const locationInfo = representativeReport.address || representativeReport.geotag_location || 'Location unavailable';
+            const reporterName = representativeReport.reporter_name || representativeReport.reporter || 'Unknown Reporter';
+            const clusterCount = reportsToAssign.length;
+            const title = clusterCount > 1 
+              ? `🚨 New Fire Report Cluster Assignment - Action Required (${clusterCount} reports)`
+              : `🚨 New Fire Report Assignment - Action Required`;
+            const message = clusterCount > 1
+              ? `Command Center is assigning you a cluster of ${clusterCount} reports for the same incident.\n\nLocation: ${locationInfo}\nReporter: ${reporterName}\n\nWill you accept this assignment?`
+              : `Command Center is assigning you a report.\n\nLocation: ${locationInfo}\nReporter: ${reporterName}\n\nWill you accept this assignment?`;
             
             const { error: notifError } = await supabase
               .from('notifications')
@@ -1313,19 +1460,21 @@ const Adashboard = () => {
             console.error('❌ Failed to create notification:', notifErr);
           }
 
-          // Snapshot report coordinates
+          // Snapshot report coordinates for all reports in cluster
           try {
-            const lat = parseFloat(selectedReport.latitude);
-            const lng = parseFloat(selectedReport.longitude);
-            await supabase
-              .from('assigned_report_snapshots')
-              .upsert({
-                report_id: String(selectedReport.id),
-                lat: isNaN(lat) ? null : lat,
-                lng: isNaN(lng) ? null : lng,
-                address: selectedReport.address || selectedReport.geotag_location || null,
-                snapshot_json: selectedReport
-              }, { onConflict: 'report_id' });
+            for (const report of reportsToAssign) {
+              const lat = parseFloat(report.latitude);
+              const lng = parseFloat(report.longitude);
+              await supabase
+                .from('assigned_report_snapshots')
+                .upsert({
+                  report_id: String(report.id),
+                  lat: isNaN(lat) ? null : lat,
+                  lng: isNaN(lng) ? null : lng,
+                  address: report.address || report.geotag_location || null,
+                  snapshot_json: report
+                }, { onConflict: 'report_id' });
+            }
           } catch (snapErr) {
             console.warn('Snapshot upsert failed:', snapErr?.message || snapErr);
           }
@@ -1335,26 +1484,29 @@ const Adashboard = () => {
           return; // Don't show success alert, modal will handle it
         } else {
           // Station is NOT busy - auto-accept assignment
-          // First, delete any existing assignment for this report
-          await supabase
-            .from('report_assignments')
-            .delete()
-            .eq('report_id', selectedReport.id)
-            .eq('assignee_type', 'station');
+          // Delete any existing assignments for all reports in cluster
+          for (const report of reportsToAssign) {
+            await supabase
+              .from('report_assignments')
+              .delete()
+              .eq('report_id', report.id)
+              .eq('assignee_type', 'station');
+          }
           
-          const payload = {
-            report_id: selectedReport.id,
+          // Assign ALL reports in the cluster
+          const assignments = reportsToAssign.map(report => ({
+            report_id: report.id,
             assignee_type: assigneeType,
             assignee_id: assigneeId,
             assigned_at: new Date().toISOString(),
             status: 'accepted', // Auto-accept for free stations
             assignment_source: 'manual',
             note: assignmentNote && assignmentNote.trim() ? assignmentNote.trim() : null
-          };
+          }));
           
           const { error } = await supabase
             .from('report_assignments')
-            .insert(payload);
+            .insert(assignments);
           
           if (error) {
             // Check if error is due to missing columns (migration not run)
@@ -1374,13 +1526,19 @@ const Adashboard = () => {
             .single();
 
           const stationName = stationData?.station_name || 'Station';
+          const clusterCount = reportsToAssign.length;
           
           // Create notification for the assigned station (even though auto-accepted, still notify)
           try {
-            const locationInfo = selectedReport.address || selectedReport.geotag_location || 'Location unavailable';
-            const reporterName = selectedReport.reporter_name || selectedReport.reporter || 'Unknown Reporter';
-            const title = `🚨 New Fire Report Assignment`;
-            const message = `You have been assigned a new fire report.\n\nLocation: ${locationInfo}\nReporter: ${reporterName}`;
+            const representativeReport = selectedReport.representativeReport || selectedReport;
+            const locationInfo = representativeReport.address || representativeReport.geotag_location || 'Location unavailable';
+            const reporterName = representativeReport.reporter_name || representativeReport.reporter || 'Unknown Reporter';
+            const title = clusterCount > 1 
+              ? `🚨 New Fire Report Cluster Assignment (${clusterCount} reports)`
+              : `🚨 New Fire Report Assignment`;
+            const message = clusterCount > 1
+              ? `You have been assigned a cluster of ${clusterCount} reports for the same incident.\n\nLocation: ${locationInfo}\nReporter: ${reporterName}`
+              : `You have been assigned a new fire report.\n\nLocation: ${locationInfo}\nReporter: ${reporterName}`;
             
             const { error: notifError } = await supabase
               .from('notifications')
@@ -1402,9 +1560,28 @@ const Adashboard = () => {
             console.error('❌ Failed to create notification:', notifErr);
           }
 
+          // Snapshot report coordinates for all reports in cluster
+          try {
+            for (const report of reportsToAssign) {
+              const lat = parseFloat(report.latitude);
+              const lng = parseFloat(report.longitude);
+              await supabase
+                .from('assigned_report_snapshots')
+                .upsert({
+                  report_id: String(report.id),
+                  lat: isNaN(lat) ? null : lat,
+                  lng: isNaN(lng) ? null : lng,
+                  address: report.address || report.geotag_location || null,
+                  snapshot_json: report
+                }, { onConflict: 'report_id' });
+            }
+          } catch (snapErr) {
+            console.warn('Snapshot upsert failed:', snapErr?.message || snapErr);
+          }
+
           setAssignmentNote('');
           loadAssignmentInfo(selectedReport.id);
-          alert(`✅ Assignment successfully assigned to ${stationName}.`);
+          alert(`✅ ${clusterCount > 1 ? `Cluster of ${clusterCount} reports` : 'Assignment'} successfully assigned to ${stationName}.`);
           return; // Don't proceed to responder assignment logic
         }
       }
@@ -1703,6 +1880,7 @@ const Adashboard = () => {
   const handleMarkerClick = useCallback((report) => {
     // Marker clicked
     setSelectedReport(report);
+    setClusterIndex(0); // reset pager when selecting a new cluster
     // Center map on the clicked fire report
     setMapCenter({
       lat: parseFloat(report.latitude),
@@ -1845,8 +2023,11 @@ const Adashboard = () => {
             </InfoWindow>
           )}
 
-          {/* Fire Report Markers */}
-          {mapLoaded && fireReports.map((report) => {
+          {/* Fire Report Markers (clustered) */}
+          {mapLoaded && clusterReports(fireReports).map((report) => {
+            const customIcon = getMarkerIconWithBadge(report);
+            const hasBadge = (report.reportStrength || 1) > 1;
+            
             return (
               <Marker
                 key={`${report.id}-${report.latitude}-${report.longitude}-${report.address || report.geotag_location || 'no-address'}`}
@@ -1855,15 +2036,8 @@ const Adashboard = () => {
                   lng: parseFloat(report.longitude)
                 }}
                 onClick={() => handleMarkerClick(report)}
-                icon={{
-                  path: window.google.maps.SymbolPath.CIRCLE,
-                  fillColor: getMarkerColor(report),
-                  fillOpacity: 1,
-                  strokeColor: '#FFFFFF',
-                  strokeWeight: 4,
-                  scale: 30,
-                }}
-                label={{
+                icon={customIcon}
+                label={hasBadge ? undefined : {
                   text: '🔥',
                   fontSize: '32px'
                 }}
@@ -2021,16 +2195,83 @@ const Adashboard = () => {
                 </div>
 
                 <div className="p-4 space-y-3 text-sm bg-white"  style={{ maxHeight: '500px', overflowY: 'auto' }}>
+                  {(() => {
+                    const clustered = selectedReport.reports && selectedReport.reports.length > 0;
+                    const totalReports = selectedReport.reportStrength || (clustered ? selectedReport.reports.length : 1);
+                    const currentReport = clustered
+                      ? selectedReport.reports[Math.min(clusterIndex, selectedReport.reports.length - 1)]
+                      : selectedReport;
+                    const lastUpdated = selectedReport.latestTimestamp
+                      ? new Date(selectedReport.latestTimestamp).toLocaleString()
+                      : (selectedReport.formatted_timestamp || selectedReport.timestamp || selectedReport.updated_at || selectedReport.created_at || 'Unknown');
+                    const likelihoodDisplay = selectedReport.likelihoodScore || selectedReport.likelihood || selectedReport.confidence || 'N/A';
+
+                    return (
+                      <div className="grid grid-cols-1 gap-2">
+                        <div className="flex items-start space-x-2">
+                          <span className="text-gray-500">Report Strength:</span>
+                          <span className="font-bold text-red-700">{`${totalReports} user${totalReports === 1 ? '' : 's'}`}</span>
+                        </div>
+                        {clustered && (
+                          <div className="flex items-center justify-between bg-gray-50 rounded-lg px-3 py-2 border border-gray-200">
+                            <div className="flex flex-col">
+                              <span className="text-xs text-gray-500">Viewing report</span>
+                              <span className="text-sm font-semibold text-gray-900">{`${clusterIndex + 1} of ${selectedReport.reports.length}`}</span>
+                            </div>
+                            <div className="flex items-center space-x-2">
+                              <button
+                                disabled={clusterIndex === 0}
+                                onClick={() => setClusterIndex((i) => Math.max(0, i - 1))}
+                                className={`px-3 py-1 rounded-full text-sm font-medium ${clusterIndex === 0 ? 'bg-gray-200 text-gray-500 cursor-not-allowed' : 'bg-white text-gray-700 border border-gray-300 hover:bg-gray-100'}`}
+                              >
+                                Prev
+                              </button>
+                              <button
+                                disabled={clusterIndex >= selectedReport.reports.length - 1}
+                                onClick={() => setClusterIndex((i) => Math.min(selectedReport.reports.length - 1, i + 1))}
+                                className={`px-3 py-1 rounded-full text-sm font-medium ${clusterIndex >= selectedReport.reports.length - 1 ? 'bg-gray-200 text-gray-500 cursor-not-allowed' : 'bg-white text-gray-700 border border-gray-300 hover:bg-gray-100'}`}
+                              >
+                                Next
+                              </button>
+                            </div>
+                          </div>
+                        )}
+                        <div className="flex items-start space-x-2">
+                          <span className="text-gray-500">Last Updated:</span>
+                          <span className="font-medium text-gray-900">{lastUpdated}</span>
+                        </div>
+                        <div className="flex items-start space-x-2">
+                          <span className="text-gray-500">Likelihood:</span>
+                          <span className="font-semibold text-gray-900">{likelihoodDisplay}</span>
+                        </div>
+                        {clustered && currentReport?.reporter && (
+                          <div className="flex items-start space-x-2">
+                            <span className="text-gray-500">This report:</span>
+                            <span className="font-medium text-gray-900">{currentReport.reporter}</span>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })()}
+
                   {/* Reporter Info */}
                   <div className="flex items-start space-x-2">
                     <span className="text-gray-500">Reporter:</span>
-                    <span className="font-medium text-gray-900">{selectedReport.reporter}</span>
+                    <span className="font-medium text-gray-900">
+                      {(selectedReport.reports && selectedReport.reports.length > 0
+                        ? selectedReport.reports[Math.min(clusterIndex, selectedReport.reports.length - 1)]
+                        : selectedReport)?.reporter}
+                    </span>
                   </div>
 
                   {/* Cause */}
                   <div className="flex items-start space-x-2">
                     <span className="text-gray-500">Cause:</span>
-                    <span className="font-medium text-gray-900">{selectedReport.cause_of_fire || 'Hayssjshs'}</span>
+                    <span className="font-medium text-gray-900">
+                      {(selectedReport.reports && selectedReport.reports.length > 0
+                        ? selectedReport.reports[Math.min(clusterIndex, selectedReport.reports.length - 1)]
+                        : selectedReport)?.cause_of_fire || 'Hayssjshs'}
+                    </span>
                   </div>
 
                   {/* Fire Alarm Level */}

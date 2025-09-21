@@ -81,6 +81,95 @@ const Sdashboard = () => {
     return computed || '1st Alarm';
   };
 
+  // AI-Assisted Duplicate Report Consolidation
+  const haversineDistanceMeters = (lat1, lon1, lat2, lon2) => {
+    const toRad = (value) => (value * Math.PI) / 180;
+    const R = 6371000; // meters
+    const dLat = toRad(lat2 - lat1);
+    const dLon = toRad(lon2 - lon1);
+    const a =
+      Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+      Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) *
+      Math.sin(dLon / 2) * Math.sin(dLon / 2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    return R * c;
+  };
+
+  const clusterReports = (reports = []) => {
+    const consolidated = [];
+    const getTimestampMs = (report) => {
+      const candidates = [
+        report?.updated_at,
+        report?.timestamp,
+        report?.created_at
+      ];
+      for (const c of candidates) {
+        if (c) {
+          const t = new Date(c).getTime();
+          if (!isNaN(t)) return t;
+        }
+      }
+      return null;
+    };
+
+    reports.forEach((report) => {
+      const lat = parseFloat(report.latitude);
+      const lng = parseFloat(report.longitude);
+      if (isNaN(lat) || isNaN(lng)) return;
+
+      const tsMs = getTimestampMs(report);
+      const reportDate = tsMs ? new Date(tsMs) : null;
+
+      let matchedIndex = -1;
+      consolidated.some((cluster, idx) => {
+        const dist = haversineDistanceMeters(
+          lat,
+          lng,
+          parseFloat(cluster.latitude),
+          parseFloat(cluster.longitude)
+        );
+        if (dist > 50) return false;
+
+        if (reportDate && cluster.latestTimestamp) {
+          const diffMinutes = Math.abs(reportDate.getTime() - cluster.latestTimestamp.getTime()) / 60000;
+          if (diffMinutes <= 10) {
+            matchedIndex = idx;
+            return true;
+          }
+        }
+        return false;
+      });
+
+      if (matchedIndex !== -1) {
+        const cluster = consolidated[matchedIndex];
+        cluster.reports.push(report);
+        cluster.reportStrength = (cluster.reportStrength || 1) + 1;
+
+        const currentLatest = cluster.latestTimestamp;
+        const shouldUpdateRep = reportDate && (!currentLatest || reportDate > currentLatest);
+        if (shouldUpdateRep) {
+          cluster.representativeReport = report;
+          cluster.latitude = report.latitude;
+          cluster.longitude = report.longitude;
+        }
+
+        if (reportDate && (!currentLatest || reportDate > currentLatest)) {
+          cluster.latestTimestamp = reportDate;
+        }
+      } else {
+        consolidated.push({
+          ...report,
+          reports: [report],
+          reportStrength: 1,
+          representativeReport: report,
+          latestTimestamp: reportDate
+        });
+      }
+    });
+
+    return consolidated;
+  };
+
   const isNoFireNoSmoke = (report) => {
     const pred = (report?.prediction || '').toLowerCase();
     const smoke = (report?.smoke_detection || '').toLowerCase();
@@ -111,6 +200,7 @@ const Sdashboard = () => {
   const [currentStationId, setCurrentStationId] = useState(null);
   const [assignedReports, setAssignedReports] = useState([]); // fire reports assigned to this station
   const [selectedAssignedReport, setSelectedAssignedReport] = useState(null);
+  const [clusterIndex, setClusterIndex] = useState(0); // For paginating through clustered reports
   const [responders, setResponders] = useState([]); // responders assigned to this station
   const [isNotifying, setIsNotifying] = useState(false);
   const previousReportIdsRef = useRef(new Set());
@@ -754,7 +844,10 @@ const Sdashboard = () => {
         console.log('📌 Directly assigned report IDs:', Array.from(assignedIds));
         console.log('📨 Forwarded report IDs:', Array.from(forwardedIds));
         console.log('📍 Total reports on map (assigned + forwarded):', reportsWithMetadata.map(r => ({ id: r.id, lat: r.latitude, lng: r.longitude, forwarded: r.is_forwarded })));
-        setAssignedReports(reportsWithMetadata);
+        
+        // Cluster reports before setting them
+        const clusteredReports = clusterReports(reportsWithMetadata);
+        setAssignedReports(clusteredReports);
         try {
           // Detect new report IDs compared to last refresh and trigger alert/notification
           const currentIds = new Set(reportsWithMetadata.map(r => String(r.id)));
@@ -1188,6 +1281,44 @@ const Sdashboard = () => {
     return '#6b7280';
   };
 
+  // Generate custom marker icon with badge for clustered reports
+  const getMarkerIconWithBadge = (report) => {
+    const reportStrength = report.reportStrength || 1;
+    const markerColor = getMarkerColor(report);
+    
+    // If only 1 report, use the standard icon
+    if (reportStrength === 1) {
+      return {
+        path: window.google.maps.SymbolPath.CIRCLE,
+        fillColor: markerColor,
+        fillOpacity: 1,
+        strokeColor: '#FFFFFF',
+        strokeWeight: 4,
+        scale: 30,
+      };
+    }
+
+    // Create SVG with badge for multiple reports
+    const svg = `
+      <svg width="60" height="60" xmlns="http://www.w3.org/2000/svg">
+        <!-- Main marker circle -->
+        <circle cx="30" cy="30" r="28" fill="${markerColor}" stroke="#FFFFFF" stroke-width="4"/>
+        <!-- Fire emoji area (centered) -->
+        <text x="30" y="40" font-size="32" text-anchor="middle">🔥</text>
+        <!-- Badge circle in upper right corner -->
+        <circle cx="48" cy="12" r="12" fill="#EF4444" stroke="#FFFFFF" stroke-width="2"/>
+        <!-- Badge text -->
+        <text x="48" y="17" font-size="14" font-weight="bold" text-anchor="middle" fill="#FFFFFF">${reportStrength}</text>
+      </svg>
+    `;
+    
+    return {
+      url: 'data:image/svg+xml;charset=UTF-8,' + encodeURIComponent(svg),
+      scaledSize: new window.google.maps.Size(60, 60),
+      anchor: new window.google.maps.Point(30, 30)
+    };
+  };
+
   return (
     <div className="relative">
       {/* Alert Indicator - Shows when there are unread assignment notifications */}
@@ -1508,21 +1639,16 @@ const Sdashboard = () => {
             const lat = parseFloat(latVal);
             const lng = parseFloat(lngVal);
             if (isNaN(lat) || isNaN(lng)) return null;
-            const color = getMarkerColor(report);
+            const customIcon = getMarkerIconWithBadge(report);
+            const hasBadge = (report.reportStrength || 1) > 1;
+            
             return (
               <Marker
                 key={`assigned-${report.id}`}
                 position={{ lat, lng }}
                 title={`Assigned: ${report.address || report.geotag_location || 'Fire Report'}`}
-                icon={{
-                  path: window.google.maps.SymbolPath.CIRCLE,
-                  fillColor: color,
-                  fillOpacity: 1,
-                  strokeColor: '#ffffff',
-                  strokeWeight: 4,
-                  scale: 30
-                }}
-                label={{ text: '🔥', fontSize: '32px' }}
+                icon={customIcon}
+                label={hasBadge ? undefined : { text: '🔥', fontSize: '32px' }}
                 zIndex={4000}
                 onClick={() => {
                   setSelectedAssignedReport({
@@ -1530,6 +1656,7 @@ const Sdashboard = () => {
                     latitude: lat,
                     longitude: lng
                   });
+                  setClusterIndex(0); // Reset to first report in cluster
                   // Center map on clicked fire report
                   setMapCenter({ lat, lng });
                 }}
@@ -1538,86 +1665,140 @@ const Sdashboard = () => {
           })}
 
           {/* Info window for selected assigned report (matches admin layout) */}
-          {selectedAssignedReport && (
+          {selectedAssignedReport && (() => {
+            const currentReport = selectedAssignedReport.reports && selectedAssignedReport.reports.length > 0
+              ? selectedAssignedReport.reports[clusterIndex] || selectedAssignedReport.reports[0]
+              : selectedAssignedReport;
+            const reportCount = selectedAssignedReport.reportStrength || 1;
+            const hasMultipleReports = reportCount > 1;
+            
+            return (
             <InfoWindow
               position={{
                 lat: parseFloat(selectedAssignedReport.latitude),
                 lng: parseFloat(selectedAssignedReport.longitude)
               }}
-              onCloseClick={() => setSelectedAssignedReport(null)}
+              onCloseClick={() => {
+                setSelectedAssignedReport(null);
+                setClusterIndex(0);
+              }}
             >
               <div className="p-3 max-w-sm">
-                <h3 className="font-bold text-lg mb-2 text-red-600">🔥 Fire Report</h3>
+                <div className="flex items-center justify-between mb-2">
+                  <h3 className="font-bold text-lg text-red-600">🔥 Fire Report</h3>
+                  {hasMultipleReports && (
+                    <div className="flex items-center space-x-1 bg-red-50 px-2 py-1 rounded border border-red-200">
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (clusterIndex > 0) setClusterIndex(clusterIndex - 1);
+                        }}
+                        disabled={clusterIndex === 0}
+                        className={`px-1 py-0.5 rounded text-xs font-bold ${
+                          clusterIndex === 0
+                            ? 'bg-gray-200 text-gray-400 cursor-not-allowed'
+                            : 'bg-red-600 text-white hover:bg-red-700'
+                        }`}
+                      >
+                        ←
+                      </button>
+                      <span className="text-xs font-semibold text-red-700 px-1">
+                        {clusterIndex + 1}/{reportCount}
+                      </span>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (clusterIndex < reportCount - 1) setClusterIndex(clusterIndex + 1);
+                        }}
+                        disabled={clusterIndex >= reportCount - 1}
+                        className={`px-1 py-0.5 rounded text-xs font-bold ${
+                          clusterIndex >= reportCount - 1
+                            ? 'bg-gray-200 text-gray-400 cursor-not-allowed'
+                            : 'bg-red-600 text-white hover:bg-red-700'
+                        }`}
+                      >
+                        →
+                      </button>
+                    </div>
+                  )}
+                </div>
+                
+                {hasMultipleReports && (
+                  <div className="mb-3 p-2 bg-blue-50 border border-blue-200 rounded text-xs">
+                    <p className="text-blue-800 font-semibold">📊 Cluster: {reportCount} reports</p>
+                  </div>
+                )}
                 
                 {/* Show forwarding information if this report was forwarded */}
-                {selectedAssignedReport.is_forwarded && (
+                {currentReport.is_forwarded && (
                   <div className="mb-3 p-2 bg-amber-50 border border-amber-200 rounded">
                     <p className="text-xs font-semibold text-amber-800 mb-1">📨 Forwarded Report</p>
-                    {selectedAssignedReport.original_assignee && (
+                    {currentReport.original_assignee && (
                       <p className="text-xs text-amber-700 mb-1">
-                        <strong>Originally assigned to:</strong> {selectedAssignedReport.original_assignee.name}
+                        <strong>Originally assigned to:</strong> {currentReport.original_assignee.name}
                       </p>
                     )}
-                    {selectedAssignedReport.forwarding_note && (
+                    {currentReport.forwarding_note && (
                       <p className="text-xs text-amber-700">
-                        <strong>Note:</strong> {selectedAssignedReport.forwarding_note}
+                        <strong>Note:</strong> {currentReport.forwarding_note}
                       </p>
                     )}
-                    {selectedAssignedReport.forwarded_at && (
+                    {currentReport.forwarded_at && (
                       <p className="text-xs text-amber-600 mt-1">
-                        Forwarded: {new Date(selectedAssignedReport.forwarded_at).toLocaleString()}
+                        Forwarded: {new Date(currentReport.forwarded_at).toLocaleString()}
                       </p>
                     )}
                   </div>
                 )}
                 {/* Show assignment note for directly assigned reports */}
-                {!selectedAssignedReport.is_forwarded && selectedAssignedReport.assignment_note && (
+                {!currentReport.is_forwarded && currentReport.assignment_note && (
                   <div className="mb-3 p-2 bg-slate-50 border border-slate-200 rounded">
                     <p className="text-xs font-semibold text-slate-800 mb-1">📝 Assignment Note</p>
-                    <p className="text-xs text-slate-700">{selectedAssignedReport.assignment_note}</p>
+                    <p className="text-xs text-slate-700">{currentReport.assignment_note}</p>
                   </div>
                 )}
                 
                 <div className="space-y-2 text-sm">
-                  {selectedAssignedReport.reporter && (
-                    <p><strong>Reporter:</strong> {selectedAssignedReport.reporter}</p>
+                  {currentReport.reporter && (
+                    <p><strong>Reporter:</strong> {currentReport.reporter}</p>
                   )}
-                  {(selectedAssignedReport.cause_of_fire || selectedAssignedReport.cause) && (
-                    <p><strong>Cause:</strong> {selectedAssignedReport.cause_of_fire || selectedAssignedReport.cause}</p>
+                  {(currentReport.cause_of_fire || currentReport.cause) && (
+                    <p><strong>Cause:</strong> {currentReport.cause_of_fire || currentReport.cause}</p>
                   )}
-                <p><strong>Fire Alarm Level:</strong> <span className="ml-1 px-2 py-1 rounded text-xs font-semibold bg-red-100 text-red-800">{resolveAlarmLevel(selectedAssignedReport)}</span></p>
-                  {(selectedAssignedReport.prediction || selectedAssignedReport.confidence) && (
-                    <p><strong>AI Fire Analysis:</strong> <span className={`ml-1 px-2 py-1 rounded text-xs font-semibold ${selectedAssignedReport.prediction === 'Fire' ? 'bg-red-100 text-red-800' : 'bg-orange-100 text-orange-800'}`}>{selectedAssignedReport.prediction || 'Unknown'}{selectedAssignedReport.confidence ? ` (${selectedAssignedReport.confidence})` : ''}</span></p>
+                <p><strong>Fire Alarm Level:</strong> <span className="ml-1 px-2 py-1 rounded text-xs font-semibold bg-red-100 text-red-800">{resolveAlarmLevel(currentReport)}</span></p>
+                  {(currentReport.prediction || currentReport.confidence) && (
+                    <p><strong>AI Fire Analysis:</strong> <span className={`ml-1 px-2 py-1 rounded text-xs font-semibold ${currentReport.prediction === 'Fire' ? 'bg-red-100 text-red-800' : 'bg-orange-100 text-orange-800'}`}>{currentReport.prediction || 'Unknown'}{currentReport.confidence ? ` (${currentReport.confidence})` : ''}</span></p>
                   )}
-                  {(selectedAssignedReport.smoke_detection || selectedAssignedReport.smoke_confidence) && (
+                  {(currentReport.smoke_detection || currentReport.smoke_confidence) && (
                     <p>
                       <strong>Smoke Analysis:</strong>{' '}
-                      {selectedAssignedReport.smoke_detection || 'Smoke'}
-                      {selectedAssignedReport.smoke_confidence ? ` (${selectedAssignedReport.smoke_confidence})` : ''}
+                      {currentReport.smoke_detection || 'Smoke'}
+                      {currentReport.smoke_confidence ? ` (${currentReport.smoke_confidence})` : ''}
                     </p>
                   )}
-                  {selectedAssignedReport.structure && (
-                    <p><strong>AI Structure Analysis:</strong> {selectedAssignedReport.structure}{selectedAssignedReport.structure_confidence ? ` (${selectedAssignedReport.structure_confidence})` : ''}</p>
+                  {currentReport.structure && (
+                    <p><strong>AI Structure Analysis:</strong> {currentReport.structure}{currentReport.structure_confidence ? ` (${currentReport.structure_confidence})` : ''}</p>
                   )}
                   {(() => {
-                    const structures = cleanStructuresValue(selectedAssignedReport.number_of_structures_on_fire || selectedAssignedReport.structures_affected);
+                    const structures = cleanStructuresValue(currentReport.number_of_structures_on_fire || currentReport.structures_affected);
                     return structures != null ? (
                       <p><strong>Structures Affected:</strong> {structures} structure(s)</p>
                     ) : null;
                   })()}
-                  <p><strong>Location:</strong> {selectedAssignedReport.address || selectedAssignedReport.geotag_location || 'Not specified'}</p>
-                  {(selectedAssignedReport.formatted_timestamp || selectedAssignedReport.timestamp) && (
-                    <p><strong>Reported:</strong> {selectedAssignedReport.formatted_timestamp || selectedAssignedReport.timestamp}</p>
+                  <p><strong>Location:</strong> {currentReport.address || currentReport.geotag_location || 'Not specified'}</p>
+                  {(currentReport.formatted_timestamp || currentReport.timestamp) && (
+                    <p><strong>Reported:</strong> {currentReport.formatted_timestamp || currentReport.timestamp}</p>
                   )}
-                  {selectedAssignedReport.image_url && (
+                  {currentReport.image_url && (
                     <div className="mt-2">
-                      <img src={selectedAssignedReport.image_url} alt="Fire report" className="w-full h-32 object-cover rounded" />
+                      <img src={currentReport.image_url} alt="Fire report" className="w-full h-32 object-cover rounded" />
                     </div>
                   )}
                 </div>
               </div>
             </InfoWindow>
-          )}
+            );
+          })()}
 
           {/* Station Info Window */}
           {showStationInfoWindow && stationLocation && (

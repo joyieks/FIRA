@@ -12,6 +12,7 @@ const Station_Overview = () => {
   const [selectedReport, setSelectedReport] = useState(null);
   const [showReportModal, setShowReportModal] = useState(false);
   const [reports, setReports] = useState([]);
+  const [clusterIndex, setClusterIndex] = useState(0); // For paginating through clustered reports
   const [isLoading, setIsLoading] = useState(true);
   const [openStatusDropdown, setOpenStatusDropdown] = useState(null);
   const [openAssignDropdown, setOpenAssignDropdown] = useState(null);
@@ -87,6 +88,95 @@ const Station_Overview = () => {
     if (numStructures >= 8) return '2nd Alarm';
     if (numStructures >= 4) return '1st Alarm';
     return 'Under Control';
+  };
+
+  // AI-Assisted Duplicate Report Consolidation
+  const haversineDistanceMeters = (lat1, lon1, lat2, lon2) => {
+    const toRad = (value) => (value * Math.PI) / 180;
+    const R = 6371000; // meters
+    const dLat = toRad(lat2 - lat1);
+    const dLon = toRad(lon2 - lon1);
+    const a =
+      Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+      Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) *
+      Math.sin(dLon / 2) * Math.sin(dLon / 2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    return R * c;
+  };
+
+  const clusterReports = (reports = []) => {
+    const consolidated = [];
+    const getTimestampMs = (report) => {
+      const candidates = [
+        report?.timestamp,
+        report?.created_at,
+        report?.updated_at
+      ];
+      for (const c of candidates) {
+        if (c) {
+          const t = new Date(c).getTime();
+          if (!isNaN(t)) return t;
+        }
+      }
+      return null;
+    };
+
+    reports.forEach((report) => {
+      const lat = parseFloat(report.latitude);
+      const lng = parseFloat(report.longitude);
+      if (isNaN(lat) || isNaN(lng)) return;
+
+      const tsMs = getTimestampMs(report);
+      const reportDate = tsMs ? new Date(tsMs) : null;
+
+      let matchedIndex = -1;
+      consolidated.some((cluster, idx) => {
+        const dist = haversineDistanceMeters(
+          lat,
+          lng,
+          parseFloat(cluster.latitude),
+          parseFloat(cluster.longitude)
+        );
+        if (dist > 50) return false;
+
+        if (reportDate && cluster.latestTimestamp) {
+          const diffMinutes = Math.abs(reportDate.getTime() - cluster.latestTimestamp.getTime()) / 60000;
+          if (diffMinutes <= 10) {
+            matchedIndex = idx;
+            return true;
+          }
+        }
+        return false;
+      });
+
+      if (matchedIndex !== -1) {
+        const cluster = consolidated[matchedIndex];
+        cluster.reports.push(report);
+        cluster.reportStrength = (cluster.reportStrength || 1) + 1;
+
+        const currentLatest = cluster.latestTimestamp;
+        const shouldUpdateRep = reportDate && (!currentLatest || reportDate > currentLatest);
+        if (shouldUpdateRep) {
+          cluster.representativeReport = report;
+          cluster.latitude = report.latitude;
+          cluster.longitude = report.longitude;
+        }
+
+        if (reportDate && (!currentLatest || reportDate > currentLatest)) {
+          cluster.latestTimestamp = reportDate;
+        }
+      } else {
+        consolidated.push({
+          ...report,
+          reports: [report],
+          reportStrength: 1,
+          representativeReport: report,
+          latestTimestamp: reportDate
+        });
+      }
+    });
+
+    return consolidated;
   };
 
   useEffect(() => {
@@ -502,40 +592,75 @@ const Station_Overview = () => {
       
       console.log('📊 Current status:', oldStatus, '→ New status:', newStatus);
       
-      // Optimistic UI update
+      // Check if this report is part of a cluster
+      let reportsToUpdate = [reportId];
+      try {
+        const reportRes = await fetch(`${API_URL}/get_reports`);
+        if (reportRes.ok) {
+          const allReports = await reportRes.json();
+          const clustered = clusterReports(allReports);
+          const cluster = clustered.find(c => {
+            if (c.reports && c.reports.length > 0) {
+              return c.reports.some(r => String(r.id) === String(reportId));
+            }
+            return String(c.id) === String(reportId);
+          });
+          
+          if (cluster && cluster.reports && cluster.reports.length > 1) {
+            console.log(`📊 Found cluster with ${cluster.reports.length} reports - updating all`);
+            reportsToUpdate = cluster.reports.map(r => r.id);
+          }
+        }
+      } catch (clusterErr) {
+        console.warn('⚠️ Could not check for cluster, updating single report:', clusterErr);
+      }
+      
+      console.log(`📋 Updating status for ${reportsToUpdate.length} report(s):`, reportsToUpdate);
+      
+      // Optimistic UI update for all reports in cluster (reports state contains individual reports)
       setReports(prev => prev.map(report => 
-        report.id === reportId ? { ...report, status: newStatus } : report
+        reportsToUpdate.includes(report.id) 
+          ? { ...report, status: newStatus } 
+          : report
       ));
       setOpenStatusDropdown(null);
 
-      console.log('📡 Sending status update to API...');
-      const res = await fetch(`${API_URL}/update_report_status`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Accept': 'application/json'
-        },
-        body: JSON.stringify({ 
-          report_id: reportId, 
-          status: newStatus,
-          updated_at: new Date().toISOString() // Force timestamp update
+      // Update all reports in the cluster
+      console.log('📡 Sending status update to API for all reports in cluster...');
+      const updatePromises = reportsToUpdate.map(id => 
+        fetch(`${API_URL}/update_report_status`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Accept': 'application/json'
+          },
+          body: JSON.stringify({ 
+            report_id: id, 
+            status: newStatus,
+            updated_at: new Date().toISOString()
+          })
         })
-      });
-
-      if (!res.ok) {
-        console.error('❌ API request failed:', res.status);
-        // Revert change on failure
-        setReports(prev => prev.map(report =>
-          report.id === reportId ? { ...report, status: report.status || 'On Going' } : report
+      );
+      
+      const results = await Promise.all(updatePromises);
+      const failed = results.filter(r => !r.ok);
+      
+      if (failed.length > 0) {
+        console.error('❌ Some API requests failed:', failed.length);
+        // Revert changes on failure
+        setReports(prev => prev.map(report => 
+          reportsToUpdate.includes(report.id) 
+            ? { ...report, status: oldStatus } 
+            : report
         ));
         let err = '';
-        try { const j = await res.clone().json(); err = j?.error || j?.message || JSON.stringify(j); }
-        catch (_) { try { err = await res.text(); } catch (_) { err = `HTTP ${res.status}`; } }
-        alert(`Failed to update status: ${err}`);
+        try { const j = await failed[0].clone().json(); err = j?.error || j?.message || JSON.stringify(j); }
+        catch (_) { try { err = await failed[0].text(); } catch (_) { err = `HTTP ${failed[0].status}`; } }
+        alert(`Failed to update status for ${failed.length} report(s): ${err}`);
         return;
       }
 
-      console.log('✅ Status updated successfully in database');
+      console.log(`✅ Status updated successfully for ${reportsToUpdate.length} report(s) in database`);
 
       // ✅ SUCCESS - Now create notifications for all users
       try {
@@ -834,6 +959,40 @@ const Station_Overview = () => {
     }
 
     // 3. Get all admins and create notifications
+    // If status is "Fire Out", check if this report is part of a cluster
+    // If clustered, create notifications for ALL reports in the cluster to trigger summary reports for each
+    let reportsToNotify = [reportId];
+    
+    if (newStatus === 'Fire Out') {
+      try {
+        console.log('🔥 Fire Out detected - checking for cluster...');
+        // Fetch all reports to check for clustering
+        const reportRes = await fetch(`${API_URL}/get_reports`);
+        if (reportRes.ok) {
+          const allReports = await reportRes.json();
+          // Find the cluster this report belongs to
+          const clustered = clusterReports(allReports);
+          const cluster = clustered.find(c => {
+            if (c.reports && c.reports.length > 0) {
+              return c.reports.some(r => String(r.id) === String(reportId));
+            }
+            return String(c.id) === String(reportId);
+          });
+          
+          if (cluster && cluster.reports && cluster.reports.length > 1) {
+            console.log(`📊 Found cluster with ${cluster.reports.length} reports`);
+            // Get all report IDs in the cluster
+            reportsToNotify = cluster.reports.map(r => r.id);
+            console.log('📋 Report IDs in cluster:', reportsToNotify);
+          } else {
+            console.log('ℹ️ Report is not part of a cluster (or cluster has only 1 report)');
+          }
+        }
+      } catch (clusterErr) {
+        console.warn('⚠️ Could not check for cluster, using single report:', clusterErr);
+      }
+    }
+    
     console.log('🔍 Fetching admin users...');
     const { data: admins, error: adminFetchError } = await supabase
       .from('admin_users')
@@ -846,18 +1005,24 @@ const Station_Overview = () => {
     console.log('📊 Found admins:', admins?.length || 0, admins);
 
     if (admins && admins.length > 0) {
-      const adminNotifications = admins.map(admin => ({
-        user_id: admin.id,
-        user_type: 'admin',
-        title: `🔄 Report Status Changed to ${newStatus}`,
-        message: message,
-        type: 'fire_alert',
-        priority: 'high',
-        related_report_id: String(reportId),
-        is_read: false
-      }));
+      // Create notifications for each report in the cluster (or just the single report)
+      const adminNotifications = [];
+      admins.forEach(admin => {
+        reportsToNotify.forEach(notifyReportId => {
+          adminNotifications.push({
+            user_id: admin.id,
+            user_type: 'admin',
+            title: `🔄 Report Status Changed to ${newStatus}`,
+            message: message,
+            type: 'fire_alert',
+            priority: 'high',
+            related_report_id: String(notifyReportId),
+            is_read: false
+          });
+        });
+      });
 
-      console.log('📝 Inserting admin notifications:', adminNotifications);
+      console.log(`📝 Inserting ${adminNotifications.length} admin notification(s) for ${reportsToNotify.length} report(s)...`);
       
       const { data: insertedAdminNotifs, error: adminInsertError } = await supabase
         .from('notifications')
@@ -868,8 +1033,11 @@ const Station_Overview = () => {
         console.error('❌ Error creating admin notifications:', adminInsertError);
         console.error('❌ Error details:', JSON.stringify(adminInsertError, null, 2));
       } else {
-        console.log(`✅ Created ${admins.length} admin notification(s)`);
+        console.log(`✅ Created ${adminNotifications.length} admin notification(s) for ${reportsToNotify.length} report(s)`);
         console.log('✅ Inserted notifications:', insertedAdminNotifs);
+        if (reportsToNotify.length > 1) {
+          console.log(`📊 Cluster detected: Created summary report triggers for all ${reportsToNotify.length} reports in cluster`);
+        }
       }
     } else {
       console.warn('⚠️ No admins found to notify');
@@ -881,8 +1049,11 @@ const Station_Overview = () => {
     setOpenAssignDropdown(null);
   };
 
+  // Cluster reports first, then filter
+  const clusteredReports = clusterReports(reports);
+
   // Filter reports based on search
-  const filteredReports = reports.filter(report => {
+  const filteredReports = clusteredReports.filter(report => {
     return report.location.toLowerCase().includes(searchQuery.toLowerCase()) ||
            report.description.toLowerCase().includes(searchQuery.toLowerCase());
   });
@@ -908,6 +1079,7 @@ const Station_Overview = () => {
 
   const handleReportClick = (report) => {
     setSelectedReport(report);
+    setClusterIndex(0); // Reset to first report in cluster
     setShowReportModal(true);
   };
 
@@ -915,8 +1087,12 @@ const Station_Overview = () => {
   useEffect(() => {
     const loadAssigned = async () => {
       try {
-        if (!showReportModal || !selectedReport?.id) { setAssignedResponders([]); return; }
-        const rid = String(selectedReport.id);
+        if (!showReportModal || !selectedReport) { setAssignedResponders([]); return; }
+        const currentReport = selectedReport.reports && selectedReport.reports.length > 0
+          ? selectedReport.reports[clusterIndex] || selectedReport.reports[0]
+          : selectedReport;
+        if (!currentReport?.id) { setAssignedResponders([]); return; }
+        const rid = String(currentReport.id);
         const { data: assigns, error } = await supabase
           .from('report_assignments')
           .select('assignee_id')
@@ -937,26 +1113,31 @@ const Station_Overview = () => {
     loadAssigned();
 
     // Real-time subscription for assignment changes to this specific report
-    if (showReportModal && selectedReport?.id) {
-      const rid = String(selectedReport.id);
-      const assignmentSubscription = supabase
-        .channel(`report_assignments_${rid}`)
-        .on('postgres_changes', {
-          event: '*',
-          schema: 'public',
-          table: 'report_assignments',
-          filter: `report_id=eq.${rid}`
-        }, (payload) => {
-          console.log('🔔 Real-time: Assignment change detected for report', rid, payload);
-          loadAssigned();
-        })
-        .subscribe();
+    if (showReportModal && selectedReport) {
+      const currentReport = selectedReport.reports && selectedReport.reports.length > 0
+        ? selectedReport.reports[clusterIndex] || selectedReport.reports[0]
+        : selectedReport;
+      if (currentReport?.id) {
+        const rid = String(currentReport.id);
+        const assignmentSubscription = supabase
+          .channel(`report_assignments_${rid}`)
+          .on('postgres_changes', {
+            event: '*',
+            schema: 'public',
+            table: 'report_assignments',
+            filter: `report_id=eq.${rid}`
+          }, (payload) => {
+            console.log('🔔 Real-time: Assignment change detected for report', rid, payload);
+            loadAssigned();
+          })
+          .subscribe();
 
-      return () => {
-        assignmentSubscription.unsubscribe();
-      };
+        return () => {
+          assignmentSubscription.unsubscribe();
+        };
+      }
     }
-  }, [showReportModal, selectedReport?.id]);
+  }, [showReportModal, selectedReport, clusterIndex]);
 
   // Commit responder assignments for a report (adds/removes to match current selection)
   const commitResponderAssignments = async (reportId) => {
@@ -1387,7 +1568,14 @@ const Station_Overview = () => {
                         </div>
                       </td>
                       <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-900">
-                        {report.reporter || 'Unknown'}
+                        <div className="flex items-center space-x-2">
+                          <span>{report.reporter || 'Unknown'}</span>
+                          {report.reportStrength > 1 && (
+                            <span className="inline-flex items-center justify-center px-2 py-1 text-xs font-bold text-white bg-red-600 rounded-full min-w-[24px]">
+                              {report.reportStrength}
+                            </span>
+                          )}
+                        </div>
                       </td>
                       <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-900">
                         {report.location}
@@ -1492,10 +1680,20 @@ const Station_Overview = () => {
           )}
 
           {/* Detailed Report Modal */}
-          {showReportModal && selectedReport && (
+          {showReportModal && selectedReport && (() => {
+            const currentReport = selectedReport.reports && selectedReport.reports.length > 0
+              ? selectedReport.reports[clusterIndex] || selectedReport.reports[0]
+              : selectedReport;
+            const reportCount = selectedReport.reportStrength || 1;
+            const hasMultipleReports = reportCount > 1;
+            
+            return (
             <div 
               className="fixed inset-0 backdrop-blur-md bg-white/20 flex items-center justify-center p-4 z-[9999]"
-              onClick={() => setShowReportModal(false)}
+              onClick={() => {
+                setShowReportModal(false);
+                setClusterIndex(0);
+              }}
             >
               <div 
                 className="bg-white rounded-xl shadow-xl max-w-4xl w-full max-h-[90vh] overflow-y-auto"
@@ -1503,45 +1701,100 @@ const Station_Overview = () => {
               >
                 <div className="p-8">
                   <div className="flex justify-between items-center mb-8">
-                    <h3 className="text-2xl font-bold text-gray-900">Emergency Report Details</h3>
+                    <div className="flex items-center space-x-3">
+                      <h3 className="text-2xl font-bold text-gray-900">Emergency Report Details</h3>
+                      {hasMultipleReports && (
+                        <div className="flex items-center space-x-2 bg-red-50 px-3 py-1 rounded-full border border-red-200">
+                          <span className="text-xs font-semibold text-red-700">
+                            Report {clusterIndex + 1} of {reportCount}
+                          </span>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              if (clusterIndex > 0) setClusterIndex(clusterIndex - 1);
+                            }}
+                            disabled={clusterIndex === 0}
+                            className={`px-2 py-1 rounded text-xs font-bold ${
+                              clusterIndex === 0
+                                ? 'bg-gray-200 text-gray-400 cursor-not-allowed'
+                                : 'bg-red-600 text-white hover:bg-red-700'
+                            }`}
+                          >
+                            ← Prev
+                          </button>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              if (clusterIndex < reportCount - 1) setClusterIndex(clusterIndex + 1);
+                            }}
+                            disabled={clusterIndex >= reportCount - 1}
+                            className={`px-2 py-1 rounded text-xs font-bold ${
+                              clusterIndex >= reportCount - 1
+                                ? 'bg-gray-200 text-gray-400 cursor-not-allowed'
+                                : 'bg-red-600 text-white hover:bg-red-700'
+                            }`}
+                          >
+                            Next →
+                          </button>
+                        </div>
+                      )}
+                    </div>
                     <button
-                      onClick={() => setShowReportModal(false)}
+                      onClick={() => {
+                        setShowReportModal(false);
+                        setClusterIndex(0);
+                      }}
                       className="text-gray-400 hover:text-gray-600"
                     >
                       <FiX size={28} />
                     </button>
                   </div>
+                  
+                  {hasMultipleReports && (
+                    <div className="mb-4 p-3 bg-blue-50 border-l-4 border-blue-500 rounded">
+                      <div className="flex items-center space-x-2 mb-2">
+                        <span className="text-lg font-bold text-blue-900">📊 Cluster Summary</span>
+                        <span className="px-3 py-1 bg-red-600 text-white text-xs font-bold rounded-full">
+                          {reportCount} Reports
+                        </span>
+                      </div>
+                      <p className="text-sm text-blue-800">
+                        This incident has been reported by <strong>{reportCount} users</strong> within 50 meters and 10 minutes.
+                        Use the navigation buttons above to view each individual report.
+                      </p>
+                    </div>
+                  )}
 
                   <div className="space-y-8">
                     {/* Picture */}
                     <div className="bg-gray-100 rounded-lg p-6 text-center">
                       <img 
-                        src={selectedReport.picture} 
+                        src={currentReport.picture} 
                         alt="Emergency Scene" 
                         className="w-full h-64 object-cover rounded-lg"
                       />
                     </div>
 
                     {/* Show forwarding information if this report was forwarded */}
-                    {selectedReport.is_forwarded && (
+                    {currentReport.is_forwarded && (
                       <div className="bg-amber-50 border-2 border-amber-300 rounded-lg p-4">
                         <div className="flex items-start gap-2">
                           <span className="text-2xl">📨</span>
                           <div className="flex-1">
                             <h4 className="text-lg font-bold text-amber-900 mb-2">Forwarded Report</h4>
-                            {selectedReport.original_assignee && (
+                            {currentReport.original_assignee && (
                               <p className="text-base text-amber-800 mb-2">
-                                <strong>Originally assigned to:</strong> {selectedReport.original_assignee.name}
+                                <strong>Originally assigned to:</strong> {currentReport.original_assignee.name}
                               </p>
                             )}
-                            {selectedReport.forwarding_note && (
+                            {currentReport.forwarding_note && (
                               <p className="text-base text-amber-800 mb-2">
-                                <strong>Note:</strong> {selectedReport.forwarding_note}
+                                <strong>Note:</strong> {currentReport.forwarding_note}
                               </p>
                             )}
-                            {selectedReport.forwarded_at && (
+                            {currentReport.forwarded_at && (
                               <p className="text-sm text-amber-700">
-                                Forwarded: {new Date(selectedReport.forwarded_at).toLocaleString()}
+                                Forwarded: {new Date(currentReport.forwarded_at).toLocaleString()}
                               </p>
                             )}
                           </div>
@@ -1553,7 +1806,7 @@ const Station_Overview = () => {
                     <div className="flex justify-between items-center">
                       <div>
                         <label className="block text-lg font-medium text-gray-700 mb-2">Location:</label>
-                        <span className="text-xl font-semibold text-gray-900">{selectedReport.location}</span>
+                        <span className="text-xl font-semibold text-gray-900">{currentReport.location}</span>
                       </div>
                     <div className="flex items-center gap-3">
                       <div className="relative">
@@ -1579,34 +1832,34 @@ const Station_Overview = () => {
                           </div>
                         )}
                       </div>
-                      <span className="text-lg text-gray-500">{selectedReport.minutesAgo} min ago</span>
+                      <span className="text-lg text-gray-500">{currentReport.minutesAgo} min ago</span>
                     </div>
                     </div>
 
                     {/* Description */}
                     <div>
                       <label className="block text-lg font-medium text-gray-700 mb-3">Description:</label>
-                      <p className="text-gray-900 leading-relaxed text-lg">{selectedReport.description}</p>
+                      <p className="text-gray-900 leading-relaxed text-lg">{currentReport.description}</p>
                     </div>
 
                     {/* Status and Alarm Levels (match admin view) */}
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
                       <div>
                         <label className="block text-lg font-medium text-gray-700 mb-3">Current Status:</label>
-                        <span className={`px-4 py-3 rounded-md text-base font-medium border ${getStatusColor(selectedReport.status)}`}>
-                          {selectedReport.status}
+                        <span className={`px-4 py-3 rounded-md text-base font-medium border ${getStatusColor(currentReport.status)}`}>
+                          {currentReport.status}
                         </span>
                       </div>
                       <div>
                         <label className="block text-lg font-medium text-gray-700 mb-3">Suggested Alarm Level:</label>
-                        <span className={`px-3 py-3 rounded-md text-base font-medium border ${getAlarmLevelColor(selectedReport.suggestedAlarmLevel)}`}>
-                          {cleanAlarmLevel(selectedReport.suggestedAlarmLevel)}
+                        <span className={`px-3 py-3 rounded-md text-base font-medium border ${getAlarmLevelColor(currentReport.suggestedAlarmLevel)}`}>
+                          {cleanAlarmLevel(currentReport.suggestedAlarmLevel)}
                         </span>
                       </div>
                       <div>
                         <label className="block text-lg font-medium text-gray-700 mb-3">Final Alarm Level:</label>
-                        <span className={`px-3 py-3 rounded-md text-base font-medium border ${getAlarmLevelColor(selectedReport.finalAlarmLevel)}`}>
-                          {selectedReport.finalAlarmLevel}
+                        <span className={`px-3 py-3 rounded-md text-base font-medium border ${getAlarmLevelColor(currentReport.finalAlarmLevel)}`}>
+                          {currentReport.finalAlarmLevel}
                         </span>
                       </div>
                     </div>
@@ -1614,7 +1867,10 @@ const Station_Overview = () => {
 
                   <div className="mt-8 flex justify-end">
                     <button
-                      onClick={() => setShowReportModal(false)}
+                      onClick={() => {
+                        setShowReportModal(false);
+                        setClusterIndex(0);
+                      }}
                       className="px-8 py-4 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors font-medium text-lg"
                     >
                       Close
@@ -1623,7 +1879,8 @@ const Station_Overview = () => {
                 </div>
               </div>
             </div>
-          )}
+            );
+          })()}
         </div>
       </div>
     </div>

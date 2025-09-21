@@ -91,23 +91,148 @@ export const updateMessageWithAIAnalysis = async (messageId, analysis, supabaseC
       console.log('🤖 AI Update: Successfully updated message with AI analysis');
       
       // If message has a report_id, also update the fire report's recommended_alarm_level
+      // Check if this report is part of a cluster and update all reports in the cluster
       const reportId = updatedMessage?.[0]?.report_id;
       if (reportId && suggestedAlarmLevel) {
-        console.log('🤖 AI Update: Message linked to report', reportId, '- updating fire report recommended_alarm_level');
+        console.log('🤖 AI Update: Message linked to report', reportId, '- checking for cluster and updating recommended_alarm_level');
         try {
-          const response = await fetch('https://fire-detection-api-production-f55b.up.railway.app/update_report_alarm_level', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              report_id: reportId,
-              recommended_alarm_level: suggestedAlarmLevel
-            })
-          });
+          // Fetch all reports to check for clustering
+          const allReportsRes = await fetch('https://fire-detection-api-production-f55b.up.railway.app/get_reports');
+          if (allReportsRes.ok) {
+            const allReports = await allReportsRes.json();
+            
+            // Cluster reports (using the same logic as in the dashboards)
+            const haversineDistanceMeters = (lat1, lon1, lat2, lon2) => {
+              const toRad = (value) => (value * Math.PI) / 180;
+              const R = 6371000; // meters
+              const dLat = toRad(lat2 - lat1);
+              const dLon = toRad(lon2 - lon1);
+              const a =
+                Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+                Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) *
+                Math.sin(dLon / 2) * Math.sin(dLon / 2);
+              const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+              return R * c;
+            };
 
-          if (response.ok) {
-            console.log('🤖 AI Update: Successfully updated fire report recommended_alarm_level');
+            const clusterReports = (reports = []) => {
+              const consolidated = [];
+              const getTimestampMs = (report) => {
+                const candidates = [report?.timestamp, report?.created_at, report?.updated_at];
+                for (const c of candidates) {
+                  if (c) {
+                    const t = new Date(c).getTime();
+                    if (!isNaN(t)) return t;
+                  }
+                }
+                return null;
+              };
+
+              reports.forEach((report) => {
+                const lat = parseFloat(report.latitude);
+                const lng = parseFloat(report.longitude);
+                if (isNaN(lat) || isNaN(lng)) return;
+
+                const tsMs = getTimestampMs(report);
+                const reportDate = tsMs ? new Date(tsMs) : null;
+
+                let matchedIndex = -1;
+                consolidated.some((cluster, idx) => {
+                  const dist = haversineDistanceMeters(
+                    lat, lng,
+                    parseFloat(cluster.latitude),
+                    parseFloat(cluster.longitude)
+                  );
+                  if (dist > 50) return false;
+
+                  if (reportDate && cluster.latestTimestamp) {
+                    const diffMinutes = Math.abs(reportDate.getTime() - cluster.latestTimestamp.getTime()) / 60000;
+                    if (diffMinutes <= 10) {
+                      matchedIndex = idx;
+                      return true;
+                    }
+                  }
+                  return false;
+                });
+
+                if (matchedIndex !== -1) {
+                  const cluster = consolidated[matchedIndex];
+                  cluster.reports.push(report);
+                  cluster.reportStrength = (cluster.reportStrength || 1) + 1;
+                  const currentLatest = cluster.latestTimestamp;
+                  const shouldUpdateRep = reportDate && (!currentLatest || reportDate > currentLatest);
+                  if (shouldUpdateRep) {
+                    cluster.representativeReport = report;
+                    cluster.latitude = report.latitude;
+                    cluster.longitude = report.longitude;
+                  }
+                  if (reportDate && (!currentLatest || reportDate > currentLatest)) {
+                    cluster.latestTimestamp = reportDate;
+                  }
+                } else {
+                  consolidated.push({
+                    ...report,
+                    reports: [report],
+                    reportStrength: 1,
+                    representativeReport: report,
+                    latestTimestamp: reportDate
+                  });
+                }
+              });
+
+              return consolidated;
+            };
+
+            const clustered = clusterReports(allReports);
+            const cluster = clustered.find(c => {
+              if (c.reports && c.reports.length > 0) {
+                return c.reports.some(r => String(r.id) === String(reportId));
+              }
+              return String(c.id) === String(reportId);
+            });
+
+            let reportsToUpdate = [reportId];
+            if (cluster && cluster.reports && cluster.reports.length > 1) {
+              console.log(`🤖 AI Update: Found cluster with ${cluster.reports.length} reports - updating all`);
+              reportsToUpdate = cluster.reports.map(r => r.id);
+            }
+
+            // Update all reports in the cluster
+            const updatePromises = reportsToUpdate.map(id =>
+              fetch('https://fire-detection-api-production-f55b.up.railway.app/update_report_alarm_level', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  report_id: id,
+                  recommended_alarm_level: suggestedAlarmLevel
+                })
+              })
+            );
+
+            const results = await Promise.all(updatePromises);
+            const successCount = results.filter(r => r.ok).length;
+            
+            if (successCount === reportsToUpdate.length) {
+              console.log(`🤖 AI Update: Successfully updated recommended_alarm_level for ${reportsToUpdate.length} report(s)`);
+            } else {
+              console.error(`🤖 AI Update: Failed to update ${reportsToUpdate.length - successCount} report(s) out of ${reportsToUpdate.length}`);
+            }
           } else {
-            console.error('🤖 AI Update: Failed to update fire report:', response.status, await response.text());
+            // Fallback: update single report if clustering check fails
+            const response = await fetch('https://fire-detection-api-production-f55b.up.railway.app/update_report_alarm_level', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                report_id: reportId,
+                recommended_alarm_level: suggestedAlarmLevel
+              })
+            });
+
+            if (response.ok) {
+              console.log('🤖 AI Update: Successfully updated fire report recommended_alarm_level');
+            } else {
+              console.error('🤖 AI Update: Failed to update fire report:', response.status, await response.text());
+            }
           }
         } catch (reportError) {
           console.error('🤖 AI Update: Error updating fire report:', reportError);

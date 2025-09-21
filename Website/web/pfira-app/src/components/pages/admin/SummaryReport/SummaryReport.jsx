@@ -4,16 +4,18 @@ import jsPDF from 'jspdf';
 import html2canvas from 'html2canvas';
 import { FiX, FiDownload, FiClock, FiMapPin, FiUser, FiAlertTriangle, FiHome } from 'react-icons/fi';
 
-const SummaryReport = ({ reportId, isOpen, onClose }) => {
+const SummaryReport = ({ reportId, isOpen, onClose, reportQueue = [], currentIndex = 0, onNext, onPrev, onCloseAll }) => {
   const [reportData, setReportData] = useState(null);
   const [stationData, setStationData] = useState(null);
   const [statusHistory, setStatusHistory] = useState([]);
   const [alarmLevelHistory, setAlarmLevelHistory] = useState([]);
   const [loading, setLoading] = useState(true);
   const [downloading, setDownloading] = useState(false);
+  const hasMultipleReports = reportQueue && reportQueue.length > 1;
 
   useEffect(() => {
     if (isOpen && reportId) {
+      setLoading(true);
       fetchReportData();
     }
   }, [isOpen, reportId]);
@@ -348,9 +350,46 @@ const SummaryReport = ({ reportId, isOpen, onClose }) => {
             <div>
               <h2 className="text-xl font-bold text-gray-900">Fire Incident Summary Report</h2>
               <p className="text-gray-600 text-sm">Official Document</p>
+              {hasMultipleReports && (
+                <div className="flex items-center space-x-2 mt-1">
+                  <span className="text-xs font-semibold text-red-600 bg-red-50 px-2 py-1 rounded">
+                    Report {currentIndex + 1} of {reportQueue.length}
+                  </span>
+                  <span className="text-xs text-gray-500">(Cluster Summary)</span>
+                </div>
+              )}
             </div>
           </div>
-          <div className="flex space-x-2">
+          <div className="flex items-center space-x-2">
+            {hasMultipleReports && (
+              <div className="flex items-center space-x-1 bg-red-50 px-2 py-1 rounded border border-red-200 mr-2">
+                <button
+                  onClick={onPrev}
+                  disabled={currentIndex === 0}
+                  className={`px-2 py-1 rounded text-xs font-bold ${
+                    currentIndex === 0
+                      ? 'bg-gray-200 text-gray-400 cursor-not-allowed'
+                      : 'bg-red-600 text-white hover:bg-red-700'
+                  }`}
+                >
+                  ← Prev
+                </button>
+                <span className="text-xs font-semibold text-red-700 px-2">
+                  {currentIndex + 1}/{reportQueue.length}
+                </span>
+                <button
+                  onClick={onNext}
+                  disabled={currentIndex >= reportQueue.length - 1}
+                  className={`px-2 py-1 rounded text-xs font-bold ${
+                    currentIndex >= reportQueue.length - 1
+                      ? 'bg-gray-200 text-gray-400 cursor-not-allowed'
+                      : 'bg-red-600 text-white hover:bg-red-700'
+                  }`}
+                >
+                  Next →
+                </button>
+              </div>
+            )}
             <button
               onClick={downloadPDF}
               disabled={downloading}
@@ -361,7 +400,7 @@ const SummaryReport = ({ reportId, isOpen, onClose }) => {
               <span>{downloading ? 'Generating...' : 'Download PDF'}</span>
             </button>
             <button
-              onClick={onClose}
+              onClick={onCloseAll || onClose}
               className="text-gray-600 hover:text-gray-900 transition-colors p-2"
             >
               <FiX className="w-6 h-6" />

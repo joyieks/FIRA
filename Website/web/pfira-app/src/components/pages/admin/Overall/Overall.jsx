@@ -11,6 +11,7 @@ const Overview = () => {
   const [selectedReport, setSelectedReport] = useState(null);
   const [showReportModal, setShowReportModal] = useState(false);
   const [reports, setReports] = useState([]);
+  const [clusterIndex, setClusterIndex] = useState(0); // For paginating through clustered reports
   const [generalAlarmStates, setGeneralAlarmStates] = useState({});
   const [isLoading, setIsLoading] = useState(true);
   const [lastRefresh, setLastRefresh] = useState(new Date());
@@ -34,6 +35,8 @@ const Overview = () => {
   // Summary report states
   const [showSummaryReport, setShowSummaryReport] = useState(false);
   const [summaryReportId, setSummaryReportId] = useState(null);
+  const [summaryReportQueue, setSummaryReportQueue] = useState([]); // Queue for clustered reports
+  const [currentSummaryIndex, setCurrentSummaryIndex] = useState(0);
 
   // Filter states
   const [statusFilter, setStatusFilter] = useState('all');
@@ -276,6 +279,95 @@ const Overview = () => {
     return 'Under Control';
   };
 
+  // AI-Assisted Duplicate Report Consolidation
+  const haversineDistanceMeters = (lat1, lon1, lat2, lon2) => {
+    const toRad = (value) => (value * Math.PI) / 180;
+    const R = 6371000; // meters
+    const dLat = toRad(lat2 - lat1);
+    const dLon = toRad(lon2 - lon1);
+    const a =
+      Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+      Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) *
+      Math.sin(dLon / 2) * Math.sin(dLon / 2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    return R * c;
+  };
+
+  const clusterReports = (reports = []) => {
+    const consolidated = [];
+    const getTimestampMs = (report) => {
+      const candidates = [
+        report?.timestamp,
+        report?.created_at,
+        report?.updated_at
+      ];
+      for (const c of candidates) {
+        if (c) {
+          const t = new Date(c).getTime();
+          if (!isNaN(t)) return t;
+        }
+      }
+      return null;
+    };
+
+    reports.forEach((report) => {
+      const lat = parseFloat(report.latitude);
+      const lng = parseFloat(report.longitude);
+      if (isNaN(lat) || isNaN(lng)) return;
+
+      const tsMs = getTimestampMs(report);
+      const reportDate = tsMs ? new Date(tsMs) : null;
+
+      let matchedIndex = -1;
+      consolidated.some((cluster, idx) => {
+        const dist = haversineDistanceMeters(
+          lat,
+          lng,
+          parseFloat(cluster.latitude),
+          parseFloat(cluster.longitude)
+        );
+        if (dist > 50) return false;
+
+        if (reportDate && cluster.latestTimestamp) {
+          const diffMinutes = Math.abs(reportDate.getTime() - cluster.latestTimestamp.getTime()) / 60000;
+          if (diffMinutes <= 10) {
+            matchedIndex = idx;
+            return true;
+          }
+        }
+        return false;
+      });
+
+      if (matchedIndex !== -1) {
+        const cluster = consolidated[matchedIndex];
+        cluster.reports.push(report);
+        cluster.reportStrength = (cluster.reportStrength || 1) + 1;
+
+        const currentLatest = cluster.latestTimestamp;
+        const shouldUpdateRep = reportDate && (!currentLatest || reportDate > currentLatest);
+        if (shouldUpdateRep) {
+          cluster.representativeReport = report;
+          cluster.latitude = report.latitude;
+          cluster.longitude = report.longitude;
+        }
+
+        if (reportDate && (!currentLatest || reportDate > currentLatest)) {
+          cluster.latestTimestamp = reportDate;
+        }
+      } else {
+        consolidated.push({
+          ...report,
+          reports: [report],
+          reportStrength: 1,
+          representativeReport: report,
+          latestTimestamp: reportDate
+        });
+      }
+    });
+
+    return consolidated;
+  };
+
   // Auto-refresh every 30 seconds
   useEffect(() => {
     fetchReports(); // Initial fetch
@@ -303,10 +395,70 @@ const Overview = () => {
         // Check if this is a Fire Out notification
         if (message.includes('fire out') || message.includes('fire is out')) {
           const reportId = notification.related_report_id || notification.fire_report_id;
-          if (reportId && !showSummaryReport) {
-            console.log('🔥 Fire Out notification received, opening summary report for report:', reportId);
-            setSummaryReportId(reportId);
-            setShowSummaryReport(true);
+          if (reportId) {
+            console.log('🔥 Fire Out notification received for report:', reportId);
+            
+            // Check if this report is part of a cluster by fetching all recent Fire Out notifications
+            // and clustering them
+            try {
+              const { data: recentFireOutNotifs } = await supabase
+                .from('notifications')
+                .select('related_report_id, created_at')
+                .eq('user_type', 'admin')
+                .ilike('message', '%fire out%')
+                .order('created_at', { ascending: false })
+                .limit(50); // Check last 50 notifications
+              
+              if (recentFireOutNotifs && recentFireOutNotifs.length > 0) {
+                // Get all report IDs from recent Fire Out notifications
+                const fireOutReportIds = recentFireOutNotifs
+                  .map(n => n.related_report_id)
+                  .filter(Boolean)
+                  .slice(0, 10); // Check last 10 reports
+                
+                // Fetch these reports and check if they form a cluster
+                const reportRes = await fetch('https://fire-detection-api-production-f55b.up.railway.app/get_reports');
+                if (reportRes.ok) {
+                  const allReports = await reportRes.json();
+                  const fireOutReports = allReports.filter(r => 
+                    fireOutReportIds.includes(String(r.id)) && 
+                    (r.status || '').toString().toLowerCase().includes('fire out')
+                  );
+                  
+                  if (fireOutReports.length > 0) {
+                    const clustered = clusterReports(fireOutReports);
+                    const cluster = clustered.find(c => {
+                      if (c.reports && c.reports.length > 0) {
+                        return c.reports.some(r => String(r.id) === String(reportId));
+                      }
+                      return String(c.id) === String(reportId);
+                    });
+                    
+                    if (cluster && cluster.reports && cluster.reports.length > 1) {
+                      console.log(`📊 Found cluster with ${cluster.reports.length} reports - queueing all for summary reports`);
+                      // Queue all reports in the cluster for summary reports
+                      const reportIds = cluster.reports.map(r => r.id);
+                      setSummaryReportQueue(reportIds);
+                      setCurrentSummaryIndex(0);
+                      setSummaryReportId(reportIds[0]);
+                      setShowSummaryReport(true);
+                      return;
+                    }
+                  }
+                }
+              }
+            } catch (clusterErr) {
+              console.warn('⚠️ Could not check for cluster, showing single report:', clusterErr);
+            }
+            
+            // If not clustered or cluster check failed, show single report
+            if (!showSummaryReport) {
+              console.log('🔥 Opening summary report for single report:', reportId);
+              setSummaryReportId(reportId);
+              setSummaryReportQueue([]);
+              setCurrentSummaryIndex(0);
+              setShowSummaryReport(true);
+            }
           }
         }
       })
@@ -462,13 +614,21 @@ const Overview = () => {
       }
     };
 
-    if (selectedReport?.id) {
-      loadAssignedResponders(selectedReport.id);
+    if (selectedReport) {
+      const currentReport = selectedReport.reports && selectedReport.reports.length > 0
+        ? selectedReport.reports[clusterIndex] || selectedReport.reports[0]
+        : selectedReport;
+      if (currentReport?.id) {
+        loadAssignedResponders(currentReport.id);
+      } else {
+        setAssignedResponders([]);
+        setIsLoadingAssigned(false);
+      }
     } else {
       setAssignedResponders([]);
       setIsLoadingAssigned(false);
     }
-  }, [selectedReport?.id]);
+  }, [selectedReport, clusterIndex]);
 
   // Load recent AI suggestions from chat messages
   // Optimized: Only query messages that have a report_id (fire report context)
@@ -653,8 +813,11 @@ const Overview = () => {
     return map[suggested] || suggested;
   };
 
+  // Cluster reports first, then filter
+  const clusteredReports = clusterReports(reports);
+
   // Filter reports based on search and filters
-  const filteredReports = reports.filter(report => {
+  const filteredReports = clusteredReports.filter(report => {
     // Search filter
     const matchesSearch = report.location.toLowerCase().includes(searchQuery.toLowerCase()) ||
                          report.reporter.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -701,6 +864,7 @@ const Overview = () => {
 
   const handleReportClick = (report) => {
     setSelectedReport(report);
+    setClusterIndex(0); // Reset to first report in cluster
     setShowReportModal(true);
   };
 
@@ -867,39 +1031,78 @@ const Overview = () => {
   // Update final alarm level in database
   const updateFinalAlarmLevel = async (reportId, newAlarmLevel) => {
     try {
-      const response = await fetch(`${API_URL}/update_final_alarm_level`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          report_id: reportId,
-          final_alarm_level: newAlarmLevel
-        })
-      });
-      
-      if (response.ok) {
-        // Update local state
-        setReports(prev => prev.map(report => 
-          report.id === reportId ? { ...report, finalAlarmLevel: newAlarmLevel } : report
-        ));
-        console.log(`Final alarm level updated for report ${reportId}: ${newAlarmLevel}`);
-        
-        // Notify assigned responders about the alarm level change
-        try {
-          console.log('🔔 Notifying responders about alarm level change...');
+      // Check if this report is part of a cluster
+      let reportsToUpdate = [reportId];
+      try {
+        const reportRes = await fetch(`${API_URL}/get_reports`);
+        if (reportRes.ok) {
+          const allReports = await reportRes.json();
+          const clustered = clusterReports(allReports);
+          const cluster = clustered.find(c => {
+            if (c.reports && c.reports.length > 0) {
+              return c.reports.some(r => String(r.id) === String(reportId));
+            }
+            return String(c.id) === String(reportId);
+          });
           
-          // Get all responders assigned to this report
+          if (cluster && cluster.reports && cluster.reports.length > 1) {
+            console.log(`📊 Found cluster with ${cluster.reports.length} reports - updating alarm level for all`);
+            reportsToUpdate = cluster.reports.map(r => r.id);
+          }
+        }
+      } catch (clusterErr) {
+        console.warn('⚠️ Could not check for cluster, updating single report:', clusterErr);
+      }
+      
+      console.log(`📋 Updating alarm level for ${reportsToUpdate.length} report(s):`, reportsToUpdate);
+      
+      // Update all reports in the cluster
+      const updatePromises = reportsToUpdate.map(id =>
+        fetch(`${API_URL}/update_final_alarm_level`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            report_id: id,
+            final_alarm_level: newAlarmLevel
+          })
+        })
+      );
+      
+      const results = await Promise.all(updatePromises);
+      const failed = results.filter(r => !r.ok);
+      
+      if (failed.length > 0) {
+        console.error(`❌ Failed to update alarm level for ${failed.length} report(s)`);
+        alert(`Failed to update alarm level for ${failed.length} report(s). Please try again.`);
+        return;
+      }
+      
+      // Update local state for all reports in cluster (reports state contains individual reports)
+      setReports(prev => prev.map(report => 
+        reportsToUpdate.includes(report.id)
+          ? { ...report, finalAlarmLevel: newAlarmLevel }
+          : report
+      ));
+      console.log(`Final alarm level updated for ${reportsToUpdate.length} report(s): ${newAlarmLevel}`);
+        
+        // Notify assigned responders about the alarm level change for all reports in cluster
+        try {
+          console.log('🔔 Notifying responders about alarm level change for all reports in cluster...');
+          
+          // Get all responders assigned to any report in the cluster
+          const reportIdsStr = reportsToUpdate.map(id => String(id));
           const { data: assignedNotifications, error } = await supabase
             .from('responder_notifications')
             .select('id, responder_id, fire_report_id, status')
-            .eq('fire_report_id', String(reportId))
+            .in('fire_report_id', reportIdsStr)
             .in('status', ['pending', 'accepted', 'completed']);
           
           if (error) {
             console.error('❌ Error fetching assigned responders:', error);
           } else if (assignedNotifications && assignedNotifications.length > 0) {
-            console.log(`📋 Found ${assignedNotifications.length} responder(s) to notify`);
+            console.log(`📋 Found ${assignedNotifications.length} responder notification(s) to update for ${reportsToUpdate.length} report(s)`);
             
             // Update each responder's notification with alarm level change info
             const updatePromises = assignedNotifications.map(notification => {
@@ -1031,11 +1234,6 @@ const Overview = () => {
         } catch (adminNotifError) {
           console.error('❌ Error creating admin notification:', adminNotifError);
         }
-        
-      } else {
-        console.error('Failed to update final alarm level');
-        alert('Failed to update final alarm level. Please try again.');
-      }
     } catch (error) {
       console.error('Error updating final alarm level:', error);
       alert('Error updating final alarm level. Please try again.');
@@ -1326,7 +1524,14 @@ const Overview = () => {
                           </div>
                         </td>
                         <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-900">
-                          {report.reporter}
+                          <div className="flex items-center space-x-2">
+                            <span>{report.reporter}</span>
+                            {report.reportStrength > 1 && (
+                              <span className="inline-flex items-center justify-center px-2 py-1 text-xs font-bold text-white bg-red-600 rounded-full min-w-[24px]">
+                                {report.reportStrength}
+                              </span>
+                            )}
+                          </div>
                         </td>
                         <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-900">
                           {report.location}
@@ -1484,14 +1689,61 @@ const Overview = () => {
         )}
 
         {/* Detailed Report Modal */}
-        {showReportModal && selectedReport && (
+        {showReportModal && selectedReport && (() => {
+          const currentReport = selectedReport.reports && selectedReport.reports.length > 0
+            ? selectedReport.reports[clusterIndex] || selectedReport.reports[0]
+            : selectedReport;
+          const reportCount = selectedReport.reportStrength || 1;
+          const hasMultipleReports = reportCount > 1;
+          
+          return (
           <div className="fixed inset-0 backdrop-blur-md bg-white/20 flex items-center justify-center p-4 z-50">
             <div className="bg-white rounded-xl shadow-xl max-w-4xl w-full max-h-[90vh] overflow-y-auto">
               <div className="p-8">
                 <div className="flex justify-between items-center mb-8">
-                  <h3 className="text-2xl font-bold text-gray-900">Emergency Report Details</h3>
+                  <div className="flex items-center space-x-3">
+                    <h3 className="text-2xl font-bold text-gray-900">Emergency Report Details</h3>
+                    {hasMultipleReports && (
+                      <div className="flex items-center space-x-2 bg-red-50 px-3 py-1 rounded-full border border-red-200">
+                        <span className="text-xs font-semibold text-red-700">
+                          Report {clusterIndex + 1} of {reportCount}
+                        </span>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            if (clusterIndex > 0) setClusterIndex(clusterIndex - 1);
+                          }}
+                          disabled={clusterIndex === 0}
+                          className={`px-2 py-1 rounded text-xs font-bold ${
+                            clusterIndex === 0
+                              ? 'bg-gray-200 text-gray-400 cursor-not-allowed'
+                              : 'bg-red-600 text-white hover:bg-red-700'
+                          }`}
+                        >
+                          ← Prev
+                        </button>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            if (clusterIndex < reportCount - 1) setClusterIndex(clusterIndex + 1);
+                          }}
+                          disabled={clusterIndex >= reportCount - 1}
+                          className={`px-2 py-1 rounded text-xs font-bold ${
+                            clusterIndex >= reportCount - 1
+                              ? 'bg-gray-200 text-gray-400 cursor-not-allowed'
+                              : 'bg-red-600 text-white hover:bg-red-700'
+                          }`}
+                        >
+                          Next →
+                        </button>
+                      </div>
+                    )}
+                  </div>
                   <button
-                    onClick={() => setShowReportModal(false)}
+                    onClick={() => {
+                      setShowReportModal(false);
+                      setClusterIndex(0);
+                    }}
                     className="text-gray-400 hover:text-gray-600"
                   >
                     <FiX size={28} />
@@ -1499,10 +1751,26 @@ const Overview = () => {
                 </div>
 
                 <div className="space-y-8">
+                  {/* Cluster Summary (if multiple reports) */}
+                  {hasMultipleReports && (
+                    <div className="bg-blue-50 border-l-4 border-blue-500 p-4 rounded">
+                      <div className="flex items-center space-x-2 mb-2">
+                        <span className="text-lg font-bold text-blue-900">📊 Cluster Summary</span>
+                        <span className="px-3 py-1 bg-red-600 text-white text-xs font-bold rounded-full">
+                          {reportCount} Reports
+                        </span>
+                      </div>
+                      <p className="text-sm text-blue-800">
+                        This incident has been reported by <strong>{reportCount} users</strong> within 50 meters and 10 minutes.
+                        Use the navigation buttons above to view each individual report.
+                      </p>
+                    </div>
+                  )}
+
                   {/* Picture */}
                   <div className="bg-gray-100 rounded-lg p-6 text-center">
                     <img 
-                      src={selectedReport.picture} 
+                      src={currentReport.picture} 
                       alt="Fire Scene" 
                       className="w-full h-64 object-cover rounded-lg"
                       onError={(e) => {
@@ -1515,11 +1783,11 @@ const Overview = () => {
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
                     <div>
                       <label className="block text-lg font-medium text-gray-700 mb-2">Reporter:</label>
-                      <span className="text-xl font-semibold text-gray-900">{selectedReport.reporter}</span>
+                      <span className="text-xl font-semibold text-gray-900">{currentReport.reporter}</span>
                     </div>
                     <div>
                       <label className="block text-lg font-medium text-gray-700 mb-2">Reported:</label>
-                      <span className="text-lg text-gray-500">{selectedReport.minutesAgo} min ago</span>
+                      <span className="text-lg text-gray-500">{currentReport.minutesAgo} min ago</span>
                     </div>
                   </div>
 
@@ -1527,10 +1795,10 @@ const Overview = () => {
                   <div>
                     <label className="block text-lg font-medium text-gray-700 mb-2">Location:</label>
                     <div className="space-y-2">
-                      <span className="text-xl font-semibold text-gray-900">{selectedReport.location}</span>
-                      {selectedReport.geotag_location && selectedReport.geotag_location !== selectedReport.location && (
+                      <span className="text-xl font-semibold text-gray-900">{currentReport.location}</span>
+                      {currentReport.geotag_location && currentReport.geotag_location !== currentReport.location && (
                         <div className="text-sm text-gray-500">
-                          Coordinates: {selectedReport.geotag_location}
+                          Coordinates: {currentReport.geotag_location}
                         </div>
                       )}
                     </div>
@@ -1539,7 +1807,7 @@ const Overview = () => {
                   {/* Cause of Fire */}
                   <div>
                     <label className="block text-lg font-medium text-gray-700 mb-3">Cause of Fire:</label>
-                    <p className="text-gray-900 leading-relaxed text-lg">{selectedReport.description}</p>
+                    <p className="text-gray-900 leading-relaxed text-lg">{currentReport.description}</p>
                   </div>
 
                   {/* AI Analysis Results */}
@@ -1549,26 +1817,26 @@ const Overview = () => {
                       <div>
                         <label className="block text-sm font-medium text-blue-700 mb-2">Fire Detection:</label>
                         <span className="text-lg font-semibold text-blue-900">
-                          {selectedReport.prediction} ({selectedReport.confidence})
+                          {currentReport.prediction} ({currentReport.confidence})
                         </span>
                       </div>
                       <div>
                         <label className="block text-sm font-medium text-blue-700 mb-2">Structure Type:</label>
                         <span className="text-lg font-semibold text-blue-900">
-                          {selectedReport.structure}
-                          {selectedReport.structure_confidence ? ` (${selectedReport.structure_confidence})` : ''}
+                          {currentReport.structure}
+                          {currentReport.structure_confidence ? ` (${currentReport.structure_confidence})` : ''}
                         </span>
                       </div>
                       <div>
                         <label className="block text-sm font-medium text-blue-700 mb-2">Smoke Intensity:</label>
                         <span className="text-lg font-semibold text-blue-900">
-                          {selectedReport.smokeDetection} {selectedReport.smokeConfidence ? `(${selectedReport.smokeConfidence})` : ''}
+                          {currentReport.smokeDetection} {currentReport.smokeConfidence ? `(${currentReport.smokeConfidence})` : ''}
                         </span>
                       </div>
                       <div>
                         <label className="block text-sm font-medium text-blue-700 mb-2">Structures Affected:</label>
                         <span className="text-lg font-semibold text-blue-900">
-                          {selectedReport.numberOfStructures || 'Unknown'}
+                          {currentReport.numberOfStructures || 'Unknown'}
                         </span>
                       </div>
                     </div>
@@ -1578,20 +1846,20 @@ const Overview = () => {
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
                     <div>
                       <label className="block text-lg font-medium text-gray-700 mb-3">Current Status:</label>
-                      <span className={`px-4 py-3 rounded-md text-base font-medium border ${getStatusColor(selectedReport.status)}`}>
-                        {selectedReport.status}
+                      <span className={`px-4 py-3 rounded-md text-base font-medium border ${getStatusColor(currentReport.status)}`}>
+                        {currentReport.status}
                       </span>
                     </div>
                     <div>
                       <label className="block text-lg font-medium text-gray-700 mb-3">Suggested Alarm Level:</label>
-                      <span className={`px-3 py-3 rounded-md text-base font-medium border ${getAlarmLevelColor(selectedReport.suggestedAlarmLevel)}`}>
-                        {cleanAlarmLevel(selectedReport.suggestedAlarmLevel)}
+                      <span className={`px-3 py-3 rounded-md text-base font-medium border ${getAlarmLevelColor(currentReport.suggestedAlarmLevel)}`}>
+                        {cleanAlarmLevel(currentReport.suggestedAlarmLevel)}
                       </span>
                     </div>
                     <div>
                       <label className="block text-lg font-medium text-gray-700 mb-3">Final Alarm Level:</label>
-                      <span className={`px-3 py-3 rounded-md text-base font-medium border ${getAlarmLevelColor(selectedReport.finalAlarmLevel)}`}>
-                        {selectedReport.finalAlarmLevel}
+                      <span className={`px-3 py-3 rounded-md text-base font-medium border ${getAlarmLevelColor(currentReport.finalAlarmLevel)}`}>
+                        {currentReport.finalAlarmLevel}
                       </span>
                     </div>
                   </div>
@@ -1600,10 +1868,10 @@ const Overview = () => {
                   <div>
                     <label className="block text-lg font-medium text-gray-700 mb-2">Full Timestamp:</label>
                     <span className="text-lg text-gray-900">
-                      {selectedReport.timestamp ? 
-                        (selectedReport.timestamp.includes('T') || selectedReport.timestamp.includes('Z') ? 
-                          new Date(selectedReport.timestamp).toLocaleString() : 
-                          selectedReport.timestamp) : 
+                      {currentReport.timestamp ? 
+                        (currentReport.timestamp.includes('T') || currentReport.timestamp.includes('Z') ? 
+                          new Date(currentReport.timestamp).toLocaleString() : 
+                          currentReport.timestamp) : 
                         'Unknown'}
                     </span>
                   </div>
@@ -1635,7 +1903,10 @@ const Overview = () => {
 
                 <div className="mt-8 flex justify-end">
                   <button
-                    onClick={() => setShowReportModal(false)}
+                    onClick={() => {
+                      setShowReportModal(false);
+                      setClusterIndex(0);
+                    }}
                     className="px-8 py-4 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors font-medium text-lg"
                   >
                     Close
@@ -1644,7 +1915,8 @@ const Overview = () => {
               </div>
             </div>
           </div>
-        )}
+          );
+        })()}
 
         {/* Alarm Level Change Confirmation Modal */}
         {showAlarmConfirm && (
@@ -1822,9 +2094,33 @@ const Overview = () => {
         <SummaryReport
           reportId={summaryReportId}
           isOpen={showSummaryReport}
+          reportQueue={summaryReportQueue}
+          currentIndex={currentSummaryIndex}
+          onNext={() => {
+            if (currentSummaryIndex < summaryReportQueue.length - 1) {
+              const nextIndex = currentSummaryIndex + 1;
+              setCurrentSummaryIndex(nextIndex);
+              setSummaryReportId(summaryReportQueue[nextIndex]);
+            }
+          }}
+          onPrev={() => {
+            if (currentSummaryIndex > 0) {
+              const prevIndex = currentSummaryIndex - 1;
+              setCurrentSummaryIndex(prevIndex);
+              setSummaryReportId(summaryReportQueue[prevIndex]);
+            }
+          }}
           onClose={() => {
             setShowSummaryReport(false);
             setSummaryReportId(null);
+            setSummaryReportQueue([]);
+            setCurrentSummaryIndex(0);
+          }}
+          onCloseAll={() => {
+            setShowSummaryReport(false);
+            setSummaryReportId(null);
+            setSummaryReportQueue([]);
+            setCurrentSummaryIndex(0);
           }}
         />
       </div>
