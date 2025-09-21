@@ -267,19 +267,35 @@ const Overview = () => {
   };
 
   // Update status in database
-  const updateReportStatus = async (reportId, newStatus) => {
+  const updateReportStatus = async (reportId, newStatus, reason = null) => {
     try {
-      console.log('[updateReportStatus] Sending status update', { reportId, newStatus, url: `${API_URL}/update_report_status` });
+      console.log('[updateReportStatus] Sending status update', { reportId, newStatus, reason, url: `${API_URL}/update_report_status` });
+      
+      const payload = {
+        report_id: reportId,
+        status: newStatus
+      };
+      
+      // Add reason and cancelled_by if status is Cancelled
+      if (newStatus === 'Cancelled') {
+        if (!reason || !reason.trim()) {
+          alert('Please provide a reason for cancellation.');
+          return;
+        }
+        payload.reason = reason.trim();
+        payload.cancelled_by = 'Admin User';
+        payload.cancelled_by_role = 'admin';
+      }
+      
+      console.log('[updateReportStatus] Payload being sent:', payload);
+      
       const response = await fetch(`${API_URL}/update_report_status`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'Accept': 'application/json',
         },
-        body: JSON.stringify({
-          report_id: reportId,
-          status: newStatus
-        })
+        body: JSON.stringify(payload)
       });
       
       if (response.ok) {
@@ -289,6 +305,58 @@ const Overview = () => {
         ));
         console.log(`Status updated for report ${reportId}: ${newStatus}`);
       } else {
+        // If cancelling and primary endpoint failed, try dedicated cancel endpoint
+        if (newStatus === 'Cancelled') {
+          console.log('Primary endpoint failed for cancellation, trying dedicated cancel endpoint...');
+          try {
+            const cancelResponse = await fetch(`${API_URL}/cancel_report/${reportId}`, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'Accept': 'application/json',
+              },
+              body: JSON.stringify({
+                reason: reason,
+                cancellation_reason: reason,
+                cancelled_by: 'Admin User',
+                cancelled_by_role: 'admin',
+                cancellation_timestamp: new Date().toLocaleString('en-US', { 
+                  year: 'numeric', 
+                  month: 'long', 
+                  day: 'numeric', 
+                  hour: 'numeric', 
+                  minute: '2-digit' 
+                }).replace('AM', 'am').replace('PM', 'pm')
+              })
+            });
+            
+            if (cancelResponse.ok) {
+              // Update local state
+              setReports(prev => prev.map(report => 
+                report.id === reportId ? { 
+                  ...report, 
+                  status: newStatus,
+                  cancelled_by: 'Admin User',
+                  cancellation_reason: reason,
+                  cancellation_timestamp: new Date().toLocaleString('en-US', { 
+                    year: 'numeric', 
+                    month: 'long', 
+                    day: 'numeric', 
+                    hour: 'numeric', 
+                    minute: '2-digit' 
+                  }).replace('AM', 'am').replace('PM', 'pm')
+                } : report
+              ));
+              console.log(`Report cancelled via dedicated endpoint for report ${reportId}`);
+              return;
+            } else {
+              console.error('Dedicated cancel endpoint also failed:', cancelResponse.status);
+            }
+          } catch (cancelError) {
+            console.error('Error with dedicated cancel endpoint:', cancelError);
+          }
+        }
+        
         let errorText = '';
         try {
           // Try to parse JSON error first
@@ -343,7 +411,16 @@ const Overview = () => {
   // Handle status change
   const handleStatusChange = (reportId, newStatus) => {
     setEditingStatus(prev => ({ ...prev, [reportId]: false }));
-    updateReportStatus(reportId, newStatus);
+    
+    // If cancelling, show the cancel modal instead of direct update
+    if (newStatus === 'Cancelled') {
+      const report = reports.find(r => r.id === reportId);
+      setReportToCancel(report);
+      setCancelReason('');
+      setShowCancelModal(true);
+    } else {
+      updateReportStatus(reportId, newStatus);
+    }
   };
 
   // Handle final alarm level change with confirmation
@@ -379,50 +456,33 @@ const Overview = () => {
       setIsCancelling(true);
       console.log('Admin cancelling report:', reportToCancel.id, 'Reason:', cancelReason);
       
-      const payload = {
-        report_id: reportToCancel.id,
-        status: 'Cancelled',
-        reason: cancelReason,
-        cancelled_by: 'Admin User'
-      };
+      // Use the updateReportStatus function which handles the reason requirement
+      await updateReportStatus(reportToCancel.id, 'Cancelled', cancelReason);
       
-      console.log('Debug - Sending payload to API:', payload);
+      // Update local state with additional cancellation details
+      setReports(prev => prev.map(report => 
+        report.id === reportToCancel.id ? { 
+          ...report, 
+          status: 'Cancelled',
+          cancelled_by: 'Admin User',
+          cancellation_reason: cancelReason,
+          cancellation_timestamp: new Date().toLocaleString('en-US', { 
+            year: 'numeric', 
+            month: 'long', 
+            day: 'numeric', 
+            hour: 'numeric', 
+            minute: '2-digit' 
+          }).replace('AM', 'am').replace('PM', 'pm')
+        } : report
+      ));
       
-      const response = await fetch(`${API_URL}/update_report_status`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Accept': 'application/json',
-        },
-        body: JSON.stringify(payload)
-      });
-
-      if (response.ok) {
-        const responseData = await response.json();
-        console.log('Debug - API response after cancellation:', responseData);
-        
-        // Update local state
-        setReports(prev => prev.map(report => 
-          report.id === reportToCancel.id ? { 
-            ...report, 
-            status: 'Cancelled',
-            cancelled_by: 'Admin User',
-            cancellation_reason: cancelReason
-          } : report
-        ));
-        
-        alert('Report cancelled successfully.');
-        setShowCancelModal(false);
-        setCancelReason('');
-        setReportToCancel(null);
-      } else {
-        const errorData = await response.text();
-        console.error('Failed to cancel report:', response.status, errorData);
-        alert(`Failed to cancel report: ${errorData || 'Please try again.'}`);
-      }
+      alert('Report cancelled successfully.');
+      setShowCancelModal(false);
+      setCancelReason('');
+      setReportToCancel(null);
     } catch (error) {
       console.error('Error cancelling report:', error);
-      alert(`Error cancelling report: ${error.message || 'Please try again.'}`);
+      alert(`Failed to cancel report: ${error.message}`);
     } finally {
       setIsCancelling(false);
     }

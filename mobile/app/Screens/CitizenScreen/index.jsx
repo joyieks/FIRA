@@ -54,30 +54,7 @@ const CitizenScreen = () => {
         paddingBottom: 80 + insets.bottom, // Add space for navbar
       }}
     >
-      {/* Header with current section name */}
-      <View 
-        style={{
-          backgroundColor: '#ffffff',
-          paddingTop: insets.top + 48,
-          paddingBottom: 16,
-          paddingHorizontal: 16,
-          borderBottomWidth: 1,
-          borderBottomColor: '#e5e7eb',
-        }}
-      >
-        <Text 
-          style={{
-            fontSize: 24,
-            fontWeight: 'bold',
-            color: '#1f2937',
-            textAlign: 'center',
-          }}
-        >
-          {TAB_NAMES[activeTab]}
-        </Text>
-      </View>
-      
-      <View style={{ flex: 1 }}>
+      <View style={{ flex: 1, paddingTop: insets.top }}>
         {renderActiveComponent()}
       </View>
       <CNavbarMenu activeTab={activeTab} setActiveTab={setActiveTab} unreadCount={unreadCount} />

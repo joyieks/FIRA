@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { View, Text, TouchableOpacity, Modal, ScrollView, Image, Alert, TextInput, KeyboardAvoidingView, Platform, TouchableWithoutFeedback, Keyboard } from 'react-native';
 import MapView, { Marker } from 'react-native-maps';
 import * as Location from 'expo-location';
@@ -28,6 +28,7 @@ export default function CMap() {
   const [cancelReason, setCancelReason] = useState('');
   const [reportToCancel, setReportToCancel] = useState(null);
   const [isCancelling, setIsCancelling] = useState(false);
+  const [isUpdating, setIsUpdating] = useState(false);
   const [editingReport, setEditingReport] = useState(null);
   const [editData, setEditData] = useState({
     cause: '',
@@ -68,43 +69,37 @@ export default function CMap() {
     })();
   }, []);
 
-  // Fetch reports from API
+  // Fetch reports from API (debounced/guarded)
+  const isMountedRef = useRef(true);
+  const isFetchingRef = useRef(false);
+  const fetchControllerRef = useRef(null);
+  useEffect(() => () => { isMountedRef.current = false; fetchControllerRef.current?.abort?.(); }, []);
+
   const fetchReports = async () => {
+    if (isFetchingRef.current) return; // avoid overlapping fetches
+    isFetchingRef.current = true;
+    fetchControllerRef.current?.abort?.();
+    const controller = new AbortController();
+    fetchControllerRef.current = controller;
     try {
-      console.log('Fetching reports from API...');
       const response = await fetch(GET_REPORTS_URL, {
-        headers: {
-          'Cache-Control': 'no-cache',
-          'Pragma': 'no-cache'
-        }
+        headers: { 'Cache-Control': 'no-cache', 'Pragma': 'no-cache' },
+        signal: controller.signal,
       });
-      
-      if (response.ok) {
-        const data = await response.json();
-        console.log('Fetched reports for map:', data.length);
-        
-        // Filter reports that have valid coordinates AND are not cancelled or fire out
-        const reportsWithCoords = data.filter(report => {
-          const hasCoords = report.latitude && report.longitude && !isNaN(report.latitude) && !isNaN(report.longitude);
-          const statusText = (report.status || '').toString().toLowerCase();
-          const isCancelled = statusText.includes('cancelled') || statusText.includes('canceled');
-          const isFireOut = statusText.includes('fire out');
-          return hasCoords && !isCancelled && !isFireOut;
-        });
-        
-        console.log('Reports with valid coordinates:', reportsWithCoords.length);
-        
-        // Log each report's location for debugging
-        reportsWithCoords.forEach(report => {
-          console.log(`Report ${report.id}: ${report.latitude}, ${report.longitude} - ${report.address || report.geotag_location}`);
-        });
-        
-        setReports(reportsWithCoords);
-      } else {
-        console.error('Failed to fetch reports:', response.status);
-      }
+      if (!response.ok) return;
+      const data = await response.json();
+      const reportsWithCoords = data.filter(report => {
+        const hasCoords = report.latitude && report.longitude && !isNaN(report.latitude) && !isNaN(report.longitude);
+        const statusText = (report.status || '').toString().toLowerCase();
+        const isCancelled = statusText.includes('cancelled') || statusText.includes('canceled');
+        const isFireOut = statusText.includes('fire out');
+        return hasCoords && !isCancelled && !isFireOut;
+      });
+      if (isMountedRef.current) setReports(reportsWithCoords);
     } catch (error) {
-      console.error('Error fetching reports:', error);
+      // swallow fetch errors to avoid UI lock
+    } finally {
+      isFetchingRef.current = false;
     }
   };
 
@@ -112,11 +107,10 @@ export default function CMap() {
   useEffect(() => {
     fetchReports();
     
-    // Set up periodic refresh to catch updates from other screens
+    // Set up periodic refresh (reduced frequency and guarded)
     const refreshInterval = setInterval(() => {
-      console.log('Periodic refresh triggered');
       fetchReports();
-    }, 5000); // Refresh every 5 seconds for faster updates
+    }, 15000); // Refresh every 15 seconds
     
     return () => clearInterval(refreshInterval);
   }, []);
@@ -305,6 +299,7 @@ export default function CMap() {
     }
 
     try {
+      setIsUpdating(true);
       console.log('Updating report:', editingReport.id, editData);
       
       const updatePayload = {
@@ -334,6 +329,8 @@ export default function CMap() {
     } catch (error) {
       console.error('Error updating report:', error);
       Alert.alert('Error', `Error updating report: ${error.message || 'Please try again.'}`);
+    } finally {
+      setIsUpdating(false);
     }
   };
 
@@ -564,7 +561,7 @@ export default function CMap() {
                     <View>
                       <Text className="text-gray-600 text-sm">AI Fire Detection</Text>
                       <Text className="text-gray-800 font-semibold">
-                        Prediction: {selectedReport.prediction}{selectedReport.confidence ? ` (${selectedReport.confidence})` : ''}
+                        Prediction: {selectedReport.prediction}{selectedReport.confidence ? ` (${selectedReport.confidence})` : null}
                       </Text>
                     </View>
                   )}
@@ -580,8 +577,8 @@ export default function CMap() {
                     <View>
                       <Text className="text-gray-600 text-sm">Smoke Analysis</Text>
                       <Text className="text-gray-800 font-semibold">
-                        {selectedReport.smoke_intensity ? `Intensity: ${selectedReport.smoke_intensity}` : ''}
-                        {selectedReport.smoke_confidence ? ` ${selectedReport.smoke_confidence}` : ''}
+                        {selectedReport.smoke_intensity ? `Intensity: ${selectedReport.smoke_intensity}` : null}
+                        {selectedReport.smoke_confidence ? ` ${selectedReport.smoke_confidence}` : null}
                       </Text>
                     </View>
                   )}
@@ -682,14 +679,16 @@ export default function CMap() {
                     <Text className="text-center font-semibold text-gray-700">Cancel</Text>
                   </TouchableOpacity>
                   <TouchableOpacity
-                    className="flex-1 bg-blue-600 rounded-lg p-4"
+                    className={`flex-1 rounded-lg p-4 ${isUpdating ? 'bg-gray-400' : 'bg-blue-600'}`}
                     onPress={updateReport}
-                    disabled={!editData.cause.trim()}
+                    disabled={!editData.cause.trim() || isUpdating}
                     style={{
-                      opacity: !editData.cause.trim() ? 0.6 : 1
+                      opacity: (!editData.cause.trim() || isUpdating) ? 0.6 : 1
                     }}
                   >
-                    <Text className="text-center font-semibold text-white">Update Report</Text>
+                    <Text className="text-center font-semibold text-white">
+                      {isUpdating ? 'Updating...' : 'Update Report'}
+                    </Text>
                   </TouchableOpacity>
                 </View>
               </ScrollView>

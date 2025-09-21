@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { FiUsers, FiUserPlus, FiEdit2, FiUserX, FiSearch, FiLoader, FiEye } from 'react-icons/fi';
 import { supabase } from '../../../../config/supabase';
 import emailjs from '@emailjs/browser';
+import { useOutletContext } from 'react-router-dom';
 
 /*
  * IMPORTANT: Database Schema Requirements
@@ -26,6 +27,9 @@ const cebuLocations = [
 ];
 
 const Suser_Management = () => {
+  // Get station data from context
+  const { stationData } = useOutletContext();
+  
   // Initialize EmailJS
   useEffect(() => {
     emailjs.init('N_WM9SM_s6cRQPVgT');
@@ -84,17 +88,24 @@ const Suser_Management = () => {
     }
   };
 
-  // Get current station ID from localStorage
+  // Get current station ID from context or localStorage fallback
   useEffect(() => {
-    const userData = JSON.parse(localStorage.getItem('userData') || '{}');
-    if (userData.id) {
-      setCurrentStationId(userData.id);
-      console.log('🏢 Current station ID:', userData.id);
+    // First try to get from context
+    if (stationData && stationData.station_name && stationData.station_name !== 'Loading...') {
+      // Get station ID from localStorage as fallback since context doesn't include ID
+      const userData = JSON.parse(localStorage.getItem('userData') || '{}');
+      if (userData.id) {
+        setCurrentStationId(userData.id);
+        console.log('🏢 Current station ID from context + localStorage:', userData.id);
+        console.log('🏢 Station data from context:', stationData);
+      } else {
+        console.error('❌ No station ID found in localStorage');
+        alert('Error: Unable to identify current station. Please log in again.');
+      }
     } else {
-      console.error('❌ No station ID found in userData');
-      alert('Error: Unable to identify current station. Please log in again.');
+      console.log('⏳ Waiting for station data from context...');
     }
-  }, []);
+  }, [stationData]);
 
   useEffect(() => {
     if (currentStationId) {

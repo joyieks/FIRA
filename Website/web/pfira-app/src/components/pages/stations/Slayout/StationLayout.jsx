@@ -15,7 +15,8 @@ const StationLayout = ({ children }) => {
   const [notifications, setNotifications] = useState([]);
   const [stationData, setStationData] = useState({
     station_name: 'Loading...',
-    email: 'Loading...'
+    email: 'Loading...',
+    address: 'Loading...'
   });
   const location = useLocation();
   const profileRef = useRef(null);
@@ -30,40 +31,70 @@ const StationLayout = ({ children }) => {
     try {
       // First try to get from localStorage
       const userData = JSON.parse(localStorage.getItem('userData') || '{}');
+      console.log('🔍 UserData from localStorage:', userData);
       
       if (userData.id) {
+        console.log('🔍 Looking up station with ID:', userData.id);
         // If we have userData, try to fetch from Supabase for latest info
         const { data: stationInfo, error } = await supabase
           .from('station_users')
-          .select('station_name, email')
+          .select('station_name, email, address')
           .eq('id', userData.id)
           .single();
         
+        console.log('🔍 Supabase query result:', { stationInfo, error });
+        
         if (error) {
           console.error('Error fetching station data:', error);
-          // Fallback to localStorage data
-          setStationData({
-            station_name: userData.station_name || 'Station Name',
-            email: userData.email || 'station@email.com'
-          });
+          // Try alternative lookup by email
+          console.log('🔄 Trying alternative lookup by email:', userData.email);
+          const { data: stationByEmail, error: emailError } = await supabase
+            .from('station_users')
+            .select('station_name, email, address')
+            .eq('email', userData.email)
+            .single();
+          
+          console.log('🔍 Email lookup result:', { stationByEmail, emailError });
+          
+          if (emailError) {
+            console.error('Email lookup also failed:', emailError);
+            // Fallback to localStorage data
+            setStationData({
+              station_name: userData.station_name || 'Station Name',
+              email: userData.email || 'station@email.com',
+              address: userData.address || 'Address not specified'
+            });
+          } else if (stationByEmail) {
+            console.log('✅ Found station by email:', stationByEmail);
+            setStationData({
+              station_name: stationByEmail.station_name || 'Station Name',
+              email: stationByEmail.email || 'station@email.com',
+              address: stationByEmail.address || 'Address not specified'
+            });
+          }
         } else if (stationInfo) {
+          console.log('✅ Found station by ID:', stationInfo);
           setStationData({
             station_name: stationInfo.station_name || 'Station Name',
-            email: stationInfo.email || 'station@email.com'
+            email: stationInfo.email || 'station@email.com',
+            address: stationInfo.address || 'Address not specified'
           });
         }
       } else {
+        console.log('❌ No userData.id found, using fallback');
         // Fallback to default values
         setStationData({
           station_name: 'Station Name',
-          email: 'station@email.com'
+          email: 'station@email.com',
+          address: 'Address not specified'
         });
       }
     } catch (error) {
       console.error('Error fetching station data:', error);
       setStationData({
         station_name: 'Station Name',
-        email: 'station@email.com'
+        email: 'station@email.com',
+        address: 'Address not specified'
       });
     }
   };
@@ -106,9 +137,29 @@ const StationLayout = ({ children }) => {
     return () => window.removeEventListener('storage', handleStorageChange);
   }, []);
 
+  // Debug function to check station_users table
+  const debugStationTable = async () => {
+    try {
+      console.log('🔍 Debugging station_users table...');
+      const { data: allStations, error } = await supabase
+        .from('station_users')
+        .select('*');
+      
+      if (error) {
+        console.error('❌ Error fetching all stations:', error);
+      } else {
+        console.log('📊 All stations in database:', allStations);
+        console.log('📊 Total stations:', allStations.length);
+      }
+    } catch (error) {
+      console.error('❌ Debug error:', error);
+    }
+  };
+
   // Fetch station data on component mount
   useEffect(() => {
     fetchStationData();
+    debugStationTable(); // Add debug call
   }, []);
 
   // Handle click outside for dropdowns
@@ -316,7 +367,7 @@ const StationLayout = ({ children }) => {
         </header>
         {/* Main Content Area */}
         <main className="flex-1 overflow-y-auto p-6 bg-gray-50">
-          <Outlet />
+          <Outlet context={{ stationData }} />
         </main>
       </div>
     </div>

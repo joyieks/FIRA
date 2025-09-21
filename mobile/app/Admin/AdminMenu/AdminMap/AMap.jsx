@@ -573,17 +573,23 @@ export default function AMap({ isSidebarOpen = false }) {
                   </View>
 
                   {/* Image */}
-                  {getSafeImageUri(selectedReport.image_url || selectedReport.imageUrl || selectedReport.image || selectedReport.picture) ? (
+                  {selectedReport.image_url && (
                     <View style={[styles.modalSection, { marginTop: 8 }]}>
+                      <Text style={styles.modalLabel}>Photo:</Text>
                       <Image
-                        source={{ uri: getSafeImageUri(selectedReport.image_url || selectedReport.imageUrl || selectedReport.image || selectedReport.picture) }}
+                        source={{ uri: selectedReport.image_url }}
                         defaultSource={Platform.OS === 'ios' ? require('../../../../assets/images/burnhouse.jpg') : undefined}
                         style={styles.modalImage}
                         resizeMode="cover"
-                        onError={() => { /* fallback silently */ }}
+                        onError={(error) => {
+                          console.log('Image load error:', error);
+                        }}
+                        onLoad={() => {
+                          console.log('Image loaded successfully:', selectedReport.image_url);
+                        }}
                       />
                     </View>
-                  ) : null}
+                  )}
                 </ScrollView>
               </>
             )}
@@ -880,5 +886,11 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: '#999',
     fontFamily: 'monospace',
+  },
+  modalImage: {
+    width: '100%',
+    height: 200,
+    borderRadius: 8,
+    marginTop: 8,
   },
 });
