@@ -224,32 +224,79 @@ const LoginComponent = () => {
         return;
       }
 
-      // Check if this user exists in 'responder_users' table
-      const { data: responderData, error: responderError } = await supabase
-        .from('responder_users')
+      // Check if this user exists in 'responders' table
+      // First try by email
+      let { data: responderData, error: responderError } = await supabase
+        .from('responders')
         .select('*')
-        .eq('email', email.toLowerCase())
-        .single();
+        .eq('email', email.toLowerCase());
 
-      if (responderData) {
-        console.log('✅ User found in responder_users table:', responderData);
+      console.log('🔍 Responder search results by email:', { 
+        searchEmail: email.toLowerCase(), 
+        responderData, 
+        responderError: responderError?.message,
+        resultCount: responderData?.length 
+      });
+
+      // If no results by email, try searching by the Supabase Auth user ID
+      if (!responderData || responderData.length === 0) {
+        console.log('🔍 No email match, trying to find by auth user ID:', authData.user.id);
+        const { data: responderByIdData, error: responderByIdError } = await supabase
+          .from('responders')
+          .select('*')
+          .eq('id', authData.user.id)
+          .single();
+          
+        console.log('🔍 Responder search by ID results:', { 
+          searchId: authData.user.id, 
+          responderByIdData, 
+          responderByIdError: responderByIdError?.message 
+        });
+        
+        if (responderByIdData) {
+          responderData = [responderByIdData];
+          responderError = null;
+        }
+      }
+
+      // Take the first result if we found any
+      const foundResponder = responderData && responderData.length > 0 ? responderData[0] : null;
+
+      if (foundResponder) {
+        console.log('✅ User found in responders table:', foundResponder);
+        console.log('🔍 Responder fields check:', {
+          personal_phone: foundResponder.phone,
+          station_contact_number: foundResponder.station_contact_number,
+          address: foundResponder.address,
+          station_id: foundResponder.station_id
+        });
         
         // Convert Supabase data format to match your app's expected format
         const userData = {
-          uid: responderData.id,
-          firstName: responderData.first_name,
-          lastName: responderData.last_name,
-          email: responderData.email,
-          phoneNumber: responderData.phone,
+          uid: foundResponder.id,
+          firstName: foundResponder.first_name,
+          lastName: foundResponder.last_name,
+          email: foundResponder.email || email.toLowerCase(), // Use login email if DB email is missing
+          phoneNumber: foundResponder.phone, // Responder's personal phone
+          address: foundResponder.address, // Foreign Key: station_users.address -> responders.address
+          stationContactNumber: foundResponder.station_contact_number, // Foreign Key: station_users.phone -> responders.station_contact_number
+          birthdate: foundResponder.birthdate,
+          gender: foundResponder.gender,
           userType: 'responder',
-          displayName: `${responderData.first_name} ${responderData.last_name}`.trim(),
-          status: responderData.status,
-          stationId: responderData.station_id,
-          stationName: responderData.station_name,
-          position: responderData.position,
-          isOnline: responderData.is_online,
-          createdAt: responderData.created_at
+          displayName: `${foundResponder.first_name} ${foundResponder.last_name}`.trim(),
+          status: foundResponder.status,
+          stationId: foundResponder.station_id,
+          stationName: foundResponder.station_name,
+          position: foundResponder.user_position, // Note: field is called user_position in the table
+          isOnline: foundResponder.is_online,
+          createdAt: foundResponder.created_at
         };
+
+        console.log('📋 Final userData being sent to profile:', {
+          personalPhone: userData.phoneNumber,
+          stationPhone: userData.stationContactNumber,
+          address: userData.address
+        });
 
         // Clear any existing toast before login
         setShowToast(false);
@@ -265,6 +312,30 @@ const LoginComponent = () => {
       // If no records found at all
       {
         console.log('❌ User not found in any user table');
+        console.log('🔍 Debug info:', {
+          searchedEmail: email.toLowerCase(),
+          authUserEmail: authData?.user?.email,
+          authUserId: authData?.user?.id
+        });
+        
+        // Let's check if there are ANY responders in the table for debugging
+        const { data: allResponders, error: allRespondersError } = await supabase
+          .from('responders')
+          .select('email')
+          .limit(5);
+          
+        console.log('📋 Sample responder emails in database:', allResponders?.map(r => r.email));
+        console.log('🔍 Responder table query error:', allRespondersError?.message);
+        
+        // Let's also check if the table exists and what columns it has
+        const { data: tableInfo, error: tableError } = await supabase
+          .from('responders')
+          .select('*')
+          .limit(1);
+          
+        console.log('📊 Responder table structure sample:', tableInfo);
+        console.log('🔍 Table access error:', tableError?.message);
+        
         displayToast('No user record found. Please register first.', 'error');
       }
     } catch (error) {
