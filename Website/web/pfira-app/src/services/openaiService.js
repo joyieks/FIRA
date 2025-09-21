@@ -1,10 +1,6 @@
 import OpenAI from 'openai';
 
-// Initialize OpenAI client
-const openai = new OpenAI({
-  apiKey: 
-  dangerouslyAllowBrowser: true // Only for client-side usage
-});
+// Initialize OpenAI client [ANHI I-PASTE KENJI]
 
 /**
  * Analyzes a chat message to determine the appropriate fire alarm level
