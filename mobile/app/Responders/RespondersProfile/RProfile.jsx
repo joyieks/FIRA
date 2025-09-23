@@ -313,12 +313,13 @@ const RProfile = () => {
             </View>
           </TouchableOpacity>
           <ProfileField icon="calendar-today" label="Age" value={getAge(profile.birthdate)} />
-          <EditableProfileField 
+          {/* Gender Field with Dropdown */}
+          <GenderField 
             icon="person" 
             label="Gender" 
             value={isEditing ? editedProfile.gender : profile.gender}
             isEditing={isEditing}
-            onChangeText={(text) => updateField('gender', text)}
+            onGenderChange={(gender) => updateField('gender', gender)}
           />
           <EditableProfileField 
             icon="phone-android" 
@@ -379,6 +380,63 @@ const RProfile = () => {
     </View>
   );
 };
+
+const GenderField = ({ icon, label, value, isEditing, onGenderChange }) => (
+  <View className="flex-row items-start mb-5">
+    <MaterialIcons name={icon} size={22} color="#ff512f" style={{ marginTop: 2 }} />
+    <View className="flex-1 ml-4">
+      <Text className="text-xs text-gray-600 mb-1">{label}</Text>
+      {isEditing ? (
+        <View className="flex-row space-x-2 mt-1">
+          <TouchableOpacity
+            onPress={() => onGenderChange('Female')}
+            className={`flex-1 py-2 px-4 rounded-lg border ${
+              value === 'Female' 
+                ? 'bg-fire border-fire' 
+                : 'bg-white border-gray-300'
+            }`}
+          >
+            <Text 
+              className="text-center font-medium"
+              style={{ 
+                color: '#1f2937',
+                textShadowColor: 'rgba(255, 255, 255, 0.8)',
+                textShadowOffset: { width: 0, height: 0 },
+                textShadowRadius: value === 'Female' ? 2 : 0,
+                fontWeight: '600'
+              }}
+            >
+              Female
+            </Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            onPress={() => onGenderChange('Male')}
+            className={`flex-1 py-2 px-4 rounded-lg border ${
+              value === 'Male' 
+                ? 'bg-fire border-fire' 
+                : 'bg-white border-gray-300'
+            }`}
+          >
+            <Text 
+              className="text-center font-medium"
+              style={{ 
+                color: '#1f2937',
+                textShadowColor: 'rgba(255, 255, 255, 0.8)',
+                textShadowOffset: { width: 0, height: 0 },
+                textShadowRadius: value === 'Male' ? 2 : 0,
+                fontWeight: '600'
+              }}
+            >
+              Male
+            </Text>
+          </TouchableOpacity>
+        </View>
+      ) : (
+        <Text className="text-base text-gray-900">{value || 'Not specified'}</Text>
+      )}
+    </View>
+  </View>
+);
 
 const EditableProfileField = ({ icon, label, value, isEditing, onChangeText, multiline }) => (
   <View className="flex-row items-start mb-5">
