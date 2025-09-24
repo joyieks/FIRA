@@ -18,7 +18,19 @@ const Afira_chat = () => {
   const imageInputRef = useRef(null);
   const [isUploadingImage, setIsUploadingImage] = useState(false);
   const [currentAdminName, setCurrentAdminName] = useState('Admin');
+  const [currentAdminId, setCurrentAdminId] = useState(null);
   const [isLoading, setIsLoading] = useState(true);
+
+  const sortContacts = (list) => {
+    return [...list].sort((a, b) => {
+      const aUnread = a.unreadCount || 0;
+      const bUnread = b.unreadCount || 0;
+      if (bUnread !== aUnread) return bUnread - aUnread;
+      const at = a.lastMessageTime ? new Date(a.lastMessageTime).getTime() : 0;
+      const bt = b.lastMessageTime ? new Date(b.lastMessageTime).getTime() : 0;
+      return bt - at;
+    });
+  };
 
   // Fetch all stations from Supabase
   useEffect(() => {
@@ -46,8 +58,9 @@ const Afira_chat = () => {
           unreadCount: 0
         }));
 
-        setStations(formattedStations);
-        setFilteredStations(formattedStations);
+        const sorted = sortContacts(formattedStations);
+        setStations(sorted);
+        setFilteredStations(sorted);
       } catch (error) {
         console.error('Error fetching stations:', error);
       } finally {
@@ -58,14 +71,30 @@ const Afira_chat = () => {
     fetchStations();
   }, []);
 
+  // Load current admin identity (mirrors how stations load their IDs in Sfira_chat.jsx)
+  useEffect(() => {
+    const userData = JSON.parse(localStorage.getItem('userData') || '{}');
+    if (userData?.id) {
+      setCurrentAdminId(userData.id);
+      setCurrentAdminName(userData.first_name || userData.email || 'Admin');
+      console.log('👤 Current admin ID (Chat):', userData.id);
+    } else {
+      // Fallback: use the known admin id provided, if present
+      const fallbackAdminId = '6cac74e9-cfcf-43cd-9bcf-a30c6b67596d';
+      setCurrentAdminId(fallbackAdminId);
+      console.warn('⚠️ No admin ID found in localStorage; using fallback admin id');
+    }
+  }, []);
+
   // Fetch unread messages for stations
   useEffect(() => {
     const fetchUnreadMessages = async () => {
       try {
+        if (!currentAdminId) return;
         const { data: messagesData, error } = await supabase
           .from('messages')
           .select('*')
-          .eq('receiver_type', 'admin')
+          .eq('receiver_id', currentAdminId)
           .eq('is_read', false)
           .order('created_at', { ascending: false });
 
@@ -99,11 +128,12 @@ const Afira_chat = () => {
           };
         });
 
-        setStations(updatedStations);
-        setFilteredStations(updatedStations);
+        const sortedUpdated = sortContacts(updatedStations);
+        setStations(sortedUpdated);
+        setFilteredStations(sortedUpdated);
 
         // Set unread stations
-        const unreadStationsList = updatedStations.filter(station => station.unreadCount > 0);
+        const unreadStationsList = sortedUpdated.filter(station => station.unreadCount > 0);
         setUnreadStations(unreadStationsList);
         setFilteredUnreadStations(unreadStationsList);
       } catch (error) {
@@ -111,10 +141,10 @@ const Afira_chat = () => {
       }
     };
 
-    if (stations.length > 0) {
+    if (stations.length > 0 && currentAdminId) {
       fetchUnreadMessages();
     }
-  }, [stations.length]);
+  }, [stations.length, currentAdminId]);
 
   // Filter stations based on search query
   useEffect(() => {
@@ -133,14 +163,26 @@ const Afira_chat = () => {
 
   // Fetch messages for selected station
   useEffect(() => {
-    if (!selectedStation) return;
+    if (!selectedStation || !currentAdminId) return;
 
     const fetchMessages = async () => {
       try {
+        // Debug: fetch all messages to verify presence and ids
+        const { data: allMsgs, error: allErr } = await supabase
+          .from('messages')
+          .select('*')
+          .order('created_at', { ascending: true });
+        if (allErr) {
+          console.warn('Debug: error fetching all messages', allErr);
+        } else {
+          console.log('Debug: total messages in DB:', allMsgs?.length || 0);
+          console.log('Debug: sample messages:', (allMsgs || []).slice(0, 5));
+        }
+
         const { data: messagesData, error } = await supabase
           .from('messages')
           .select('*')
-          .or(`and(sender_id.eq.${selectedStation.id},receiver_type.eq.admin),and(sender_type.eq.admin,receiver_id.eq.${selectedStation.id})`)
+          .or(`and(sender_id.eq.${selectedStation.id},receiver_id.eq.${currentAdminId}),and(sender_id.eq.${currentAdminId},receiver_id.eq.${selectedStation.id})`)
           .order('created_at', { ascending: true });
 
         if (error) {
@@ -150,25 +192,99 @@ const Afira_chat = () => {
 
         setMessages(messagesData || []);
         setTimeout(scrollToBottom, 100);
+
+        // Mark as read any messages sent by the station to the admin in this thread
+        try {
+          const { error: readErr } = await supabase
+            .from('messages')
+            .update({ is_read: true })
+            .eq('sender_id', selectedStation.id)
+            .eq('receiver_id', currentAdminId)
+            .eq('is_read', false);
+          if (readErr) {
+            console.warn('Warning: failed to mark messages as read', readErr);
+          } else {
+            // refresh unread counters after marking read
+            // lightweight refetch
+            const refreshUnread = async () => {
+              const { data: unreadAfter, error: unreadErr } = await supabase
+                .from('messages')
+                .select('sender_id')
+                .eq('receiver_id', currentAdminId)
+                .eq('is_read', false);
+              if (!unreadErr) {
+                const counts = unreadAfter.reduce((acc, m) => {
+                  acc[m.sender_id] = (acc[m.sender_id] || 0) + 1;
+                  return acc;
+                }, {});
+                const updated = stations.map((s) => ({
+                  ...s,
+                  unreadCount: counts[s.id] || 0
+                }));
+                setStations(updated);
+                setFilteredStations(updated);
+                const list = updated.filter((s) => s.unreadCount > 0);
+                setUnreadStations(list);
+                setFilteredUnreadStations(list);
+              }
+            };
+            refreshUnread();
+          }
+        } catch (e) {
+          console.warn('Warning: mark-as-read threw', e);
+        }
       } catch (error) {
         console.error('Error fetching messages:', error);
       }
     };
 
     fetchMessages();
-  }, [selectedStation]);
+  }, [selectedStation, currentAdminId]);
 
-  // Real-time subscription for new messages
+  // Realtime subscription for unread counters (messages to admin)
   useEffect(() => {
-    if (!selectedStation) return;
-
-    const subscription = supabase
-      .channel(`messages:${selectedStation.id}`)
+    if (!currentAdminId) return;
+    const channel = supabase
+      .channel(`unread:admin:${currentAdminId}`)
       .on('postgres_changes', {
         event: 'INSERT',
         schema: 'public',
         table: 'messages',
-        filter: `or(and(sender_id.eq.${selectedStation.id},receiver_type.eq.admin),and(sender_type.eq.admin,receiver_id.eq.${selectedStation.id}))`
+        filter: `receiver_id=eq.${currentAdminId}`
+      }, (payload) => {
+        // increment unread badge for that station
+        const stationId = payload.new.sender_id;
+        const applyAndSort = (arr) => sortContacts(arr.map((s) => s.id === stationId ? { ...s, unreadCount: (s.unreadCount || 0) + 1, lastMessage: payload.new.text || s.lastMessage, lastMessageTime: payload.new.created_at } : s));
+        setStations((prev) => applyAndSort(prev));
+        setFilteredStations((prev) => applyAndSort(prev));
+        setUnreadStations((prev) => {
+          const exists = prev.find((s) => s.id === stationId);
+          const updatedStation = (stations.find((s) => s.id === stationId) || {}).id ? (stations.find((s) => s.id === stationId)) : null;
+          if (!updatedStation) return prev;
+          const withIncrement = { ...updatedStation, unreadCount: (updatedStation.unreadCount || 0) + 1 };
+          const others = prev.filter((s) => s.id !== stationId);
+          return [withIncrement, ...others];
+        });
+        setFilteredUnreadStations((prev) => prev.length ? prev : stations.filter((s) => (s.unreadCount || 0) > 0));
+      })
+      .subscribe();
+
+    return () => {
+      channel.unsubscribe();
+    };
+  }, [currentAdminId, stations]);
+
+  // Real-time subscription for new messages
+  useEffect(() => {
+    if (!selectedStation || !currentAdminId) return;
+
+    const subscription = supabase
+      .channel(`messages:${selectedStation.id}:${currentAdminId}`)
+      .on('postgres_changes', {
+        event: 'INSERT',
+        schema: 'public',
+        table: 'messages',
+        filter: `or(and(sender_id.eq.${selectedStation.id},receiver_id.eq.${currentAdminId}),and(sender_id.eq.${currentAdminId},receiver_id.eq.${selectedStation.id}))`
       }, (payload) => {
         setMessages(prev => [...prev, payload.new]);
         setTimeout(scrollToBottom, 100);
@@ -178,36 +294,50 @@ const Afira_chat = () => {
     return () => {
       subscription.unsubscribe();
     };
-  }, [selectedStation]);
+  }, [selectedStation, currentAdminId]);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   };
 
   const handleSendMessage = async () => {
-    if (newMessage.trim() === '' || !selectedStation) return;
+    if (newMessage.trim() === '' || !selectedStation || !currentAdminId) {
+      console.warn('✋ Cannot send. Checks -> text:', !!newMessage.trim(), 'station:', !!selectedStation, 'adminId:', !!currentAdminId);
+      return;
+    }
 
     try {
+      const payload = {
+        sender_id: currentAdminId,
+        receiver_id: selectedStation.id,
+        sender_type: 'admin',
+        receiver_type: 'station',
+        text: newMessage,
+        is_emergency: isEmergencyMode,
+        is_read: false
+      };
+
+      console.log('📤 Sending admin message payload:', payload);
+
       const { data, error } = await supabase
         .from('messages')
-        .insert({
-          sender_id: 'admin', // Admin ID
-          receiver_id: selectedStation.id,
-          sender_type: 'admin',
-          receiver_type: 'station',
-          text: newMessage,
-          is_emergency: isEmergencyMode,
-          is_read: false
-        })
+        .insert(payload)
         .select();
 
       if (error) {
-        console.error('Error sending message:', error);
+        console.error('❌ Error sending message:', error);
         alert('Failed to send message');
         return;
       }
 
+      console.log('✅ Inserted message:', data);
       setNewMessage('');
+
+      // Optimistic UI update
+      if (data && data[0]) {
+        setMessages(prev => [...prev, data[0]]);
+        setTimeout(scrollToBottom, 100);
+      }
 
       // AI Analysis: Analyze the message for fire alarm level
       if (data && data[0]) {
@@ -236,27 +366,32 @@ const Afira_chat = () => {
 
   const handleSelectImage = async (event) => {
     const file = event.target.files && event.target.files[0];
-    if (!file || !selectedStation) return;
+    if (!file || !selectedStation || !currentAdminId) return;
 
     setIsUploadingImage(true);
     try {
       // For now, we'll just send a text message indicating image upload
       // In a full implementation, you'd upload to Supabase Storage
-      const { error } = await supabase
+      const { data, error } = await supabase
         .from('messages')
         .insert({
-          sender_id: 'admin',
+          sender_id: currentAdminId,
           receiver_id: selectedStation.id,
           sender_type: 'admin',
           receiver_type: 'station',
           text: `[Image: ${file.name}]`,
           is_emergency: isEmergencyMode,
           is_read: false
-        });
+        })
+        .select();
 
       if (error) {
         console.error('Error sending image message:', error);
         alert('Failed to send image message');
+      } else if (data && data[0]) {
+        // Optimistic append
+        setMessages(prev => [...prev, data[0]]);
+        setTimeout(scrollToBottom, 100);
       }
     } catch (error) {
       console.error('Error sending image message:', error);

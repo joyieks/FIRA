@@ -18,6 +18,16 @@ const Sfira_chat = () => {
   const [currentStationId, setCurrentStationId] = useState(null);
   const [currentStationName, setCurrentStationName] = useState('');
   const [stations, setStations] = useState([]); // Other stations for communication
+  const sortContacts = (list) => {
+    return [...list].sort((a, b) => {
+      const aUnread = a.unreadCount || 0;
+      const bUnread = b.unreadCount || 0;
+      if (bUnread !== aUnread) return bUnread - aUnread;
+      const at = a.lastMessageTime ? new Date(a.lastMessageTime).getTime() : 0;
+      const bt = b.lastMessageTime ? new Date(b.lastMessageTime).getTime() : 0;
+      return bt - at;
+    });
+  };
   const messagesEndRef = useRef(null);
   const imageInputRef = useRef(null);
   const [isUploadingImage, setIsUploadingImage] = useState(false);
@@ -85,18 +95,18 @@ const Sfira_chat = () => {
           // Check if it's a table not found error
           if (adminError.message.includes('relation "admin_users" does not exist') || 
               adminError.code === 'PGRST116') {
-            console.log('⚠️ admin_users table not found, creating mock admin');
+            console.log('⚠️ admin_users table not found, injecting fallback admin');
             adminUsers = [{
-              id: 'mock-admin-1',
+              id: '6cac74e9-cfcf-43cd-9bcf-a30c6b67596d',
               first_name: 'Command',
               last_name: 'Center',
               email: 'admin@fira.com'
             }];
           } else {
             // For other errors, still create a mock admin to ensure functionality
-            console.log('⚠️ Database error, creating mock admin for functionality');
+            console.log('⚠️ Database error, injecting fallback admin for functionality');
             adminUsers = [{
-              id: 'mock-admin-1',
+              id: '6cac74e9-cfcf-43cd-9bcf-a30c6b67596d',
               first_name: 'Command',
               last_name: 'Center',
               email: 'admin@fira.com'
@@ -109,9 +119,9 @@ const Sfira_chat = () => {
           
           // If no admin users found in database, create a mock one
           if (adminUsers.length === 0) {
-            console.log('⚠️ No admin users found in admin_users table, creating mock admin');
+            console.log('⚠️ No admin users found in admin_users table, injecting fallback admin');
             adminUsers = [{
-              id: 'mock-admin-1',
+              id: '6cac74e9-cfcf-43cd-9bcf-a30c6b67596d',
               first_name: 'Command',
               last_name: 'Center',
               email: 'admin@fira.com'
@@ -250,8 +260,9 @@ const Sfira_chat = () => {
         console.log('🔍 Responder users in final list:', formattedUsers.filter(u => u.type === 'responder'));
         console.log('🔍 Station users in final list:', formattedUsers.filter(u => u.type === 'station'));
 
-        setUsers(formattedUsers);
-        setFilteredUsers(formattedUsers);
+        const sortedUsers = sortContacts(formattedUsers);
+        setUsers(sortedUsers);
+        setFilteredUsers(sortedUsers);
         setStations(otherStations || []);
 
       } catch (error) {
@@ -328,12 +339,13 @@ const Sfira_chat = () => {
           return updatedUser;
         });
 
-        console.log('🔍 Setting users state with:', updatedUsers.length, 'users');
-        setUsers(updatedUsers);
-        setFilteredUsers(updatedUsers);
+        const sortedUpdated = sortContacts(updatedUsers);
+        console.log('🔍 Setting users state with:', sortedUpdated.length, 'users (sorted)');
+        setUsers(sortedUpdated);
+        setFilteredUsers(sortedUpdated);
 
         // Set unread users
-        const unreadUsersList = updatedUsers.filter(user => user.unreadCount > 0);
+        const unreadUsersList = sortedUpdated.filter(user => user.unreadCount > 0);
         console.log('🔍 All users with unread counts:', updatedUsers.map(u => ({ name: u.name, unreadCount: u.unreadCount })));
         console.log('🔍 Filtered unread users:', unreadUsersList.map(u => ({ name: u.name, unreadCount: u.unreadCount })));
         console.log('🔍 Setting unread users state with:', unreadUsersList.length, 'unread users');
@@ -528,32 +540,21 @@ const Sfira_chat = () => {
           const senderId = payload.new.sender_id;
           console.log('Updating unread count for sender:', senderId, 'because we received a message from them');
           
-          // Update users list
-          setUsers(prevUsers => 
-            prevUsers.map(user => 
+          // Update users list and resort so unread threads float to the top
+          setUsers(prevUsers => {
+            const next = prevUsers.map(user => 
               user.id === senderId 
-                ? { ...user, unreadCount: (user.unreadCount || 0) + 1 }
+                ? { ...user, unreadCount: (user.unreadCount || 0) + 1, lastMessage: incoming.text || user.lastMessage, lastMessageTime: incoming.created_at }
                 : user
-            )
-          );
-          
-          // Add to unread users list
-          setUnreadUsers(prevUnread => {
-            const isAlreadyInUnread = prevUnread.some(user => user.id === senderId);
-            if (!isAlreadyInUnread) {
-              const senderUser = users.find(user => user.id === senderId);
-              if (senderUser) {
-                return [...prevUnread, { ...senderUser, unreadCount: (senderUser.unreadCount || 0) + 1 }];
-              }
-            } else {
-              // Update existing unread user's count
-              return prevUnread.map(user => 
-                user.id === senderId 
-                  ? { ...user, unreadCount: (user.unreadCount || 0) + 1 }
-                  : user
-              );
-            }
-            return prevUnread;
+            );
+            return sortContacts(next);
+          });
+
+          // Recompute unread list from the sorted users
+          setUnreadUsers(prev => {
+            return (users.length ? sortContacts(
+              users.map(u => u.id === senderId ? { ...u, unreadCount: (u.unreadCount || 0) + 1, lastMessage: incoming.text || u.lastMessage, lastMessageTime: incoming.created_at } : u)
+            ) : []).filter(u => (u.unreadCount || 0) > 0);
           });
           
           // Update filtered unread users
