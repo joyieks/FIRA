@@ -1,7 +1,10 @@
 import OpenAI from 'openai';
 
-// Initialize OpenAI client [ANHI I-PASTE KENJI]
-
+// Initialize OpenAI client 
+const openai = new OpenAI({
+  apiKey: import.meta.env.VITE_OPENAI_API_KEY || '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',
+  dangerouslyAllowBrowser: true // Only for client-side usage
+});
 /**
  * Analyzes a chat message to determine the appropriate fire alarm level
  * @param {string} messageText - The text content of the chat message
@@ -51,6 +54,7 @@ Fire Alarm Mapping:
 
 If the message doesn't contain fire-related information, return null for suggested_alarm.`;
 
+    console.log('🔍 AI Service: sending request to OpenAI (model=gpt-4o-mini, temperature=0)');
     const completion = await openai.chat.completions.create({
       model: "gpt-4o-mini",
       messages: [
@@ -68,6 +72,7 @@ If the message doesn't contain fire-related information, return null for suggest
     });
 
     const responseText = completion.choices[0]?.message?.content;
+    console.log('🔍 AI Service: raw response text:', responseText);
     
     if (!responseText) {
       throw new Error('No response from OpenAI');
@@ -82,12 +87,14 @@ If the message doesn't contain fire-related information, return null for suggest
         throw new Error('Invalid response format');
       }
 
-      return {
+      const normalized = {
         houses: analysis.houses || null,
         high_rise: Boolean(analysis.high_rise),
         area_scale: analysis.area_scale || 'none',
         suggested_alarm: analysis.suggested_alarm || null
       };
+      console.log('🤖 AI Analysis result:', normalized);
+      return normalized;
     } catch (parseError) {
       console.error('Error parsing OpenAI response:', parseError);
       console.error('Raw response:', responseText);
