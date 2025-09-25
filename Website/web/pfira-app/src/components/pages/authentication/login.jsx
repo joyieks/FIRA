@@ -100,10 +100,11 @@ const Login = () => {
         };
         
         console.log('🚀 Setting station user data:', userData);
-        localStorage.setItem('authToken', `station_${stationCheck.docId}`);
-        localStorage.setItem('userType', 'station');
-        localStorage.setItem('loginTime', Date.now().toString());
-        localStorage.setItem('userData', JSON.stringify(userData));
+        // Store station sessions per-tab to avoid cross-tab overrides
+        sessionStorage.setItem('authToken', `station_${stationCheck.docId}`);
+        sessionStorage.setItem('userType', 'station');
+        sessionStorage.setItem('loginTime', Date.now().toString());
+        sessionStorage.setItem('userData', JSON.stringify(userData));
         
         console.log('🎯 Navigating to station dashboard...');
         navigate('/station-dashboard');

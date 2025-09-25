@@ -4,8 +4,6 @@ import { GrOverview } from "react-icons/gr";
 import { FaMapLocationDot } from "react-icons/fa6";
 import { IoIosNotifications } from "react-icons/io";
 import { Link, useLocation, Outlet } from 'react-router-dom';
-import { signOut } from 'firebase/auth';
-import { auth } from '../../../../config/firebase';
 import { supabase } from '../../../../config/supabase';
 
 const StationLayout = ({ children }) => {
@@ -30,15 +28,24 @@ const StationLayout = ({ children }) => {
   const fetchStationData = async () => {
     try {
       // First try to get from localStorage
-      const userData = JSON.parse(localStorage.getItem('userData') || '{}');
+      const userData = JSON.parse(sessionStorage.getItem('userData') || localStorage.getItem('userData') || '{}');
       console.log('🔍 UserData from localStorage:', userData);
       
+      // Seed synchronously from localStorage so children have data on first paint
+      if (userData && (userData.station_name || userData.email || userData.address)) {
+        setStationData({
+          station_name: userData.station_name || 'Station Name',
+          email: userData.email || 'station@email.com',
+          address: userData.address || 'Address not specified'
+        });
+      }
+
       if (userData.id) {
         console.log('🔍 Looking up station with ID:', userData.id);
         // If we have userData, try to fetch from Supabase for latest info
         const { data: stationInfo, error } = await supabase
           .from('station_users')
-          .select('station_name, email, address')
+          .select('station_name, email, address, lat, lng')
           .eq('id', userData.id)
           .single();
         
@@ -48,9 +55,9 @@ const StationLayout = ({ children }) => {
           console.error('Error fetching station data:', error);
           // Try alternative lookup by email
           console.log('🔄 Trying alternative lookup by email:', userData.email);
-          const { data: stationByEmail, error: emailError } = await supabase
+            const { data: stationByEmail, error: emailError } = await supabase
             .from('station_users')
-            .select('station_name, email, address')
+            .select('station_name, email, address, lat, lng')
             .eq('email', userData.email)
             .single();
           
@@ -69,7 +76,9 @@ const StationLayout = ({ children }) => {
             setStationData({
               station_name: stationByEmail.station_name || 'Station Name',
               email: stationByEmail.email || 'station@email.com',
-              address: stationByEmail.address || 'Address not specified'
+              address: stationByEmail.address || 'Address not specified',
+              lat: stationByEmail.lat ?? null,
+              lng: stationByEmail.lng ?? null
             });
           }
         } else if (stationInfo) {
@@ -77,7 +86,9 @@ const StationLayout = ({ children }) => {
           setStationData({
             station_name: stationInfo.station_name || 'Station Name',
             email: stationInfo.email || 'station@email.com',
-            address: stationInfo.address || 'Address not specified'
+            address: stationInfo.address || 'Address not specified',
+            lat: stationInfo.lat ?? null,
+            lng: stationInfo.lng ?? null
           });
         }
       } else {
@@ -101,10 +112,14 @@ const StationLayout = ({ children }) => {
 
   const handleLogout = async () => {
     try {
-      // Sign out from Firebase Auth
-      await signOut(auth);
-      
-      // Clear all authentication data
+      // Clear all authentication data (both session and local)
+      sessionStorage.removeItem('authToken');
+      sessionStorage.removeItem('userType');
+      sessionStorage.removeItem('loginTime');
+      sessionStorage.removeItem('stationNotifications');
+      sessionStorage.removeItem('stationUser');
+      sessionStorage.removeItem('stationAuth');
+      sessionStorage.removeItem('userData');
       localStorage.removeItem('authToken');
       localStorage.removeItem('userType');
       localStorage.removeItem('loginTime');
@@ -124,7 +139,7 @@ const StationLayout = ({ children }) => {
   // Load notifications from localStorage (station-specific)
   useEffect(() => {
     const loadNotifications = () => {
-      const storedNotifications = JSON.parse(localStorage.getItem('stationNotifications') || '[]');
+      const storedNotifications = JSON.parse(sessionStorage.getItem('stationNotifications') || localStorage.getItem('stationNotifications') || '[]');
       setNotifications(storedNotifications);
     };
     loadNotifications();
@@ -186,7 +201,7 @@ const StationLayout = ({ children }) => {
       notification.id === id ? { ...notification, read: true } : notification
     );
     setNotifications(updatedNotifications);
-    localStorage.setItem('stationNotifications', JSON.stringify(updatedNotifications));
+      sessionStorage.setItem('stationNotifications', JSON.stringify(updatedNotifications));
   };
 
   const formatDate = (dateString) => {

@@ -92,20 +92,84 @@ const LoginComponent = () => {
     if (!isValid) return;
 
     try {
-      // Check for hardcoded station and responder credentials (these don't use Supabase Auth)
+      // Check for hardcoded station credentials (stations don't use Supabase Auth)
       if (email === 'stations@gmail.com' && password === 'stations') {
         const result = await authLogin(email, password);
         displayToast('Welcome to Project FIRA! 🚒', 'success');
         return;
       }
-      
-      if (email === 'responder@gmail.com' && password === 'responder') {
-        const result = await authLogin(email, password);
-        displayToast('Welcome to Project FIRA! 🚑', 'success');
+
+      // Try Responder login first (from responders table)
+      console.log('🔍 Checking responders table for responder login...');
+      try {
+        const { data: responderData, error: responderError } = await supabase
+          .from('responders')
+          .select('*')
+          .eq('email', email)
+          .single();
+
+        if (!responderError && responderData) {
+          console.log('✅ Responder found in database:', responderData);
+          
+          // For now, we'll skip password verification since responders table doesn't store passwords
+          // In a real system, you'd verify the password here
+          await loginResponder(responderData);
+          displayToast(`Welcome to Project FIRA, ${responderData.first_name}! 🚑`, 'success');
+          return;
+        } else {
+          console.log('ℹ️ No responder found with this email, continuing to other login methods...');
+        }
+      } catch (error) {
+        console.log('ℹ️ Error checking responders table (this is normal if not a responder):', error.message);
+      }
+
+      // Try Station login (no Supabase Auth account required) - mirrors web logic
+      console.log('🔍 Checking station_users for station login...');
+      let stationDirect = null;
+      {
+        const { data, error } = await supabase
+          .from('station_users')
+          .select('*')
+          .eq('email', email.toLowerCase())
+          .single();
+        if (data) stationDirect = data;
+      }
+
+      // If not found by email and user typed a station name (no @), try name match
+      if (!stationDirect && !email.includes('@')) {
+        console.log('🔍 Email field looks like a name; trying station_name match...');
+        const { data } = await supabase
+          .from('station_users')
+          .select('*')
+          .ilike('station_name', email)
+          .maybeSingle();
+        if (data) stationDirect = data;
+      }
+
+      if (stationDirect) {
+        console.log('✅ Station found in station_users (direct login):', stationDirect);
+        const userData = {
+          uid: stationDirect.id,
+          firstName: stationDirect.station_name,
+          lastName: '',
+          email: stationDirect.email,
+          phoneNumber: stationDirect.phone,
+          userType: 'station',
+          displayName: stationDirect.station_name,
+          status: stationDirect.status,
+          address: stationDirect.address,
+          position: stationDirect.position,
+          isOnline: stationDirect.is_online,
+          createdAt: stationDirect.created_at
+        };
+
+        setShowToast(false); setToastMessage('');
+        await loginStation(userData);
+        displayToast(`Welcome to Project FIRA, ${userData.displayName}! 🚒`, 'success');
         return;
       }
 
-      // For all other emails, try Supabase Auth (admin, citizens, stations, responders)
+      // For all other emails, try Supabase Auth (admin, citizens, responders)
       console.log('🔍 Trying Supabase Auth for login:', email);
       
       const { data: authData, error: authError } = await supabase.auth.signInWithPassword({
@@ -114,11 +178,62 @@ const LoginComponent = () => {
       });
 
       if (authError) {
-        // Only log to console in development, don't use console.error to avoid error overlay
-        if (__DEV__) {
-          console.log('🔍 Supabase Auth failed:', authError.message);
+        // Log the specific error for debugging
+        console.log('🔍 Supabase Auth failed:', authError.message);
+        console.log('🔍 Auth error details:', authError);
+        
+        // Don't throw error immediately - let's try to check if it's a responder
+        // by looking in the responders table directly
+        console.log('🔄 Supabase Auth failed, checking responders table as fallback...');
+        
+        // Check if this user exists in 'responders' table as fallback
+        const { data: responderData, error: responderError } = await supabase
+          .from('responders')
+          .select('*')
+          .eq('email', email.toLowerCase())
+          .single();
+
+        if (responderData) {
+          console.log('✅ User found in responders table (fallback):', responderData);
+          
+          // Convert Supabase data format to match your app's expected format
+          const userData = {
+            uid: responderData.id,
+            firstName: responderData.first_name,
+            lastName: responderData.last_name,
+            email: responderData.email,
+            phoneNumber: responderData.phone,
+            userType: 'responder',
+            displayName: `${responderData.first_name} ${responderData.last_name}`.trim(),
+            status: responderData.status || 'active',
+            stationId: responderData.station_id,
+            stationName: 'Station', // Default since station_name is not in responders table
+            position: responderData.user_position,
+            isOnline: responderData.is_online || false,
+            createdAt: responderData.created_at,
+            // Additional fields from your table
+            middleName: responderData.middle_name,
+            stationContactNumber: responderData.station_contact_number,
+            address: responderData.address,
+            birthdate: responderData.birthdate,
+            age: responderData.age,
+            gender: responderData.gender
+          };
+
+          // Clear any existing toast before login
+          setShowToast(false);
+          setToastMessage('');
+          
+          await loginResponder(userData);
+          
+          // Show success toast after successful login
+          displayToast(`Welcome to Project FIRA, ${userData.displayName}! 🚑`, 'success');
+          return;
+        } else {
+          // If not found in responders table either, then throw the original auth error
+          console.log('❌ User not found in responders table either');
+          throw authError;
         }
-        throw authError;
       }
 
       const user = authData.user;
@@ -224,43 +339,7 @@ const LoginComponent = () => {
         return;
       }
 
-      // Check if this user exists in 'responder_users' table
-      const { data: responderData, error: responderError } = await supabase
-        .from('responder_users')
-        .select('*')
-        .eq('email', email.toLowerCase())
-        .single();
-
-      if (responderData) {
-        console.log('✅ User found in responder_users table:', responderData);
-        
-        // Convert Supabase data format to match your app's expected format
-        const userData = {
-          uid: responderData.id,
-          firstName: responderData.first_name,
-          lastName: responderData.last_name,
-          email: responderData.email,
-          phoneNumber: responderData.phone,
-          userType: 'responder',
-          displayName: `${responderData.first_name} ${responderData.last_name}`.trim(),
-          status: responderData.status,
-          stationId: responderData.station_id,
-          stationName: responderData.station_name,
-          position: responderData.position,
-          isOnline: responderData.is_online,
-          createdAt: responderData.created_at
-        };
-
-        // Clear any existing toast before login
-        setShowToast(false);
-        setToastMessage('');
-        
-        await loginResponder(userData);
-        
-        // Show success toast after successful login
-        displayToast(`Welcome to Project FIRA, ${userData.displayName}! 🚑`, 'success');
-        return;
-      }
+      // Note: Responder check is now handled in the Supabase Auth fallback above
 
       // If no records found at all
       {

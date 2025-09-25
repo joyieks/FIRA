@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { GoogleMap, LoadScript, Marker, InfoWindow } from '@react-google-maps/api';
+import { GoogleMap, LoadScript, Marker, InfoWindow, Circle } from '@react-google-maps/api';
+import { supabase } from '../../../../config/supabase';
 
 const Adashboard = () => {
   const GOOGLE_MAPS_API_KEY = 'AIzaSyBX5taF1AgNhicxw5_BXUJDs6ouniAuiQI';
@@ -15,6 +16,14 @@ const Adashboard = () => {
   const [mapLoadTimeout, setMapLoadTimeout] = useState(false); // State for map load timeout
   const [retryCount, setRetryCount] = useState(0); // State for retry count
   const [pendingSelection, setPendingSelection] = useState(null); // State for pending report selection
+  const [allStations, setAllStations] = useState([]);
+  const [geocodedStations, setGeocodedStations] = useState([]);
+  const [jurisdictionRadius] = useState(2000);
+  const [responders, setResponders] = useState([]);
+  const [assigneeType, setAssigneeType] = useState('station'); // 'station' | 'responder'
+  const [assigneeId, setAssigneeId] = useState('');
+  const [redirectTarget, setRedirectTarget] = useState(''); // e.g., 'station:<id>' | 'agency:police'
+  const [redirectNote, setRedirectNote] = useState('');
 
   // Fixed location for Bureau of Fire Protection - Regional Office VII
   // 7VXR+5VG, 6000 Natalio B. Bacalso Ave, Cebu City, 6000 Cebu
@@ -171,6 +180,139 @@ const Adashboard = () => {
       clearTimeout(mapTimeout);
     };
   }, [fetchFireReports, mapLoaded]);
+
+  // Load all stations and geocode addresses for full visibility
+  useEffect(() => {
+    const loadStations = async () => {
+      try {
+        const { data: stations, error } = await supabase
+          .from('station_users')
+          .select('id, station_name, address, lat, lng');
+        if (error) {
+          console.error('❌ Error fetching stations (admin):', error);
+          return;
+        }
+        setAllStations(stations || []);
+
+        if (!mapLoaded || !window.google?.maps) return;
+        const geocoder = new window.google.maps.Geocoder();
+        const results = await Promise.all(
+          (stations || []).map((s) => new Promise((resolve) => {
+            const latNum = s?.lat != null ? parseFloat(s.lat) : NaN;
+            const lngNum = s?.lng != null ? parseFloat(s.lng) : NaN;
+            if (!isNaN(latNum) && !isNaN(lngNum)) {
+              resolve({ id: s.id, name: s.station_name || 'Station', lat: latNum, lng: lngNum });
+              return;
+            }
+            if (!s?.address) { resolve(null); return; }
+            geocoder.geocode({ address: s.address }, (res, status) => {
+              if (status === 'OK' && res[0]) {
+                const loc = res[0].geometry.location;
+                resolve({ id: s.id, name: s.station_name || 'Station', lat: loc.lat(), lng: loc.lng() });
+              } else {
+                resolve(null);
+              }
+            });
+          }))
+        );
+        setGeocodedStations(results.filter(Boolean));
+      } catch (e) {
+        console.error('❌ Error geocoding stations:', e);
+      }
+    };
+    loadStations();
+  }, [mapLoaded]);
+
+  // Load responders for assignment dropdown
+  useEffect(() => {
+    const loadResponders = async () => {
+      try {
+        const { data, error } = await supabase
+          .from('responders')
+          .select('id, first_name, last_name, station_id')
+          .limit(500);
+        if (error) {
+          console.error('❌ Error fetching responders:', error);
+          return;
+        }
+        setResponders(data || []);
+      } catch (e) {
+        console.error('❌ Error loading responders:', e);
+      }
+    };
+    loadResponders();
+  }, []);
+
+  const handleAssign = useCallback(async () => {
+    try {
+      if (!selectedReport) {
+        alert('Select a fire report first.');
+        return;
+      }
+      if (!assigneeId) {
+        alert('Choose an assignee.');
+        return;
+      }
+      const payload = {
+        report_id: selectedReport.id,
+        assignee_type: assigneeType,
+        assignee_id: assigneeId,
+        assigned_at: new Date().toISOString()
+      };
+      const { error } = await supabase
+        .from('report_assignments')
+        .upsert(payload, { onConflict: 'report_id' });
+      if (error) throw error;
+      // Snapshot report coordinates so station dashboards can render reliably
+      try {
+        const lat = parseFloat(selectedReport.latitude);
+        const lng = parseFloat(selectedReport.longitude);
+        await supabase
+          .from('assigned_report_snapshots')
+          .upsert({
+            report_id: String(selectedReport.id),
+            lat: isNaN(lat) ? null : lat,
+            lng: isNaN(lng) ? null : lng,
+            address: selectedReport.address || selectedReport.geotag_location || null,
+            snapshot_json: selectedReport
+          }, { onConflict: 'report_id' });
+      } catch (snapErr) {
+        console.warn('Snapshot upsert failed (table may not exist):', snapErr?.message || snapErr);
+      }
+      alert('Report assigned successfully.');
+    } catch (e) {
+      console.error('❌ Assign failed:', e);
+      alert('Failed to assign report. Check console.');
+    }
+  }, [selectedReport, assigneeType, assigneeId]);
+
+  const handleRedirect = useCallback(async () => {
+    try {
+      if (!selectedReport) {
+        alert('Select a fire report first.');
+        return;
+      }
+      if (!redirectTarget) {
+        alert('Choose a redirect target.');
+        return;
+      }
+      const payload = {
+        report_id: selectedReport.id,
+        target: redirectTarget,
+        note: redirectNote || null,
+        forwarded_at: new Date().toISOString()
+      };
+      const { error } = await supabase
+        .from('report_routes')
+        .insert(payload);
+      if (error) throw error;
+      alert('Report forwarded successfully.');
+      setRedirectNote('');
+    } catch (e) {
+      console.error('❌ Redirect failed:', e);
+      alert('Failed to forward report. Check console.');
+    }
+  }, [selectedReport, redirectTarget, redirectNote]);
 
   // Handle auto-selection when both map and reports are loaded
   useEffect(() => {
@@ -389,6 +531,35 @@ const Adashboard = () => {
             );
           })}
 
+          {/* Stations visibility for Admin: markers and jurisdiction circles */}
+          {mapLoaded && geocodedStations.map((s) => (
+            <React.Fragment key={s.id}>
+              <Marker
+                position={{ lat: s.lat, lng: s.lng }}
+                title={s.name}
+                icon={{
+                  url: 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNDgiIGhlaWdodD0iNDgiIHZpZXdCb3g9IjAgMCA0OCA0OCIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KPHJlY3QgeD0iNCIgeT0iMTIiIHdpZHRoPSI0MCIgaGVpZ2h0PSIzMiIgcng9IjIiIGZpbGw9IiNlZjQ0NDQiIHN0cm9rZT0iI2ZmZmZmZiIgc3Ryb2tlLXdpZHRoPSIzIi8+CjxyZWN0IHg9IjgiIHk9IjE2IiB3aWR0aD0iMzIiIGhlaWdodD0iMjQiIGZpbGw9IiNmZmZmZmYiLz4KPHJlY3QgeD0iMTIiIHk9IjIwIiB3aWR0aD0iNiIgaGVpZ2h0PSI4IiBmaWxsPSIjZWY0NDQ0Ii8+CjxyZWN0IHg9IjIyIiB5PSIyMCIgd2lkdGg9IjYiIGhlaWdodD0iOCIgZmlsbD0iI2VmNDQ0NCIvPgo8cmVjdCB4PSIzMiIgeT0iMjAiIHdpZHRoPSI2IiBoZWlnaHQ9IjgiIGZpbGw9IiNlZjQ0NDQiLz4KPHJlY3QgeD0iMTIiIHk9IjMyIiB3aWR0aD0iNiIgaGVpZ2h0PSI4IiBmaWxsPSIjZWY0NDQ0Ii8+CjxyZWN0IHg9IjIyIiB5PSIzMiIgd2lkdGg9IjYiIGhlaWdodD0iOCIgZmlsbD0iI2VmNDQ0NCIvPgo8cmVjdCB4PSIzMiIgeT0iMzIiIHdpZHRoPSI2IiBoZWlnaHQ9IjgiIGZpbGw9IiNlZjQ0NDQiLz4KPHJlY3QgeD0iMjAiIHk9IjQiIHdpZHRoPSI4IiBoZWlnaHQ9IjgiIGZpbGw9IiNlZjQ0NDQiLz4KPHJlY3QgeD0iMjIiIHk9IjYiIHdpZHRoPSI0IiBoZWlnaHQ9IjQiIGZpbGw9IiNmZmZmZmYiLz4KPC9zdmc+',
+                  scaledSize: new window.google.maps.Size(48, 48),
+                  anchor: new window.google.maps.Point(24, 24)
+                }}
+                zIndex={1200}
+              />
+              <Circle
+                center={{ lat: s.lat, lng: s.lng }}
+                radius={jurisdictionRadius}
+                options={{
+                  fillColor: '#ef4444',
+                  fillOpacity: 0.05,
+                  strokeColor: '#ef4444',
+                  strokeOpacity: 0.6,
+                  strokeWeight: 1,
+                  clickable: false,
+                  zIndex: 1100
+                }}
+              />
+            </React.Fragment>
+          ))}
+
           {/* Info Window for Selected Report */}
           {selectedReport && (
             <InfoWindow
@@ -443,6 +614,38 @@ const Adashboard = () => {
                       />
                     </div>
                   )}
+                  {/* Assignment controls */}
+                  <div className="mt-3 border-t pt-3">
+                    <p className="font-semibold mb-2">Assignment</p>
+                    <div className="flex items-center gap-2 mb-2">
+                      <select className="border rounded px-2 py-1" value={assigneeId} onChange={(e) => setAssigneeId(e.target.value)}>
+                        <option value="">Select station…</option>
+                        {allStations.map(s => (
+                          <option key={s.id} value={s.id}>{s.station_name || 'Station'}</option>
+                        ))}
+                      </select>
+                      <button className="bg-blue-600 text-white px-3 py-1 rounded" onClick={handleAssign}>Assign</button>
+                    </div>
+                    <p className="text-xs text-gray-500">You can reassign anytime — the latest assignment is active.</p>
+                  </div>
+
+                  {/* Redirect controls */}
+                  <div className="mt-3 border-t pt-3">
+                    <p className="font-semibold mb-2">Redirect/Forward</p>
+                    <div className="flex items-center gap-2 mb-2">
+                      <select className="border rounded px-2 py-1" value={redirectTarget} onChange={(e) => setRedirectTarget(e.target.value)}>
+                        <option value="">Choose station…</option>
+                        {allStations.map(s => (
+                          <option key={`st-${s.id}`} value={`station:${s.id}`}>{s.station_name || 'Station'}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <textarea className="w-full border rounded p-2 text-sm" rows="2" placeholder="Note (optional)" value={redirectNote} onChange={(e) => setRedirectNote(e.target.value)}></textarea>
+                    <div className="mt-2">
+                      <button className="bg-amber-600 text-white px-3 py-1 rounded" onClick={handleRedirect}>Forward</button>
+                    </div>
+                    <p className="text-xs text-gray-500 mt-1">Forwarding keeps the original assignment and records provenance.</p>
+                  </div>
                 </div>
               </div>
             </InfoWindow>

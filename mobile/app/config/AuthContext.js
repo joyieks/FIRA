@@ -60,15 +60,12 @@ export const AuthProvider = ({ children }) => {
       let userType = null;
       let userData = null;
 
-      // Check for specific hardcoded credentials (station and responder only)
+      // Check for specific hardcoded credentials (station only)
       if (email === 'stations@gmail.com' && password === 'stations') {
         userType = 'station';
         userData = { email, userType };
-      } else if (email === 'responder@gmail.com' && password === 'responder') {
-        userType = 'responder';
-        userData = { email, userType };
       } else {
-        // For admin and citizen users, they'll be authenticated through Supabase Auth
+        // For admin, citizen, and responder users, they'll be authenticated through database lookup
         // and handled in the login component
         throw new Error('Invalid credentials');
       }

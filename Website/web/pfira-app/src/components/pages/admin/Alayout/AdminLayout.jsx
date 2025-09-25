@@ -6,8 +6,6 @@ import { IoIosNotifications } from "react-icons/io";
 import { LuMessageCircleMore } from "react-icons/lu";
 import { FaUserFriends } from "react-icons/fa";
 import { Link, useLocation, Outlet } from 'react-router-dom';
-import { signOut } from 'firebase/auth';
-import { auth } from '../../../../config/firebase';
 
 const AdminLayout = ({ children }) => {
   const [sidebarOpen, setSidebarOpen] = useState(true);
@@ -88,10 +86,14 @@ const AdminLayout = ({ children }) => {
 
   const handleLogout = async () => {
     try {
-      // Sign out from Firebase Auth
-      await signOut(auth);
-      
-      // Clear all authentication data
+      // Clear all authentication data (both session and local)
+      sessionStorage.removeItem('authToken');
+      sessionStorage.removeItem('userType');
+      sessionStorage.removeItem('loginTime');
+      sessionStorage.removeItem('adminNotifications');
+      sessionStorage.removeItem('adminUser');
+      sessionStorage.removeItem('adminAuth');
+      sessionStorage.removeItem('userData');
       localStorage.removeItem('authToken');
       localStorage.removeItem('userType');
       localStorage.removeItem('loginTime');

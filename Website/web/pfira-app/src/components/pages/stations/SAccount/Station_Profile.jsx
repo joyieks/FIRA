@@ -30,7 +30,7 @@ const Station_Profile = () => {
       setLoading(true);
       
       // Get current user data from localStorage
-      const userData = JSON.parse(localStorage.getItem('userData') || '{}');
+      const userData = JSON.parse(sessionStorage.getItem('userData') || localStorage.getItem('userData') || '{}');
       if (!userData.id) {
         console.error('❌ No station ID found in userData');
         alert('Error: Unable to identify current station. Please log in again.');

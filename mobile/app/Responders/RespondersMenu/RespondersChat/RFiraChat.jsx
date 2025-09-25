@@ -137,7 +137,6 @@ export default function RFiraChat() {
         {/* Header */}
         <View className="p-4 pt-16">
           <View className="items-center justify-center">
-            <Text className="text-2xl font-bold text-gray-800">FIRA Chat</Text>
           </View>
         </View>
 

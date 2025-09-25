@@ -1,87 +1,79 @@
 import React, { useState, useEffect } from 'react';
-import { FiSearch, FiFilter, FiClock, FiMapPin, FiUser, FiAlertTriangle, FiBell, FiTrendingUp, FiX, FiUsers, FiShield, FiTruck } from 'react-icons/fi';
+import { FiSearch, FiFilter, FiX } from 'react-icons/fi';
+import { supabase } from '../../../../config/supabase';
 
 const Station_Overview = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [showFilters, setShowFilters] = useState(false);
   const [selectedReport, setSelectedReport] = useState(null);
   const [showReportModal, setShowReportModal] = useState(false);
-  const [activeReports, setActiveReports] = useState([]);
-  const [responders, setResponders] = useState([]);
-  const [equipment, setEquipment] = useState([]);
-  const [showModal, setShowModal] = useState(false);
+  const [reports, setReports] = useState([]);
+  const [isLoading, setIsLoading] = useState(true);
   const [openStatusDropdown, setOpenStatusDropdown] = useState(null);
   const [openAlarmDropdown, setOpenAlarmDropdown] = useState(null);
 
-  // Sample station data
+  const API_URL = 'https://fire-detection-api-production-f543.up.railway.app';
+
+  const formatTime = (timestamp) => {
+    if (!timestamp) return 'Unknown';
+    try {
+      if (typeof timestamp === 'string' && !timestamp.includes('T') && !timestamp.includes('Z')) return timestamp;
+      const date = new Date(timestamp);
+      return date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false });
+    } catch { return 'Unknown'; }
+  };
+  const minutesAgo = (timestamp) => {
+    try { const d = new Date(timestamp); return Math.floor((Date.now()-d)/60000); } catch { return 0; }
+  };
+
   useEffect(() => {
-    // Active reports this station is responding to
-    const sampleActiveReports = [
-      {
-        id: 1,
-        time: '14:32',
-        reporter: 'Juan Dela Cruz',
-        location: 'Lahug, Cebu City',
-        status: 'On Going',
-        fireAlarmLevel: '2nd Alarm',
-        description: 'Fire outbreak in residential building. Station 1 responding with 2 fire trucks.',
-        picture: '/burnhouse.jpg',
-        minutesAgo: 5,
-        assignedResponders: 8,
-        equipmentDeployed: '2 Fire Trucks, 1 Ambulance'
-      },
-      {
-        id: 2,
-        time: '14:15',
-        reporter: 'Maria Santos',
-        location: 'Mabolo, Cebu City',
-        status: 'Under Control',
-        fireAlarmLevel: '1st Alarm',
-        description: 'Kitchen fire in restaurant. Situation contained, monitoring for flare-ups.',
-        picture: '/burnhouse.jpg',
-        minutesAgo: 22,
-        assignedResponders: 5,
-        equipmentDeployed: '1 Fire Truck'
-      },
-      {
-        id: 3,
-        time: '13:45',
-        reporter: 'Pedro Martinez',
-        location: 'Guadalupe, Cebu City',
-        status: 'Fire Out',
-        fireAlarmLevel: '1st Alarm',
-        description: 'Electrical fire in office building. Extinguished successfully.',
-        picture: '/burnhouse.jpg',
-        minutesAgo: 52,
-        assignedResponders: 6,
-        equipmentDeployed: '1 Fire Truck, 1 Ambulance'
-      }
-    ];
-
-    // Station responders
-    const sampleResponders = [
-      { id: 1, name: 'John Smith', position: 'Fire Captain', status: 'On Scene', location: 'Lahug Fire' },
-      { id: 2, name: 'Maria Garcia', position: 'Firefighter', status: 'On Scene', location: 'Lahug Fire' },
-      { id: 3, name: 'David Lee', position: 'EMT', status: 'Standby', location: 'Station' },
-      { id: 4, name: 'Sarah Johnson', position: 'Firefighter', status: 'On Scene', location: 'Mabolo Fire' },
-      { id: 5, name: 'Mike Wilson', position: 'Driver', status: 'Standby', location: 'Station' }
-    ];
-
-    // Station equipment
-    const sampleEquipment = [
-      { id: 1, name: 'Fire Truck 1', type: 'Pumper Truck', status: 'Deployed', location: 'Lahug Fire', fuel: '85%' },
-      { id: 2, name: 'Fire Truck 2', type: 'Ladder Truck', status: 'Deployed', location: 'Lahug Fire', fuel: '92%' },
-      { id: 3, name: 'Ambulance 1', type: 'Emergency Vehicle', status: 'Deployed', location: 'Lahug Fire', fuel: '78%' },
-      { id: 4, name: 'Fire Truck 3', type: 'Pumper Truck', status: 'Available', location: 'Station', fuel: '95%' },
-      { id: 5, name: 'Rescue Vehicle', type: 'Rescue Truck', status: 'Maintenance', location: 'Station', fuel: 'N/A' }
-    ];
-
-    setActiveReports(sampleActiveReports);
-    setResponders(sampleResponders);
-    setEquipment(sampleEquipment);
-    
-    // Debug: Log the data to console
-    console.log('Sample reports loaded:', sampleActiveReports);
+    const load = async () => {
+      try {
+        setIsLoading(true);
+        const userData = JSON.parse(sessionStorage.getItem('userData') || localStorage.getItem('userData') || '{}');
+        const stationId = userData?.id;
+        if (!stationId) { setReports([]); return; }
+        const { data: assignments, error } = await supabase
+          .from('report_assignments')
+          .select('report_id')
+          .eq('assignee_type','station')
+          .eq('assignee_id', stationId);
+        if (error) throw error;
+        const ids = new Set((assignments||[]).map(a=>String(a.report_id)));
+        if (!ids.size) { setReports([]); return; }
+        const resp = await fetch(`${API_URL}/get_reports`);
+        const data = resp.ok ? await resp.json() : [];
+        const filtered = (data||[]).filter(r=>ids.has(String(r.id)));
+        const mapped = filtered.map(r=>({
+          id: r.id,
+          time: formatTime(r.formatted_timestamp || r.created_at),
+          reporter: r.reporter || 'Unknown Reporter',
+          location: r.address || r.geotag_location || 'Location unavailable',
+          status: r.status || 'On Going',
+          suggestedAlarmLevel: r.recommended_alarm_level || r.alarm_level || 'Unknown',
+          finalAlarmLevel: r.final_fire_alarm_level || '1st Alarm',
+          description: r.cause_of_fire || 'No cause specified',
+          picture: r.image_url,
+          minutesAgo: minutesAgo(r.created_at || r.timestamp),
+          prediction: r.prediction,
+          confidence: r.confidence,
+          structure: r.structure,
+          smokeIntensity: r.smoke_intensity,
+          smokeConfidence: r.smoke_confidence,
+          numberOfStructures: r.number_of_structures_on_fire,
+          timestamp: r.created_at || r.timestamp,
+          latitude: r.latitude,
+          longitude: r.longitude,
+          address: r.address,
+          geotag_location: r.geotag_location
+        }));
+        setReports(mapped.sort((a,b)=> new Date(b.timestamp||0)-new Date(a.timestamp||0)));
+      } catch (e) {
+        console.error('Station Overall load error:', e);
+        setReports([]);
+      } finally { setIsLoading(false); }
+    };
+    load();
   }, []);
 
   const toggleStatusDropdown = (reportId) => {
@@ -114,13 +106,13 @@ const Station_Overview = () => {
   };
 
   // Filter reports based on search
-  const filteredReports = activeReports.filter(report => {
+  const filteredReports = reports.filter(report => {
     return report.location.toLowerCase().includes(searchQuery.toLowerCase()) ||
            report.description.toLowerCase().includes(searchQuery.toLowerCase());
   });
 
   const handleReportClick = (report) => {
-    setSelectedReport(report);S
+    setSelectedReport(report);
     setShowReportModal(true);
   };
 
@@ -187,7 +179,7 @@ const Station_Overview = () => {
               </div>
             </div>
 
-            {/* Active Reports Table */}
+              {/* Assigned Reports Table */}
             <div className="w-full">
               <table className="w-full">
                 <thead className="bg-gray-50">
@@ -255,9 +247,9 @@ const Station_Overview = () => {
                               e.stopPropagation();
                               toggleAlarmDropdown(report.id);
                             }}
-                            className={`px-3 py-1 rounded-md text-xs font-medium border ${getAlarmLevelColor(report.fireAlarmLevel)} hover:bg-gray-50 transition-colors`}
+                            className={`px-3 py-1 rounded-md text-xs font-medium border ${getAlarmLevelColor(report.suggestedAlarmLevel)} hover:bg-gray-50 transition-colors`}
                           >
-                            {report.fireAlarmLevel}
+                            {report.suggestedAlarmLevel}
                           </button>
                           {openAlarmDropdown === report.id && (
                             <div className="absolute z-10 mt-1 w-32 bg-white border border-gray-300 rounded-md shadow-lg">
@@ -280,8 +272,8 @@ const Station_Overview = () => {
                         </div>
                       </td>
                       <td className="px-4 py-4 whitespace-nowrap">
-                        <span className="px-3 py-1 rounded-md text-xs font-medium bg-red-500 text-white">
-                          GENERAL ALARM
+                        <span className={`px-3 py-1 rounded-md text-xs font-medium border ${getAlarmLevelColor(report.finalAlarmLevel)}`}>
+                          {report.finalAlarmLevel}
                         </span>
                       </td>
                       <td className="px-4 py-4 whitespace-nowrap">

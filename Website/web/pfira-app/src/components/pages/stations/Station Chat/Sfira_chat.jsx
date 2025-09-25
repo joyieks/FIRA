@@ -22,9 +22,9 @@ const Sfira_chat = () => {
   const [isUploadingImage, setIsUploadingImage] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
 
-  // FIXED: Get current station ID from localStorage - EXACTLY same as User Management
+  // FIXED: Get current station ID from sessionStorage (where station login stores it) - EXACTLY same as User Management
   useEffect(() => {
-    const userData = JSON.parse(localStorage.getItem('userData') || '{}');
+    const userData = JSON.parse(sessionStorage.getItem('userData') || localStorage.getItem('userData') || '{}');
     if (userData.id) {
       setCurrentStationId(userData.id);
       setCurrentStationName(userData.station_name || userData.name || 'Station');

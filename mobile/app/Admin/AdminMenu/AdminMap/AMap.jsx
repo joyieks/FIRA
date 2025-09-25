@@ -14,9 +14,10 @@ import {
   Platform,
   Image
 } from 'react-native';
-import MapView, { Marker, Callout } from 'react-native-maps';
+import MapView, { Marker, Callout, Circle } from 'react-native-maps';
 import * as Location from 'expo-location';
 import { MaterialIcons, Ionicons } from '@expo/vector-icons';
+import { supabase } from '../../../config/supabase';
 
 const { width, height } = Dimensions.get('window');
 
@@ -39,6 +40,12 @@ export default function AMap({ isSidebarOpen = false }) {
   const [reportsLoading, setReportsLoading] = useState(false);
   const [selectedReport, setSelectedReport] = useState(null);
   const [showReportModal, setShowReportModal] = useState(false);
+  const [stations, setStations] = useState([]);
+  const [jurisdictionRadius] = useState(2000);
+  const [assigneeType, setAssigneeType] = useState('station');
+  const [assigneeId, setAssigneeId] = useState('');
+  const [redirectTarget, setRedirectTarget] = useState('');
+  const [redirectNote, setRedirectNote] = useState('');
 
   // Dashboard states
   const [showDashboard, setShowDashboard] = useState(true);
@@ -55,39 +62,16 @@ export default function AMap({ isSidebarOpen = false }) {
     description: 'Your Admin Location'
   };
 
-  // Get user's current location
+  // Disable current location; keep map centered on adminLocation
   useEffect(() => {
-    (async () => {
-      try {
-        setLocationLoading(true);
-        let { status } = await Location.requestForegroundPermissionsAsync();
-        if (status !== 'granted') {
-          setErrorMsg('Permission to access location was denied');
-          return;
-        }
-
-        let location = await Location.getCurrentPositionAsync({
-          accuracy: Location.Accuracy.High
-        });
-        
-        setLocation(location);
-        
-        // Update map region to user location
-        setMapRegion({
-          latitude: location.coords.latitude,
-          longitude: location.coords.longitude,
-          latitudeDelta: 0.0922,
-          longitudeDelta: 0.0421,
-        });
-        
-        console.log('✅ Location detected:', location.coords);
-      } catch (error) {
-        console.error('❌ Error getting location:', error);
-        setErrorMsg('Unable to get your location');
-      } finally {
-        setLocationLoading(false);
-      }
-    })();
+    setLocationLoading(false);
+    setLocation(null);
+    setMapRegion({
+      latitude: adminLocation.latitude,
+      longitude: adminLocation.longitude,
+      latitudeDelta: 0.0922,
+      longitudeDelta: 0.0421,
+    });
   }, []);
 
   // Fetch fire reports
@@ -134,6 +118,38 @@ export default function AMap({ isSidebarOpen = false }) {
   useEffect(() => {
     fetchFireReports();
   }, [fetchFireReports]);
+
+  // Load stations and geocode addresses for markers
+  useEffect(() => {
+    (async () => {
+      try {
+        const { data, error } = await supabase
+          .from('station_users')
+          .select('id, station_name, lat, lng');
+        if (error) throw error;
+        const withCoords = (data || [])
+          .map(s => ({
+            ...s,
+            lat: typeof s.lat === 'number' ? s.lat : parseFloat(s.lat),
+            lng: typeof s.lng === 'number' ? s.lng : parseFloat(s.lng)
+          }))
+          .filter(s => !isNaN(s.lat) && !isNaN(s.lng));
+        setStations(withCoords);
+        if (withCoords.length > 0) {
+          // Center to first station to guarantee visibility
+          setMapRegion(r => ({
+            latitude: withCoords[0].lat,
+            longitude: withCoords[0].lng,
+            latitudeDelta: r.latitudeDelta,
+            longitudeDelta: r.longitudeDelta
+          }));
+        }
+      } catch (e) {
+        console.error('Stations load error (mobile):', e);
+        setStations([]);
+      }
+    })();
+  }, []);
 
   // Handle refresh
   const onRefresh = useCallback(async () => {
@@ -182,6 +198,47 @@ export default function AMap({ isSidebarOpen = false }) {
   const handleMarkerPress = (report) => {
     setSelectedReport(report);
     setShowReportModal(true);
+  };
+
+  const handleAssign = async () => {
+    try {
+      if (!selectedReport || !assigneeId) return;
+      const payload = {
+        report_id: String(selectedReport.id),
+        assignee_type: assigneeType,
+        assignee_id: assigneeId,
+        assigned_at: new Date().toISOString()
+      };
+      const { error } = await supabase
+        .from('report_assignments')
+        .upsert(payload, { onConflict: 'report_id' });
+      if (error) throw error;
+      Alert.alert('Assigned', 'Report assignment saved.');
+    } catch (e) {
+      console.error('Assign failed (mobile):', e);
+      Alert.alert('Error', 'Failed to assign report.');
+    }
+  };
+
+  const handleRedirect = async () => {
+    try {
+      if (!selectedReport || !redirectTarget) return;
+      const payload = {
+        report_id: String(selectedReport.id),
+        target: redirectTarget,
+        note: redirectNote || null,
+        forwarded_at: new Date().toISOString()
+      };
+      const { error } = await supabase
+        .from('report_routes')
+        .insert(payload);
+      if (error) throw error;
+      Alert.alert('Forwarded', 'Report forwarded successfully.');
+      setRedirectNote('');
+    } catch (e) {
+      console.error('Redirect failed (mobile):', e);
+      Alert.alert('Error', 'Failed to forward report.');
+    }
   };
 
   // Format date
@@ -258,7 +315,7 @@ export default function AMap({ isSidebarOpen = false }) {
           style={styles.map}
           region={mapRegion}
           onRegionChangeComplete={setMapRegion}
-          showsUserLocation={true}
+          showsUserLocation={false}
           showsMyLocationButton={false}
           zoomEnabled={true}
           scrollEnabled={true}
@@ -277,12 +334,10 @@ export default function AMap({ isSidebarOpen = false }) {
           // REMOVED: Redundant event handlers that were conflicting
         >
         {/* Admin Station Marker */}
-        <Marker
-          coordinate={adminLocation}
-          title={adminLocation.title}
-          description={adminLocation.description}
-          pinColor="blue"
-        >
+        <Marker coordinate={adminLocation} title={adminLocation.title} description={adminLocation.description}>
+          <View style={styles.stationMarkerAdmin}>
+            <Text style={styles.stationMarkerEmoji}>🏢</Text>
+          </View>
           <Callout>
             <View style={styles.calloutContainer}>
               <Text style={styles.calloutTitle}>🏢 BFP Regional Office VII</Text>
@@ -294,18 +349,7 @@ export default function AMap({ isSidebarOpen = false }) {
           </Callout>
         </Marker>
 
-        {/* User Location Marker */}
-        {location && (
-          <Marker
-            coordinate={{
-              latitude: location.coords.latitude,
-              longitude: location.coords.longitude,
-            }}
-            title="Your Location"
-            description="Current position"
-            pinColor="red"
-          />
-        )}
+        {/* User Location Marker removed */}
 
         {/* Fire Report Markers */}
         {fireReports.map((report, index) => (
@@ -334,6 +378,23 @@ export default function AMap({ isSidebarOpen = false }) {
               <Text style={styles.fireMarkerText}>🔥</Text>
             </TouchableOpacity>
           </Marker>
+        ))}
+        {/* Station markers and jurisdiction circles from lat/lng */}
+        {stations.map((s) => (
+          <React.Fragment key={s.id}>
+            <Marker coordinate={{ latitude: s.lat, longitude: s.lng }} title={s.station_name || 'Station'}>
+              <View style={styles.stationMarker}>
+                <Text style={styles.stationMarkerEmoji}>🏢</Text>
+              </View>
+            </Marker>
+            <Circle
+              center={{ latitude: s.lat, longitude: s.lng }}
+              radius={jurisdictionRadius}
+              strokeColor="#ef4444"
+              fillColor="rgba(239,68,68,0.08)"
+              strokeWidth={1}
+            />
+          </React.Fragment>
         ))}
         </MapView>
       </View>
@@ -590,6 +651,56 @@ export default function AMap({ isSidebarOpen = false }) {
                       />
                     </View>
                   )}
+
+                  {/* Assignment controls */}
+                  <View style={[styles.modalSection, { marginTop: 12 }]}> 
+                    <Text style={styles.modalLabel}>Assignment</Text>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 6 }}>
+                      <TouchableOpacity onPress={() => setAssigneeType('station')} style={{ padding: 8, backgroundColor: assigneeType==='station'?'#ef4444':'#e5e7eb', borderRadius: 6, marginRight: 8 }}>
+                        <Text style={{ color: assigneeType==='station'?'white':'#111827' }}>Station</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity onPress={() => setAssigneeType('responder')} style={{ padding: 8, backgroundColor: assigneeType==='responder'?'#ef4444':'#e5e7eb', borderRadius: 6 }}>
+                        <Text style={{ color: assigneeType==='responder'?'white':'#111827' }}>Responder</Text>
+                      </TouchableOpacity>
+                    </View>
+                    <View style={{ marginTop: 8 }}>
+                      <Text style={{ fontSize: 12, color: '#6b7280', marginBottom: 4 }}>Assignee ID</Text>
+                      <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+                        {(stations||[]).map(s => (
+                          <TouchableOpacity key={s.id} onPress={() => { setAssigneeType('station'); setAssigneeId(s.id); }} style={{ paddingVertical: 6, paddingHorizontal: 10, backgroundColor: assigneeId===s.id?'#ef4444':'#f3f4f6', borderRadius: 16, marginRight: 8 }}>
+                            <Text style={{ color: assigneeId===s.id?'white':'#111827' }}>{s.station_name || 'Station'}</Text>
+                          </TouchableOpacity>
+                        ))}
+                      </ScrollView>
+                      <TouchableOpacity onPress={handleAssign} style={{ marginTop: 8, paddingVertical: 10, backgroundColor: '#2563eb', borderRadius: 8, alignItems: 'center' }}>
+                        <Text style={{ color: 'white', fontWeight: 'bold' }}>Assign</Text>
+                      </TouchableOpacity>
+                    </View>
+                  </View>
+
+                  {/* Redirect controls */}
+                  <View style={[styles.modalSection, { marginTop: 12 }]}> 
+                    <Text style={styles.modalLabel}>Redirect / Forward</Text>
+                    <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+                      {(stations||[]).map(s => (
+                        <TouchableOpacity key={`rt-${s.id}`} onPress={() => setRedirectTarget(`station:${s.id}`)} style={{ paddingVertical: 6, paddingHorizontal: 10, backgroundColor: redirectTarget===`station:${s.id}`?'#f59e0b':'#f3f4f6', borderRadius: 16, marginRight: 8 }}>
+                          <Text style={{ color: redirectTarget===`station:${s.id}`?'white':'#111827' }}>{s.station_name || 'Station'}</Text>
+                        </TouchableOpacity>
+                      ))}
+                      <TouchableOpacity onPress={() => setRedirectTarget('agency:police')} style={{ paddingVertical: 6, paddingHorizontal: 10, backgroundColor: redirectTarget==='agency:police'?'#f59e0b':'#f3f4f6', borderRadius: 16, marginRight: 8 }}>
+                        <Text style={{ color: redirectTarget==='agency:police'?'white':'#111827' }}>Police</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity onPress={() => setRedirectTarget('agency:utilities')} style={{ paddingVertical: 6, paddingHorizontal: 10, backgroundColor: redirectTarget==='agency:utilities'?'#f59e0b':'#f3f4f6', borderRadius: 16, marginRight: 8 }}>
+                        <Text style={{ color: redirectTarget==='agency:utilities'?'white':'#111827' }}>Utilities</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity onPress={() => setRedirectTarget('agency:barangay')} style={{ paddingVertical: 6, paddingHorizontal: 10, backgroundColor: redirectTarget==='agency:barangay'?'#f59e0b':'#f3f4f6', borderRadius: 16, marginRight: 8 }}>
+                        <Text style={{ color: redirectTarget==='agency:barangay'?'white':'#111827' }}>Barangay</Text>
+                      </TouchableOpacity>
+                    </ScrollView>
+                    <TouchableOpacity onPress={handleRedirect} style={{ marginTop: 8, paddingVertical: 10, backgroundColor: '#f59e0b', borderRadius: 8, alignItems: 'center' }}>
+                      <Text style={{ color: 'white', fontWeight: 'bold' }}>Forward</Text>
+                    </TouchableOpacity>
+                  </View>
                 </ScrollView>
               </>
             )}
@@ -836,6 +947,30 @@ const styles = StyleSheet.create({
   },
   fireMarkerText: {
     fontSize: 16,
+  },
+  stationMarker: {
+    width: 40,
+    height: 40,
+    borderRadius: 8,
+    backgroundColor: '#ef4444',
+    borderWidth: 2,
+    borderColor: '#ffffff',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  stationMarkerAdmin: {
+    width: 44,
+    height: 44,
+    borderRadius: 8,
+    backgroundColor: '#1e3a8a',
+    borderWidth: 2,
+    borderColor: '#ffffff',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  stationMarkerEmoji: {
+    fontSize: 20,
+    color: 'white',
   },
   modalOverlay: {
     flex: 1,

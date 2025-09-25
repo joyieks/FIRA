@@ -88,12 +88,12 @@ const Suser_Management = () => {
     }
   };
 
-  // Get current station ID from context or localStorage fallback
+  // Get current station ID from context or sessionStorage fallback
   useEffect(() => {
     // First try to get from context
     if (stationData && stationData.station_name && stationData.station_name !== 'Loading...') {
-      // Get station ID from localStorage as fallback since context doesn't include ID
-      const userData = JSON.parse(localStorage.getItem('userData') || '{}');
+      // Get station ID from sessionStorage (where station login stores it) as fallback since context doesn't include ID
+      const userData = JSON.parse(sessionStorage.getItem('userData') || localStorage.getItem('userData') || '{}');
       if (userData.id) {
         setCurrentStationId(userData.id);
         console.log('🏢 Current station ID from context + localStorage:', userData.id);
