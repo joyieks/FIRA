@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { FiSend, FiPaperclip, FiUser, FiAlertTriangle, FiImage, FiCheck, FiSearch, FiFilter } from 'react-icons/fi';
 import { supabase } from '../../../../config/supabase';
+//import { analyzeMessageForFireAlarm, updateMessageWithAIAnalysis } from '../../../../services/openaiService';
 
 const Sfira_chat = () => {
   const [messages, setMessages] = useState([]);
@@ -17,25 +18,36 @@ const Sfira_chat = () => {
   const [currentStationId, setCurrentStationId] = useState(null);
   const [currentStationName, setCurrentStationName] = useState('');
   const [stations, setStations] = useState([]); // Other stations for communication
+  const sortContacts = (list) => {
+    return [...list].sort((a, b) => {
+      const aUnread = a.unreadCount || 0;
+      const bUnread = b.unreadCount || 0;
+      if (bUnread !== aUnread) return bUnread - aUnread;
+      const at = a.lastMessageTime ? new Date(a.lastMessageTime).getTime() : 0;
+      const bt = b.lastMessageTime ? new Date(b.lastMessageTime).getTime() : 0;
+      return bt - at;
+    });
+  };
   const messagesEndRef = useRef(null);
   const imageInputRef = useRef(null);
   const [isUploadingImage, setIsUploadingImage] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
+  const [refreshUnreadTick, setRefreshUnreadTick] = useState(0); // bump to refetch unread
 
-  // FIXED: Get current station ID from sessionStorage (where station login stores it) - EXACTLY same as User Management
+  // FIXED: Get current station ID from sessionStorage (where station login stores it) with localStorage fallback
   useEffect(() => {
     const userData = JSON.parse(sessionStorage.getItem('userData') || localStorage.getItem('userData') || '{}');
     if (userData.id) {
       setCurrentStationId(userData.id);
       setCurrentStationName(userData.station_name || userData.name || 'Station');
-      console.log('�� Current station ID (Chat):', userData.id);
+      console.log('🏢 Current station ID (Chat):', userData.id);
     } else {
       console.error('❌ No station ID found in userData (Chat)');
       alert('Error: Unable to identify current station. Please log in again.');
     }
   }, []);
 
-  // FIXED: Fetch users related to this station - EXACTLY same logic as User Management
+  // Fixed: Fetch users related to this station
   useEffect(() => {
     console.log('🔍 fetchUsers useEffect triggered, currentStationId:', currentStationId);
     
@@ -61,34 +73,80 @@ const Sfira_chat = () => {
           return;
         } else {
           console.log('✅ Supabase connection successful');
+          console.log('✅ Test data:', testData);
         }
         
         // Fetch admin users - ALL admin users in the system
-        console.log('📋 Fetching admin users...');
+        console.log('Fetching from admin_users table...');
         let adminUsers = [];
         const { data: adminData, error: adminError } = await supabase
           .from('admin_users')
-          .select('*')
-          .limit(100);
+          .select('*');
         
-        if (adminError && adminError.message.includes('relation "admin_users" does not exist')) {
-          console.log('⚠️ admin_users table not found, using mock admin');
+        if (adminError) {
+          console.error('❌ Error fetching admin users:', adminError);
+          console.error('❌ Error details:', {
+            message: adminError.message,
+            code: adminError.code,
+            details: adminError.details,
+            hint: adminError.hint
+          });
+          
+          // Always create fallback admin for any error
+          console.log('⚠️ Database error, injecting fallback admin for functionality');
           adminUsers = [{
-            id: 'mock-admin-1',
+            id: '6cac74e9-cfcf-43cd-9bcf-a30c6b67596d',
             first_name: 'Command',
             last_name: 'Center',
             email: 'admin@fira.com'
           }];
-        } else if (adminError) {
-          console.error('❌ Error fetching admin users:', adminError);
-          adminUsers = [];
         } else {
           adminUsers = adminData || [];
-          console.log('✅ Admin users fetched:', adminUsers.length);
+          console.log('✅ Admin users fetched:', adminUsers);
+          console.log('✅ Admin users count:', adminUsers.length);
+          
+          // Always ensure at least one admin exists
+          if (adminUsers.length === 0) {
+            console.log('⚠️ No admin users found in admin_users table, injecting fallback admin');
+            adminUsers = [{
+              id: '6cac74e9-cfcf-43cd-9bcf-a30c6b67596d',
+              first_name: 'Command',
+              last_name: 'Center',
+              email: 'admin@fira.com'
+            }];
+          }
         }
 
-        // FIXED: Fetch ONLY responders assigned to THIS station - EXACTLY same as User Management
-        console.log('👥 Fetching responders for station_id:', currentStationId);
+        // Fetch ONLY responders assigned to THIS station - CRITICAL FIX
+        console.log('�� Current station ID for responder filtering:', currentStationId);
+        console.log('🔍 Fetching responders where station_id =', currentStationId);
+        
+        // Debug: Fetch ALL responders first to see what we have
+        console.log('🔍 Fetching ALL responders first to see what we have...');
+        const { data: allResponders, error: allRespondersError } = await supabase
+          .from('responders')
+          .select('*');
+        
+        if (!allRespondersError && allResponders) {
+          console.log('🔍 ALL responders in database:', allResponders);
+          console.log('🔍 Station IDs in responders table:', allResponders.map(r => r.station_id));
+          
+          // Check if our current station ID matches any responder station_id
+          const matchingResponder = allResponders.find(r => r.station_id === currentStationId);
+          if (matchingResponder) {
+            console.log('✅ MATCH FOUND! currentStationId matches a responder station_id');
+            console.log('✅ Matching responder:', matchingResponder);
+          } else {
+            console.log('❌ NO MATCH! currentStationId does not match any responder station_id');
+            console.log('❌ currentStationId:', currentStationId);
+            console.log('❌ Available station_ids:', allResponders.map(r => r.station_id));
+          }
+        }
+
+        // Now fetch responders for current station
+        console.log('�� FINAL CHECK: About to fetch responders for station_id =', currentStationId);
+        console.log('🎯 This should match one of these station IDs from responders table');
+        
         const { data: responders, error: responderError } = await supabase
           .from('responders')
           .select('*')
@@ -97,8 +155,8 @@ const Sfira_chat = () => {
         if (responderError) {
           console.error('❌ Error fetching responders:', responderError);
         } else {
-          console.log('✅ Responders fetched for current station:', responders?.length || 0);
-          console.log('✅ Responder details:', responders);
+          console.log('✅ Responders fetched for station', currentStationId, ':', responders);
+          console.log('✅ Responders count:', responders?.length || 0);
           
           // Debug: Show which responders belong to this station
           if (responders && responders.length > 0) {
@@ -111,8 +169,9 @@ const Sfira_chat = () => {
         }
 
         // Fetch ALL other stations (excluding current station)
-        console.log('🏢 Fetching other stations...');
-        const { data: otherStations, error: stationsError } = await supabase
+        console.log('Fetching from station_users table...');
+        let otherStations = [];
+        const { data: stationsData, error: stationsError } = await supabase
           .from('station_users')
           .select('*')
           .neq('id', currentStationId) // Exclude current station
@@ -120,14 +179,49 @@ const Sfira_chat = () => {
 
         if (stationsError) {
           console.error('❌ Error fetching stations:', stationsError);
+          console.error('❌ Station error details:', {
+            message: stationsError.message,
+            code: stationsError.code,
+            details: stationsError.details,
+            hint: stationsError.hint
+          });
+          
+          // If table doesn't exist or has issues, create a fallback
+          if (stationsError.message.includes('relation "station_users" does not exist') || 
+              stationsError.code === 'PGRST116') {
+            console.log('⚠️ station_users table not found, creating fallback station');
+            otherStations = [{
+              id: 'fallback-station-1',
+              station_name: 'Central Fire Station',
+              email: 'central@fira.com'
+            }];
+          }
         } else {
-          console.log('✅ Other stations fetched:', otherStations?.length || 0);
+          otherStations = stationsData || [];
+          console.log('✅ Other stations fetched:', otherStations);
+          console.log('✅ Other stations count:', otherStations?.length || 0);
+          
+          // If no stations found, create a fallback
+          if (otherStations.length === 0) {
+            console.log('⚠️ No other stations found, creating fallback station');
+            otherStations = [{
+              id: 'fallback-station-1',
+              station_name: 'Central Fire Station',
+              email: 'central@fira.com'
+            }];
+          }
         }
 
+        // Debug logging for raw data
+        console.log('🔍 Raw admin users data:', adminUsers);
+        console.log('🔍 Raw responders data:', responders);
+        console.log('🔍 Raw stations data:', otherStations);
+
         // Format users from Supabase tables
-        const formattedUsers = [
-          // Admin users
-          ...(adminUsers || []).map(admin => ({
+        console.log('🔍 About to format admin users:', adminUsers);
+        const formattedAdminUsers = (adminUsers || []).map(admin => {
+          console.log('🔍 Processing admin user:', admin);
+          const formatted = {
             id: admin.id,
             name: `${admin.first_name || ''} ${admin.last_name || ''}`.trim() || 'Admin User',
             email: admin.email,
@@ -136,42 +230,62 @@ const Sfira_chat = () => {
             lastMessage: '',
             lastMessageTime: null,
             unreadCount: 0
-          })),
+          };
+          console.log('🔍 Formatted admin user:', formatted);
+          return formatted;
+        });
+        console.log('🔍 All formatted admin users:', formattedAdminUsers);
+
+        const formattedUsers = [
+          // Admin users
+          ...formattedAdminUsers,
           
-          // FIXED: Responders (only those assigned to current station) - EXACTLY same as User Management
-          ...(responders || []).map(responder => ({
-            id: responder.id,
-            name: `${responder.first_name || ''} ${responder.last_name || ''}`.trim() || 'Responder',
-            email: responder.email,
-            type: 'responder',
-            avatar: (responder.first_name || responder.last_name || 'R')[0].toUpperCase(),
-            lastMessage: '',
-            lastMessageTime: null,
-            unreadCount: 0
-          })),
+          // Responders (only those assigned to current station)
+          ...(responders || []).map(responder => {
+            console.log('🔍 Processing responder:', responder);
+            return {
+              id: responder.id,
+              name: `${responder.first_name || ''} ${responder.last_name || ''}`.trim() || 'Responder',
+              email: responder.email,
+              type: 'responder',
+              avatar: (responder.first_name || responder.last_name || 'R')[0].toUpperCase(),
+              lastMessage: '',
+              lastMessageTime: null,
+              unreadCount: 0
+            };
+          }),
           
           // Other stations
-          ...(otherStations || []).map(station => ({
-            id: station.id,
-            name: station.station_name || station.name || 'Unnamed Station',
-            email: station.email,
-            type: 'station',
-            avatar: (station.station_name || station.name || 'S')[0].toUpperCase(),
-            lastMessage: '',
-            lastMessageTime: null,
-            unreadCount: 0
-          }))
+          ...(otherStations || []).map(station => {
+            console.log('�� Processing station:', station);
+            return {
+              id: station.id,
+              name: station.station_name || station.name || 'Unnamed Station',
+              email: station.email,
+              type: 'station',
+              avatar: (station.station_name || station.name || 'S')[0].toUpperCase(),
+              lastMessage: '',
+              lastMessageTime: null,
+              unreadCount: 0
+            };
+          })
         ];
 
-        console.log('📊 Final formatted users breakdown:');
-        console.log(`   Admin users: ${formattedUsers.filter(u => u.type === 'admin').length}`);
-        console.log(`   Responders: ${formattedUsers.filter(u => u.type === 'responder').length}`);
-        console.log(`   Stations: ${formattedUsers.filter(u => u.type === 'station').length}`);
-        console.log(`   Total users: ${formattedUsers.length}`);
+        console.log('Total formatted users:', formattedUsers);
+        console.log('Current station ID:', currentStationId);
+        console.log('🔍 Admin users in final list:', formattedUsers.filter(u => u.type === 'admin'));
+        console.log('🔍 Responder users in final list:', formattedUsers.filter(u => u.type === 'responder'));
+        console.log('🔍 Station users in final list:', formattedUsers.filter(u => u.type === 'station'));
 
-        setUsers(formattedUsers);
-        setFilteredUsers(formattedUsers);
+        const sortedUsers = sortContacts(formattedUsers);
+        console.log('🔍 Sorted users:', sortedUsers);
+        console.log('🔍 Sorted users count:', sortedUsers.length);
+        
+        setUsers(sortedUsers);
+        setFilteredUsers(sortedUsers);
         setStations(otherStations || []);
+        
+        console.log('🔍 Final state set - users:', sortedUsers.length, 'stations:', otherStations.length);
 
       } catch (error) {
         console.error('❌ Error fetching users:', error);
@@ -189,6 +303,19 @@ const Sfira_chat = () => {
       if (!currentStationId || users.length === 0) return;
 
       try {
+        console.log('🔍 Fetching unread messages for station:', currentStationId);
+        
+        // First, let's check ALL messages for this station to see what we have
+        const { data: allMessages, error: allError } = await supabase
+          .from('messages')
+          .select('*')
+          .eq('receiver_id', currentStationId)
+          .order('created_at', { ascending: false });
+        
+        console.log('🔍 ALL messages for this station:', allMessages);
+        console.log('🔍 ALL messages count:', allMessages?.length || 0);
+        
+        // Now check specifically for unread messages
         const { data: messagesData, error } = await supabase
           .from('messages')
           .select('*')
@@ -196,15 +323,19 @@ const Sfira_chat = () => {
           .eq('is_read', false)
           .order('created_at', { ascending: false });
 
+        console.log('🔍 Unread messages query result:', messagesData);
+        console.log('🔍 Unread messages count:', messagesData?.length || 0);
+
         if (error) {
           console.error('Error fetching unread messages:', error);
-        return;
-      }
+          return;
+        }
 
         // Group unread messages by user
         const unreadByUser = {};
         messagesData.forEach(message => {
           const userId = message.sender_id;
+          console.log('🔍 Processing unread message from user:', userId, 'text:', message.text, 'is_read:', message.is_read);
           if (!unreadByUser[userId]) {
             unreadByUser[userId] = {
               count: 0,
@@ -214,23 +345,32 @@ const Sfira_chat = () => {
           }
           unreadByUser[userId].count++;
         });
+        
+        console.log('🔍 Grouped unread messages by user:', unreadByUser);
 
         // Update users with unread count and last message
         const updatedUsers = users.map(user => {
           const unreadInfo = unreadByUser[user.id];
-        return {
+          const updatedUser = {
             ...user,
             unreadCount: unreadInfo ? unreadInfo.count : 0,
             lastMessage: unreadInfo ? unreadInfo.lastMessage : user.lastMessage,
             lastMessageTime: unreadInfo ? unreadInfo.lastMessageTime : user.lastMessageTime
-        };
-      });
+          };
+          console.log('🔍 Updated user:', user.name, 'unreadCount:', updatedUser.unreadCount, 'unreadInfo:', unreadInfo);
+          return updatedUser;
+        });
 
-        setUsers(updatedUsers);
-        setFilteredUsers(updatedUsers);
+        const sortedUpdated = sortContacts(updatedUsers);
+        console.log('🔍 Setting users state with:', sortedUpdated.length, 'users (sorted)');
+        setUsers(sortedUpdated);
+        setFilteredUsers(sortedUpdated);
 
         // Set unread users
-        const unreadUsersList = updatedUsers.filter(user => user.unreadCount > 0);
+        const unreadUsersList = sortedUpdated.filter(user => user.unreadCount > 0);
+        console.log('🔍 All users with unread counts:', updatedUsers.map(u => ({ name: u.name, unreadCount: u.unreadCount })));
+        console.log('🔍 Filtered unread users:', unreadUsersList.map(u => ({ name: u.name, unreadCount: u.unreadCount })));
+        console.log('🔍 Setting unread users state with:', unreadUsersList.length, 'unread users');
         setUnreadUsers(unreadUsersList);
         setFilteredUnreadUsers(unreadUsersList);
       } catch (error) {
@@ -241,7 +381,38 @@ const Sfira_chat = () => {
     if (users.length > 0) {
       fetchUnreadMessages();
     }
-  }, [currentStationId, users.length]);
+  }, [currentStationId, users.length, refreshUnreadTick]);
+
+  // Global real-time listener for ANY new messages sent to this station (updates unread instantly)
+  useEffect(() => {
+    if (!currentStationId) return;
+
+    const globalChannel = supabase
+      .channel(`messages:inbox:${currentStationId}`)
+      .on('postgres_changes', {
+        event: 'INSERT',
+        schema: 'public',
+        table: 'messages',
+        filter: `receiver_id=eq.${currentStationId}`
+      }, (payload) => {
+        const incoming = payload.new;
+        // If we're currently viewing this sender, append to thread and mark as read
+        if (selectedUser && incoming.sender_id === selectedUser.id) {
+          setMessages(prev => [...prev, incoming]);
+          // Mark as read and keep unread counters clean
+          markMessagesAsRead(incoming.sender_id);
+          return;
+        }
+
+        // Otherwise, trigger a fresh unread fetch to avoid stale state
+        setRefreshUnreadTick(t => t + 1);
+      })
+      .subscribe();
+
+    return () => {
+      globalChannel.unsubscribe();
+    };
+  }, [currentStationId, selectedUser, users]);
 
   // Filter users based on search query and filter type
   useEffect(() => {
@@ -261,6 +432,9 @@ const Sfira_chat = () => {
       });
       setFilteredUsers(filtered);
     } else {
+      console.log('🔍 Filtering unread users - activeTab:', activeTab, 'unreadUsers count:', unreadUsers.length);
+      console.log('🔍 Unread users before filtering:', unreadUsers.map(u => ({ name: u.name, unreadCount: u.unreadCount, type: u.type })));
+      
       filtered = unreadUsers.filter(user => {
         const matchesSearch = user.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
                             user.email.toLowerCase().includes(searchQuery.toLowerCase());
@@ -272,22 +446,45 @@ const Sfira_chat = () => {
         
         return matchesSearch;
       });
+      
+      console.log('🔍 Filtered unread users result:', filtered.map(u => ({ name: u.name, unreadCount: u.unreadCount, type: u.type })));
       setFilteredUnreadUsers(filtered);
     }
   }, [searchQuery, filterType, activeTab, users, unreadUsers]);
 
   // Fetch messages for selected user
   useEffect(() => {
-    if (!selectedUser || !currentStationId) return;
+    console.log('useEffect triggered - selectedUser:', selectedUser, 'currentStationId:', currentStationId);
+    if (!selectedUser || !currentStationId) {
+      console.log('Missing required data - selectedUser:', !!selectedUser, 'currentStationId:', !!currentStationId);
+      return;
+    }
 
     const fetchMessages = async () => {
       try {
         console.log('Fetching messages between:', currentStationId, 'and', selectedUser.id);
         
+        // First, let's try a simpler query to see all messages
+        console.log('Trying to fetch all messages first...');
+        const { data: allMessages, error: allError } = await supabase
+          .from('messages')
+          .select('*')
+          .order('created_at', { ascending: true });
+        
+        if (allError) {
+          console.error('Error fetching all messages:', allError);
+        } else {
+          console.log('All messages in database:', allMessages);
+        }
+
+        // Now try the specific query
+        const query = `and(sender_id.eq.${selectedUser.id},receiver_id.eq.${currentStationId}),and(sender_id.eq.${currentStationId},receiver_id.eq.${selectedUser.id})`;
+        console.log('Query string:', query);
+        
         const { data: messagesData, error } = await supabase
           .from('messages')
           .select('*')
-          .or(`and(sender_id.eq.${selectedUser.id},receiver_id.eq.${currentStationId}),and(sender_id.eq.${currentStationId},receiver_id.eq.${selectedUser.id})`)
+          .or(query)
           .order('created_at', { ascending: true });
 
         if (error) {
@@ -296,7 +493,17 @@ const Sfira_chat = () => {
         }
 
         console.log('Messages fetched:', messagesData);
+        console.log('Number of messages fetched:', messagesData?.length || 0);
+        console.log('Setting messages state with:', messagesData || []);
         setMessages(messagesData || []);
+        
+        // Mark messages as read when fetching them (when opening a conversation)
+        if (messagesData && messagesData.length > 0) {
+          markMessagesAsRead(selectedUser.id);
+          // Also refresh unread aggregates immediately
+          setRefreshUnreadTick(t => t + 1);
+        }
+        
         setTimeout(scrollToBottom, 100);
       } catch (error) {
         console.error('Error fetching messages:', error);
@@ -308,7 +515,30 @@ const Sfira_chat = () => {
 
   // Real-time subscription for new messages
   useEffect(() => {
-    if (!selectedUser || !currentStationId) return;
+    if (!selectedUser || !currentStationId) {
+      console.log('Real-time subscription: Missing selectedUser or currentStationId');
+      return;
+    }
+
+    console.log('Setting up real-time subscription for:', {
+      selectedUser: selectedUser.id,
+      currentStationId: currentStationId,
+      channel: `messages:${selectedUser.id}:${currentStationId}`
+    });
+
+    // Test real-time connection first
+    const testChannel = supabase
+      .channel('test-connection')
+      .on('postgres_changes', {
+        event: '*',
+        schema: 'public',
+        table: 'messages'
+      }, (payload) => {
+        console.log('Test real-time message received:', payload);
+      })
+      .subscribe((status) => {
+        console.log('Test real-time subscription status:', status);
+      });
 
     const subscription = supabase
       .channel(`messages:${selectedUser.id}:${currentStationId}`)
@@ -318,12 +548,71 @@ const Sfira_chat = () => {
         table: 'messages',
         filter: `or(and(sender_id.eq.${selectedUser.id},receiver_id.eq.${currentStationId}),and(sender_id.eq.${currentStationId},receiver_id.eq.${selectedUser.id}))`
       }, (payload) => {
-        setMessages(prev => [...prev, payload.new]);
+        console.log('Real-time message received:', payload);
+        setMessages(prev => {
+          console.log('Previous messages:', prev);
+          console.log('Adding new message:', payload.new);
+          const newMessages = [...prev, payload.new];
+          console.log('Updated messages:', newMessages);
+          return newMessages;
+        });
+        
+        // Update unread count for the current station (receiver) when receiving a message
+        if (payload.new.receiver_id === currentStationId) {
+          const senderId = payload.new.sender_id;
+          console.log('Updating unread count for sender:', senderId, 'because we received a message from them');
+          
+          // Update users list and resort so unread threads float to the top
+          setUsers(prevUsers => {
+            const next = prevUsers.map(user => 
+              user.id === senderId 
+                ? { ...user, unreadCount: (user.unreadCount || 0) + 1, lastMessage: incoming.text || user.lastMessage, lastMessageTime: incoming.created_at }
+                : user
+            );
+            return sortContacts(next);
+          });
+
+          // Recompute unread list from the sorted users
+          setUnreadUsers(prev => {
+            return (users.length ? sortContacts(
+              users.map(u => u.id === senderId ? { ...u, unreadCount: (u.unreadCount || 0) + 1, lastMessage: incoming.text || u.lastMessage, lastMessageTime: incoming.created_at } : u)
+            ) : []).filter(u => (u.unreadCount || 0) > 0);
+          });
+          
+          // Update filtered unread users
+          setFilteredUnreadUsers(prevFiltered => {
+            const isAlreadyInFiltered = prevFiltered.some(user => user.id === senderId);
+            if (!isAlreadyInFiltered) {
+              const senderUser = users.find(user => user.id === senderId);
+              if (senderUser) {
+                return [...prevFiltered, { ...senderUser, unreadCount: (senderUser.unreadCount || 0) + 1 }];
+              }
+            } else {
+              // Update existing filtered unread user's count
+              return prevFiltered.map(user => 
+                user.id === senderId 
+                  ? { ...user, unreadCount: (user.unreadCount || 0) + 1 }
+                  : user
+              );
+            }
+            return prevFiltered;
+          });
+        }
+        
         setTimeout(scrollToBottom, 100);
       })
-      .subscribe();
+      .subscribe((status) => {
+        console.log('Real-time subscription status:', status);
+        if (status === 'SUBSCRIBED') {
+          console.log('✅ Real-time subscription active');
+        } else if (status === 'CHANNEL_ERROR') {
+          console.error('❌ Real-time subscription error');
+        }
+      });
 
     return () => {
+      console.log('Cleaning up real-time subscription');
+      testChannel.unsubscribe();
       subscription.unsubscribe();
     };
   }, [selectedUser, currentStationId]);
@@ -332,11 +621,63 @@ const Sfira_chat = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   };
 
+  // Mark messages as read when selecting a user
+  const markMessagesAsRead = async (userId) => {
+    if (!currentStationId || !userId) return;
+
+    try {
+      console.log('🔍 Marking messages as read from user:', userId, 'to station:', currentStationId);
+      
+      const { error } = await supabase
+        .from('messages')
+        .update({ is_read: true })
+        .eq('sender_id', userId)
+        .eq('receiver_id', currentStationId)
+        .eq('is_read', false);
+
+      if (error) {
+        console.error('Error marking messages as read:', error);
+      } else {
+        console.log('✅ Messages marked as read successfully');
+        
+        // Update the local state to reflect the read status
+        setUsers(prevUsers => {
+          const updated = prevUsers.map(user => 
+            user.id === userId 
+              ? { ...user, unreadCount: 0 }
+              : user
+          );
+          console.log('🔍 Updated users after marking as read:', updated.map(u => ({ name: u.name, unreadCount: u.unreadCount })));
+          return updated;
+        });
+        
+        // Update unread users list
+        setUnreadUsers(prevUnread => {
+          const filtered = prevUnread.filter(user => user.id !== userId);
+          console.log('🔍 Updated unread users after marking as read:', filtered.map(u => ({ name: u.name, unreadCount: u.unreadCount })));
+          return filtered;
+        });
+        
+        // Update filtered unread users
+        setFilteredUnreadUsers(prevFiltered => {
+          const filtered = prevFiltered.filter(user => user.id !== userId);
+          console.log('🔍 Updated filtered unread users after marking as read:', filtered.map(u => ({ name: u.name, unreadCount: u.unreadCount })));
+          return filtered;
+        });
+
+        // Force a refresh of unread aggregates for safety
+        setRefreshUnreadTick(t => t + 1);
+      }
+    } catch (error) {
+      console.error('Error marking messages as read:', error);
+    }
+  };
+
   const handleSendMessage = async () => {
     if (newMessage.trim() === '' || !selectedUser || !currentStationId) return;
 
     try {
-      console.log('Sending message:', {
+      const messageData = {
         sender_id: currentStationId,
         receiver_id: selectedUser.id,
         sender_type: 'station',
@@ -344,19 +685,16 @@ const Sfira_chat = () => {
         text: newMessage,
         is_emergency: isEmergencyMode,
         is_read: false
-      });
+      };
+
+      console.log('Sending message:', messageData);
+      console.log('Current station ID type:', typeof currentStationId);
+      console.log('Selected user ID type:', typeof selectedUser.id);
+      console.log('Selected user type:', selectedUser.type);
 
       const { data, error } = await supabase
         .from('messages')
-        .insert({
-          sender_id: currentStationId,
-          receiver_id: selectedUser.id,
-          sender_type: 'station',
-          receiver_type: selectedUser.type,
-          text: newMessage,
-          is_emergency: isEmergencyMode,
-          is_read: false
-        })
+        .insert(messageData)
         .select();
 
       if (error) {
@@ -367,6 +705,38 @@ const Sfira_chat = () => {
 
       console.log('Message sent successfully:', data);
       setNewMessage('');
+      
+      // Add the message to the local state immediately for better UX
+      if (data && data[0]) {
+        setMessages(prev => {
+          console.log('Adding sent message to local state:', data[0]);
+          return [...prev, data[0]];
+        });
+        
+        // Note: When we send a message, the recipient gets an unread message
+        // The recipient's unread count will be updated when they receive the message via real-time
+        // or when they refresh the page and the unread messages are fetched from the database
+        
+        setTimeout(scrollToBottom, 100);
+
+        // AI Analysis: Analyze the message for fire alarm level
+        try {
+          console.log('🤖 Starting AI analysis for message:', newMessage);
+          const analysis = await analyzeMessageForFireAlarm(newMessage);
+          console.log('🤖 AI Analysis result:', analysis);
+          
+          if (analysis.suggested_alarm) {
+            // Update the message with AI analysis
+            await updateMessageWithAIAnalysis(data[0].id, analysis, supabase);
+            console.log('✅ Message updated with AI suggested alarm:', analysis.suggested_alarm);
+          } else {
+            console.log('ℹ️ No fire-related content detected in message');
+          }
+        } catch (aiError) {
+          console.error('❌ AI analysis failed:', aiError);
+          // Don't show error to user, just log it
+        }
+      }
     } catch (error) {
       console.error('Error sending message:', error);
       alert(`Failed to send message: ${error.message}`);
@@ -444,7 +814,7 @@ const Sfira_chat = () => {
         <div className="p-4 border-b border-gray-200">
           <h2 className="text-xl font-bold text-red-600">Project FIRA</h2>
           <p className="text-sm text-gray-500">Emergency Communication</p>
-          
+          <p className="text-xs text-gray-400 mt-1">Station: {currentStationName}</p>
         </div>
         
         {/* Search Bar */}
@@ -508,59 +878,29 @@ const Sfira_chat = () => {
 
         {activeTab === 'chat' ? (
           <div className="flex-1 overflow-y-auto min-h-0">
+            {console.log('🔍 UI Debug - isLoading:', isLoading, 'filteredUsers.length:', filteredUsers.length, 'users.length:', users.length)}
             {isLoading ? (
               <div className="text-center text-gray-500 py-8">Loading users...</div>
             ) : filteredUsers.length === 0 ? (
-              <div className="text-center text-gray-500 py-8">No users found</div>
+              <div className="text-center text-gray-500 py-8">
+                No users found
+                <br />
+                <small className="text-xs text-gray-400">
+                  Debug: isLoading={isLoading.toString()}, users={users.length}, filtered={filteredUsers.length}
+                </small>
+              </div>
             ) : (
               filteredUsers.map(user => (
-              <div
-                key={user.id}
-                  className={`p-4 border-b border-gray-200 hover:bg-gray-50 cursor-pointer flex items-center ${
-                    selectedUser?.id === user.id ? 'bg-red-50' : ''
-                  }`}
-                onClick={() => setSelectedUser(user)}
-              >
-                  <div className={`w-12 h-12 rounded-full flex items-center justify-center font-bold mr-3 text-lg ${
-                    user.type === 'admin' ? 'bg-blue-100 text-blue-600' : 
-                    user.type === 'responder' ? 'bg-green-100 text-green-600' : 
-                    'bg-orange-100 text-orange-600'
-                  }`}>
-                    {user.avatar}
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <h3 className="font-medium text-gray-900 truncate">{user.name}</h3>
-                    <p className="text-sm text-gray-500 truncate">{user.email}</p>
-                    <p className="text-xs text-gray-400 truncate mt-1">
-                      {user.type === 'admin' ? 'Admin' : user.type === 'responder' ? 'Responder' : 'Station'}
-                    </p>
-                    {user.lastMessage && (
-                      <div className="text-xs text-gray-400 truncate mt-1">
-                        {formatLastMessage(user.lastMessage)}
-                      </div>
-                    )}
-                </div>
-                  {user.unreadCount > 0 && (
-                    <div className="bg-red-500 text-white text-xs rounded-full px-2 py-1 min-w-[20px] text-center">
-                      {user.unreadCount}
-                </div>
-                  )}
-              </div>
-              ))
-            )}
-          </div>
-        ) : (
-          <div className="flex-1 overflow-y-auto min-h-0">
-            {filteredUnreadUsers.length === 0 ? (
-              <div className="text-center text-gray-500 py-8">No unread messages</div>
-            ) : (
-              filteredUnreadUsers.map(user => (
                 <div
                   key={user.id}
                   className={`p-4 border-b border-gray-200 hover:bg-gray-50 cursor-pointer flex items-center ${
                     selectedUser?.id === user.id ? 'bg-red-50' : ''
                   }`}
-                  onClick={() => setSelectedUser(user)}
+                  onClick={() => {
+                    setSelectedUser(user);
+                    // Mark messages as read when selecting a user
+                    markMessagesAsRead(user.id);
+                  }}
                 >
                   <div className={`w-12 h-12 rounded-full flex items-center justify-center font-bold mr-3 text-lg ${
                     user.type === 'admin' ? 'bg-blue-100 text-blue-600' : 
@@ -580,11 +920,63 @@ const Sfira_chat = () => {
                         {formatLastMessage(user.lastMessage)}
                       </div>
                     )}
+                  </div>
+                  {user.unreadCount > 0 && (
+                    <div className="bg-red-500 text-white text-xs rounded-full px-2 py-1 min-w-[20px] text-center">
+                      {user.unreadCount}
+                    </div>
+                  )}
                 </div>
+              ))
+            )}
+          </div>
+        ) : (
+          <div className="flex-1 overflow-y-auto min-h-0">
+            {console.log('Rendering unread tab - filteredUnreadUsers:', filteredUnreadUsers.length, 'users:', filteredUnreadUsers)}
+            {filteredUnreadUsers.length === 0 ? (
+              <div className="flex flex-col items-center justify-center h-full text-gray-500">
+                <div className="text-6xl mb-4">📭</div>
+                <h3 className="text-lg font-medium mb-2">You have no unread messages!</h3>
+                <p className="text-sm text-center">
+                  All caught up! Check back later for new messages.
+                </p>
+              </div>
+            ) : (
+              filteredUnreadUsers.map(user => (
+                <div
+                  key={user.id}
+                  className={`p-4 border-b border-gray-200 hover:bg-gray-50 cursor-pointer flex items-center ${
+                    selectedUser?.id === user.id ? 'bg-red-50' : ''
+                  }`}
+                  onClick={() => {
+                    setSelectedUser(user);
+                    // Mark messages as read when selecting a user
+                    markMessagesAsRead(user.id);
+                  }}
+                >
+                  <div className={`w-12 h-12 rounded-full flex items-center justify-center font-bold mr-3 text-lg ${
+                    user.type === 'admin' ? 'bg-blue-100 text-blue-600' : 
+                    user.type === 'responder' ? 'bg-green-100 text-green-600' : 
+                    'bg-orange-100 text-orange-600'
+                  }`}>
+                    {user.avatar}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <h3 className="font-medium text-gray-900 truncate">{user.name}</h3>
+                    <p className="text-sm text-gray-500 truncate">{user.email}</p>
+                    <p className="text-xs text-gray-400 truncate mt-1">
+                      {user.type === 'admin' ? 'Admin' : user.type === 'responder' ? 'Responder' : 'Station'}
+                    </p>
+                    {user.lastMessage && (
+                      <div className="text-xs text-gray-400 truncate mt-1">
+                        {formatLastMessage(user.lastMessage)}
+                      </div>
+                    )}
+                  </div>
                   <div className="bg-red-500 text-white text-xs rounded-full px-2 py-1 min-w-[20px] text-center">
                     {user.unreadCount}
+                  </div>
                 </div>
-              </div>
               ))
             )}
           </div>
@@ -636,8 +1028,9 @@ const Sfira_chat = () => {
               </div>
             </div>
 
-                         {/* Messages */}
-             <div className="h-170 overflow-y-auto p-4 bg-gray-50">
+            {/* Messages */}
+            <div className="flex-1 overflow-y-auto p-4 bg-gray-50">
+              {console.log('Rendering messages, count:', messages.length, 'messages:', messages)}
               {messages.length === 0 ? (
                 <div className="flex flex-col items-center justify-center h-full text-gray-500">
                   <div className="text-6xl mb-4">💬</div>
@@ -649,39 +1042,39 @@ const Sfira_chat = () => {
               ) : (
                 messages.map((message) => {
                   const isMine = message.sender_id === currentStationId;
-                return (
-                  <div 
-                    key={message.id} 
-                    className={`mb-4 flex ${isMine ? 'justify-end' : 'justify-start'} items-center`}
-                  >
-                    <div className={`max-w-xs md:max-w-md ${isMine ? 'items-end' : 'items-start'}`}>
-                      <div className={`rounded-lg px-4 py-2 ${
-                        isMine
-                          ? isEmergencyMode 
-                            ? 'bg-red-600 text-white' 
-                            : 'bg-blue-600 text-white'
-                            : message.is_emergency
-                            ? 'bg-red-100 border border-red-200'
-                            : 'bg-white border border-gray-200'
-                      }`}>
-                        {!isMine && (
+                  return (
+                    <div 
+                      key={message.id} 
+                      className={`mb-4 flex ${isMine ? 'justify-end' : 'justify-start'} items-center`}
+                    >
+                      <div className={`max-w-xs md:max-w-md ${isMine ? 'items-end' : 'items-start'}`}>
+                        <div className={`rounded-lg px-4 py-2 ${
+                          isMine
+                            ? isEmergencyMode 
+                              ? 'bg-red-600 text-white' 
+                              : 'bg-blue-600 text-white'
+                              : message.is_emergency
+                              ? 'bg-red-100 border border-red-200'
+                              : 'bg-white border border-gray-200'
+                        }`}>
+                          {!isMine && (
                             <div className={`text-xs font-medium mb-1 ${
                               message.is_emergency ? 'text-red-600' : 'text-gray-500'
                             }`}>
                               {message.sender_name || selectedUser.name}
-                          </div>
-                        )}
-                        {message.text && <p className="whitespace-pre-wrap">{message.text}</p>}
+                            </div>
+                          )}
+                          {message.text && <p className="whitespace-pre-wrap">{message.text}</p>}
                           <div className={`text-xs mt-2 text-right ${
-                          isMine 
-                            ? 'text-white text-opacity-80' 
-                              : message.is_emergency 
-                              ? 'text-red-500' 
-                              : 'text-gray-500'
-                        }`}>
+                            isMine 
+                              ? 'text-white text-opacity-80' 
+                                : message.is_emergency 
+                                ? 'text-red-500' 
+                                : 'text-gray-500'
+                          }`}>
                             {formatTime(message.created_at)}
+                          </div>
                         </div>
-                      </div>
                       </div>
                     </div>
                   );

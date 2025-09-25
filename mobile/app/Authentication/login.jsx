@@ -99,29 +99,8 @@ const LoginComponent = () => {
         return;
       }
 
-      // Try Responder login first (from responders table)
-      console.log('🔍 Checking responders table for responder login...');
-      try {
-        const { data: responderData, error: responderError } = await supabase
-          .from('responders')
-          .select('*')
-          .eq('email', email)
-          .single();
-
-        if (!responderError && responderData) {
-          console.log('✅ Responder found in database:', responderData);
-          
-          // For now, we'll skip password verification since responders table doesn't store passwords
-          // In a real system, you'd verify the password here
-          await loginResponder(responderData);
-          displayToast(`Welcome to Project FIRA, ${responderData.first_name}! 🚑`, 'success');
-          return;
-        } else {
-          console.log('ℹ️ No responder found with this email, continuing to other login methods...');
-        }
-      } catch (error) {
-        console.log('ℹ️ Error checking responders table (this is normal if not a responder):', error.message);
-      }
+      // IMPORTANT: Do NOT pre-empt with responder login by email only.
+      // Always authenticate with Supabase Auth first to respect password for the email.
 
       // Try Station login (no Supabase Auth account required) - mirrors web logic
       console.log('🔍 Checking station_users for station login...');
@@ -182,21 +161,25 @@ const LoginComponent = () => {
         console.log('🔍 Supabase Auth failed:', authError.message);
         console.log('🔍 Auth error details:', authError);
         
-        // Don't throw error immediately - let's try to check if it's a responder
-        // by looking in the responders table directly
-        console.log('🔄 Supabase Auth failed, checking responders table as fallback...');
-        
-        // Check if this user exists in 'responders' table as fallback
+        // Don't throw error immediately - check if this is a responder authenticating
+        // against the responders table USING email + password (separate credential store).
+        console.log('🔄 Supabase Auth failed, checking responders table with password...');
+
         const { data: responderData, error: responderError } = await supabase
           .from('responders')
           .select('*')
           .eq('email', email.toLowerCase())
+          .eq('password', password)
           .single();
 
+        if (responderError && responderError.code !== 'PGRST116') {
+          // Unexpected error other than "No rows"
+          console.log('ℹ️ Responder lookup error:', responderError.message);
+        }
+
         if (responderData) {
-          console.log('✅ User found in responders table (fallback):', responderData);
-          
-          // Convert Supabase data format to match your app's expected format
+          console.log('✅ Responder authenticated via responders table');
+
           const userData = {
             uid: responderData.id,
             firstName: responderData.first_name,
@@ -207,11 +190,10 @@ const LoginComponent = () => {
             displayName: `${responderData.first_name} ${responderData.last_name}`.trim(),
             status: responderData.status || 'active',
             stationId: responderData.station_id,
-            stationName: 'Station', // Default since station_name is not in responders table
+            stationName: 'Station',
             position: responderData.user_position,
             isOnline: responderData.is_online || false,
             createdAt: responderData.created_at,
-            // Additional fields from your table
             middleName: responderData.middle_name,
             stationContactNumber: responderData.station_contact_number,
             address: responderData.address,
@@ -220,20 +202,16 @@ const LoginComponent = () => {
             gender: responderData.gender
           };
 
-          // Clear any existing toast before login
           setShowToast(false);
           setToastMessage('');
-          
           await loginResponder(userData);
-          
-          // Show success toast after successful login
           displayToast(`Welcome to Project FIRA, ${userData.displayName}! 🚑`, 'success');
           return;
-        } else {
-          // If not found in responders table either, then throw the original auth error
-          console.log('❌ User not found in responders table either');
-          throw authError;
         }
+
+        // If neither Supabase Auth nor responders table matched, rethrow auth error
+        console.log('❌ Credentials did not match Supabase Auth or responders table');
+        throw authError;
       }
 
       const user = authData.user;

@@ -10,7 +10,9 @@ CREATE TABLE IF NOT EXISTS responder_notifications (
   title TEXT NOT NULL,
   message TEXT NOT NULL,
   priority TEXT NOT NULL DEFAULT 'normal' CHECK (priority IN ('low', 'normal', 'high', 'urgent')),
+  status TEXT DEFAULT 'pending' CHECK (status IN ('pending', 'accepted', 'declined', 'completed')),
   is_read BOOLEAN NOT NULL DEFAULT FALSE,
+  accepted_at TIMESTAMP WITH TIME ZONE,
   created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
   updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
@@ -19,6 +21,7 @@ CREATE TABLE IF NOT EXISTS responder_notifications (
 CREATE INDEX IF NOT EXISTS idx_responder_notifications_responder_id ON responder_notifications(responder_id);
 CREATE INDEX IF NOT EXISTS idx_responder_notifications_station_id ON responder_notifications(station_id);
 CREATE INDEX IF NOT EXISTS idx_responder_notifications_is_read ON responder_notifications(is_read);
+CREATE INDEX IF NOT EXISTS idx_responder_notifications_status ON responder_notifications(status);
 CREATE INDEX IF NOT EXISTS idx_responder_notifications_created_at ON responder_notifications(created_at);
 CREATE INDEX IF NOT EXISTS idx_responder_notifications_priority ON responder_notifications(priority);
 

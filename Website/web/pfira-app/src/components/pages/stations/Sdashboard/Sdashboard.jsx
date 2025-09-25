@@ -359,13 +359,16 @@ const Sdashboard = () => {
       
       console.log('📊 Station data:', { stationName, currentStationId, respondersCount: responders.length });
       
-      // Create notification message
-      const notificationMessage = `🚨 FIRE ALERT from ${stationName}\n\n` +
+      // Create comprehensive notification message
+      const notificationMessage = `👤 Reporter: ${fireReport.reporter_name || 'Unknown Reporter'}\n` +
         `📍 Location: ${fireReport.address || fireReport.geotag_location || 'Not specified'}\n` +
         `🔥 Alarm Level: ${fireReport.recommended_alarm_level || fireReport.alarm_level || 'Unknown'}\n` +
         `📊 AI Detection: ${fireReport.prediction || 'Unknown'}\n` +
         `⏰ Reported: ${fireReport.formatted_timestamp || fireReport.timestamp || 'Unknown'}\n` +
-        `📝 Cause: ${fireReport.cause_of_fire || fireReport.cause || 'Not specified'}`;
+        `📝 Cause: ${fireReport.cause_of_fire || fireReport.cause || 'Not specified'}\n` +
+        `💨 Smoke Analysis: ${fireReport.smoke_analysis || 'Not analyzed'}\n` +
+        `🏠 Structure: ${fireReport.structure_type || 'Unknown'}\n` +
+        `🏘️ Structures Affected: ${fireReport.structures_affected || 'Unknown'}`;
 
       // Send notifications to all responders using responder_notifications table
       const notificationPromises = responders.map(async (responder) => {

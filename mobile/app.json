@@ -9,7 +9,10 @@
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "config": {
+        "googleMapsApiKey": "AIzaSyDv-FC2CTEpLuVAlXCHMtu4XqAEPNtOjos"
+      }
     },
     "android": {
       "package": "com.fira.mobile",
