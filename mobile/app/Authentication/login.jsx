@@ -148,7 +148,43 @@ const LoginComponent = () => {
         return;
       }
 
-      // For all other emails, try Supabase Auth (admin, citizens, responders)
+      // For responders: check email existence only (same as stations)
+      console.log('🔍 Checking responders table for responder login...');
+      let responderDirect = null;
+      {
+        const { data, error } = await supabase
+          .from('responders')
+          .select('*')
+          .eq('email', email.toLowerCase())
+          .single();
+        if (data) responderDirect = data;
+      }
+
+      if (responderDirect) {
+        console.log('✅ Responder found in responders (direct login):', responderDirect);
+        const userData = {
+          id: responderDirect.id,
+          uid: responderDirect.id,
+          firstName: responderDirect.first_name,
+          lastName: responderDirect.last_name,
+          email: responderDirect.email,
+          phoneNumber: responderDirect.phone,
+          userType: 'responder',
+          displayName: `${responderDirect.first_name} ${responderDirect.last_name}`.trim(),
+          status: responderDirect.status || 'active',
+          stationId: responderDirect.station_id,
+          position: responderDirect.user_position,
+          isOnline: responderDirect.is_online || false,
+          createdAt: responderDirect.created_at,
+        };
+
+        setShowToast(false); setToastMessage('');
+        await loginResponder(userData);
+        displayToast(`Welcome to Project FIRA, ${userData.displayName}! 🚑`, 'success');
+        return;
+      }
+
+      // For all other emails, try Supabase Auth (admin, citizens)
       console.log('🔍 Trying Supabase Auth for login:', email);
       
       const { data: authData, error: authError } = await supabase.auth.signInWithPassword({
@@ -180,8 +216,9 @@ const LoginComponent = () => {
         if (responderData) {
           console.log('✅ Responder authenticated via responders table');
 
-          const userData = {
-            uid: responderData.id,
+        const userData = {
+          id: responderData.id,
+          uid: responderData.id,
             firstName: responderData.first_name,
             lastName: responderData.last_name,
             email: responderData.email,
@@ -317,44 +354,7 @@ const LoginComponent = () => {
         return;
       }
 
-      // Check if this user exists in 'responders' table (after successful Auth)
-      const { data: responderAfterAuth, error: responderAfterAuthError } = await supabase
-        .from('responders')
-        .select('*')
-        .eq('email', email.toLowerCase())
-        .single();
-
-      if (responderAfterAuth) {
-        console.log('✅ User found in responders table (post-auth):', responderAfterAuth);
-
-        const userData = {
-          uid: responderAfterAuth.id,
-          firstName: responderAfterAuth.first_name,
-          lastName: responderAfterAuth.last_name,
-          email: responderAfterAuth.email,
-          phoneNumber: responderAfterAuth.phone,
-          userType: 'responder',
-          displayName: `${responderAfterAuth.first_name} ${responderAfterAuth.last_name}`.trim(),
-          status: responderAfterAuth.status || 'active',
-          stationId: responderAfterAuth.station_id,
-          stationName: 'Station',
-          position: responderAfterAuth.user_position,
-          isOnline: responderAfterAuth.is_online || false,
-          createdAt: responderAfterAuth.created_at,
-          middleName: responderAfterAuth.middle_name,
-          stationContactNumber: responderAfterAuth.station_contact_number,
-          address: responderAfterAuth.address,
-          birthdate: responderAfterAuth.birthdate,
-          age: responderAfterAuth.age,
-          gender: responderAfterAuth.gender
-        };
-
-        setShowToast(false);
-        setToastMessage('');
-        await loginResponder(userData);
-        displayToast(`Welcome to Project FIRA, ${userData.displayName}! 🚑`, 'success');
-        return;
-      }
+      // Responder post-auth lookup removed (Option A uses table-based login above)
 
       // If no records found at all
       {

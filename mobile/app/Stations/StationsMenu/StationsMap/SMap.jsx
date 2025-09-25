@@ -13,6 +13,9 @@ export default function SMap() {
   const [assignedReports, setAssignedReports] = useState([]);
   const [selectedReport, setSelectedReport] = useState(null);
   const [showReportModal, setShowReportModal] = useState(false);
+  const [responders, setResponders] = useState([]);
+  const [isNotifying, setIsNotifying] = useState(false);
+  const [currentStationId, setCurrentStationId] = useState(null);
 
   // Color helpers (mirror web/admin)
   const getAlarmLevelColor = (alarmLevel) => {
@@ -75,6 +78,86 @@ export default function SMap() {
     }
   };
 
+  // Handle notifying responders about fire report
+  const handleNotifyResponders = async (fireReport) => {
+    console.log('🚨 Notify Responders clicked:', { fireReport, responders: responders.length, currentStationId });
+    
+    if (!fireReport || !responders.length) {
+      alert('No responders available to notify.');
+      return;
+    }
+
+    if (!currentStationId) {
+      alert('Station information not available. Please try again.');
+      return;
+    }
+
+    if (isNotifying) return;
+
+    setIsNotifying(true);
+    
+    try {
+      // Create comprehensive notification message with fire report details
+      const notificationMessage = `🔥 FIRE REPORT ASSIGNED 🔥
+📍 Location: ${toStr(fireReport.address || fireReport.geotag_location || fireReport.location, 'Location not specified')}
+🔥 Alarm Level: ${toStr(formatAlarm(fireReport), 'Not specified')}
+📊 AI Detection: ${toStr(formatPrediction(fireReport), 'Not analyzed')}
+👤 Reporter: ${toStr(fireReport.reporter_name || fireReport.reporter || fireReport.reported_by, 'Unknown Reporter')}
+📝 Cause: ${toStr(fireReport.cause || fireReport.possible_cause || fireReport.fire_cause, 'Under investigation')}
+💨 Smoke Analysis: ${fireReport.smoke_intensity ? toStr(`${fireReport.smoke_intensity}${fireReport.smoke_confidence ? ` ${fireReport.smoke_confidence}` : ''}`) : 'Not analyzed'}
+🏠 Structure: ${toStr(fireReport.structure || fireReport.building_type, 'Not specified')}
+🏘️ Structures Affected: ${fireReport.number_of_structures_on_fire != null ? toStr(fireReport.number_of_structures_on_fire) : 'Unknown'}
+⏰ Reported: ${toStr(fireReport.formatted_timestamp || fireReport.timestamp, 'Time not specified')}
+
+Please respond immediately to this assignment.`;
+
+      // Notify all responders for this station
+      const notificationPromises = responders.map(async (responder) => {
+        try {
+          const { error: notificationError } = await supabase
+            .from('responder_notifications')
+            .insert({
+              responder_id: responder.id,
+              station_id: currentStationId,
+              fire_report_id: fireReport.id,
+              title: `Fire Report #${fireReport.id} - ${toStr(formatAlarm(fireReport), 'Emergency')}`,
+              message: notificationMessage,
+              priority: 'high',
+              is_read: false
+            });
+
+          if (notificationError) {
+            console.error(`❌ Error notifying responder ${responder.id}:`, notificationError);
+            return false;
+          }
+
+          console.log(`✅ Notification sent to responder ${responder.id}`);
+          return true;
+        } catch (error) {
+          console.error(`❌ Error notifying responder ${responder.id}:`, error);
+          return false;
+        }
+      });
+
+      const results = await Promise.all(notificationPromises);
+      const successCount = results.filter(Boolean).length;
+      
+      console.log('📊 Notification results:', { successCount, totalResponders: responders.length, results });
+      
+      if (successCount > 0) {
+        alert(`✅ Successfully notified ${successCount} responder(s) about the fire report.`);
+        setShowReportModal(false); // Close the modal
+      } else {
+        alert('❌ Failed to notify responders. Please try again.');
+      }
+    } catch (error) {
+      console.error('❌ Error notifying responders:', error);
+      alert(`❌ Error notifying responders: ${error.message}`);
+    } finally {
+      setIsNotifying(false);
+    }
+  };
+
   useEffect(() => {
     (async () => {
       try {
@@ -83,6 +166,7 @@ export default function SMap() {
         const stored = await AsyncStorage.getItem('userData');
         const parsed = stored ? JSON.parse(stored) : {};
         const myId = parsed?.uid || parsed?.id;
+        setCurrentStationId(myId);
 
         // 2) Load all stations with lat/lng
         const { data, error } = await supabase
@@ -116,6 +200,33 @@ export default function SMap() {
       }
     })();
   }, []);
+
+  // Fetch responders for the current station
+  useEffect(() => {
+    const fetchResponders = async () => {
+      if (!currentStationId) return;
+
+      try {
+        console.log('👥 Fetching responders for station:', currentStationId);
+        const { data: respondersData, error } = await supabase
+          .from('responders')
+          .select('id, first_name, last_name, email, phone')
+          .eq('station_id', currentStationId);
+
+        if (error) {
+          console.error('❌ Error fetching responders:', error);
+          return;
+        }
+
+        setResponders(respondersData || []);
+        console.log('👥 Loaded responders for station:', respondersData?.length || 0);
+      } catch (e) {
+        console.error('❌ Error loading responders:', e);
+      }
+    };
+
+    fetchResponders();
+  }, [currentStationId]);
 
   // Load assigned reports for this station
   useEffect(() => {
@@ -313,7 +424,46 @@ export default function SMap() {
                   <Image source={{ uri: candidate }} resizeMode="cover" style={{ width: '100%', height: 220, borderRadius: 8, backgroundColor: '#e5e7eb' }} />
                 );
               })()}
-              <TouchableOpacity onPress={() => setShowReportModal(false)} style={{ alignSelf: 'flex-end', marginTop: 12, backgroundColor: '#ef4444', paddingVertical: 8, paddingHorizontal: 16, borderRadius: 8 }}>
+              
+              {/* Notify Responders Button */}
+              <View style={{ marginTop: 16, paddingTop: 12, borderTopWidth: 1, borderTopColor: '#e5e7eb' }}>
+                <TouchableOpacity
+                  onPress={() => handleNotifyResponders(selectedReport)}
+                  disabled={isNotifying || !responders.length}
+                  style={{
+                    width: '100%',
+                    paddingVertical: 12,
+                    paddingHorizontal: 16,
+                    borderRadius: 8,
+                    backgroundColor: isNotifying || !responders.length ? '#9ca3af' : '#ef4444',
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    marginBottom: 8
+                  }}
+                >
+                  {isNotifying ? (
+                    <>
+                      <ActivityIndicator size="small" color="white" style={{ marginRight: 8 }} />
+                      <Text style={{ color: 'white', fontWeight: 'bold', fontSize: 16 }}>Notifying...</Text>
+                    </>
+                  ) : (
+                    <>
+                      <Text style={{ fontSize: 16, marginRight: 8 }}>🚨</Text>
+                      <Text style={{ color: 'white', fontWeight: 'bold', fontSize: 16 }}>
+                        Notify Responders ({responders.length})
+                      </Text>
+                    </>
+                  )}
+                </TouchableOpacity>
+                {!responders.length && (
+                  <Text style={{ fontSize: 12, color: '#6b7280', textAlign: 'center', marginBottom: 8 }}>
+                    No responders assigned to this station
+                  </Text>
+                )}
+              </View>
+
+              <TouchableOpacity onPress={() => setShowReportModal(false)} style={{ alignSelf: 'flex-end', marginTop: 8, backgroundColor: '#6b7280', paddingVertical: 8, paddingHorizontal: 16, borderRadius: 8 }}>
                 <Text style={{ color: 'white', fontWeight: 'bold' }}>Close</Text>
               </TouchableOpacity>
             </ScrollView>

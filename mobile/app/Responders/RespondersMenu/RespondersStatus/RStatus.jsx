@@ -6,9 +6,10 @@ import { supabase } from '../../../config/supabase';
 
 export default function RStatus() {
   const { userData } = useAuth();
-  const [currentAssignment, setCurrentAssignment] = useState(null);
+  const [assignments, setAssignments] = useState([]);
   const [notifications, setNotifications] = useState([]);
   const [showFullReport, setShowFullReport] = useState(false);
+  const [selectedAssignment, setSelectedAssignment] = useState(null);
 
 
   // Load notifications and set current assignment
@@ -24,8 +25,7 @@ export default function RStatus() {
         .select('*')
         .eq('responder_id', userData.id)
         .or('is_read.eq.false,status.eq.accepted')
-        .order('created_at', { ascending: false })
-        .limit(1);
+        .order('created_at', { ascending: false });
 
       if (error) {
         console.error('Error loading notifications:', error);
@@ -34,13 +34,36 @@ export default function RStatus() {
 
       setNotifications(notificationData || []);
 
-      // Set the most recent notification as current assignment
+      // Process all notifications to create assignments
       if (notificationData && notificationData.length > 0) {
-        const latestNotification = notificationData[0];
+        console.log('📋 Processing', notificationData.length, 'notifications');
+        
+        const processedAssignments = await Promise.all(
+          notificationData.map(async (notification) => {
+            return await processNotificationToAssignment(notification);
+          })
+        );
+        
+        // Filter out any null results and set assignments
+        const validAssignments = processedAssignments.filter(assignment => assignment !== null);
+        setAssignments(validAssignments);
+        console.log('✅ Processed assignments:', validAssignments.length);
+      } else {
+        setAssignments([]);
+      }
+    } catch (error) {
+      console.error('Error in loadNotifications:', error);
+    }
+  };
+
+  // Function to process a single notification into an assignment
+  const processNotificationToAssignment = async (notification) => {
+    try {
+      console.log('📨 Processing notification:', notification.id, 'for fire report:', notification.fire_report_id);
         
         // Parse the message to extract fire report details
-        console.log('📨 Raw notification message:', latestNotification.message);
-        const messageLines = latestNotification.message.split('\n');
+        console.log('📨 Raw notification message:', notification.message);
+        const messageLines = notification.message.split('\n');
         console.log('📝 Message lines:', messageLines);
         
         // Helper function to safely extract field values
@@ -92,7 +115,7 @@ export default function RStatus() {
           const response = await fetch('https://fire-detection-api-production-f543.up.railway.app/get_reports');
           if (response.ok) {
             const reports = await response.json();
-            fireReport = reports.find(report => String(report.id) === String(latestNotification.fire_report_id));
+            fireReport = reports.find(report => String(report.id) === String(notification.fire_report_id));
             if (fireReport) {
               console.log('🔥 Fire report data from API:', fireReport);
               
@@ -154,32 +177,30 @@ export default function RStatus() {
           formattedAiDetection = `${fireReport.prediction || aiDetection} (${fireReport.confidence})`;
         }
         
-        setCurrentAssignment({
-          id: latestNotification.id,
-          title: latestNotification.title,
+        return {
+          id: notification.id,
+          title: notification.title,
           location: location,
-          description: latestNotification.message,
-          priority: latestNotification.priority,
-          createdAt: latestNotification.created_at,
-          fireReportId: latestNotification.fire_report_id,
+          description: notification.message,
+          priority: notification.priority,
+          createdAt: notification.created_at,
+          fireReportId: notification.fire_report_id,
           alarmLevel: alarmLevel,
           aiDetection: formattedAiDetection,
           reportedTime: reportedTime,
           cause: cause,
           imageUrl: imageUrl,
           status: fireReportStatus,
-          isAccepted: latestNotification.status === 'accepted',
+          isAccepted: notification.status === 'accepted',
           // Use API data for these fields instead of parsed message data
           reporter: reporterFromAPI,
           smokeAnalysis: smokeAnalysisFromAPI,
           structure: structureFromAPI,
           structuresAffected: structuresAffectedFromAPI
-        });
-      } else {
-        setCurrentAssignment(null);
-      }
+        };
     } catch (error) {
-      console.error('Error loading notifications:', error);
+      console.error('Error processing notification:', notification.id, error);
+      return null;
     }
   };
 
@@ -251,8 +272,16 @@ export default function RStatus() {
       case 'accept':
         Alert.alert('Assignment Accepted', 'You have accepted the current assignment.');
         // Mark the current notification as accepted (but keep it visible)
-        if (currentAssignment?.id) {
-          markNotificationAsAccepted(currentAssignment.id);
+        if (selectedAssignment?.id) {
+          markNotificationAsAccepted(selectedAssignment.id);
+          // Update the assignment status in the state
+          setAssignments(prevAssignments => 
+            prevAssignments.map(assignment => 
+              assignment.id === selectedAssignment.id 
+                ? { ...assignment, isAccepted: true }
+                : assignment
+            )
+          );
         }
         break;
       case 'decline':
@@ -277,67 +306,71 @@ export default function RStatus() {
 
 
 
-      {/* Current Assignment */}
-      {currentAssignment ? (
-        <View className="bg-white mx-4 mt-4 rounded-xl p-4 shadow-sm mb-6">
-                  <View className="flex-row items-center justify-between mb-3">
-                    <Text className="text-lg font-semibold text-gray-800">Current Assignment</Text>
-                    <View 
-                      className="px-3 py-1 rounded-full"
-                      style={{ backgroundColor: getFireReportStatusBgColor(currentAssignment.status) }}
-                    >
-                      <Text 
-                        className="text-xs font-bold"
-                        style={{ color: getFireReportStatusColor(currentAssignment.status) }}
-                      >
-                        {currentAssignment.status?.toUpperCase() || 'UNKNOWN'}
+      {/* Active Assignments */}
+      <View className="bg-white mx-4 mt-4 rounded-xl p-4 shadow-sm mb-6">
+        <Text className="text-lg font-semibold text-gray-800 mb-3">
+          Active Assignments ({assignments.length})
+        </Text>
+        
+        {assignments.length > 0 ? (
+          <ScrollView showsVerticalScrollIndicator={false}>
+            {assignments.map((assignment, index) => (
+              <TouchableOpacity 
+                key={assignment.id}
+                className={`p-3 rounded-lg mb-3 ${assignment.isAccepted ? 'bg-green-50' : 'bg-red-50'}`}
+                onPress={() => {
+                  setSelectedAssignment(assignment);
+                  setShowFullReport(true);
+                }}
+              >
+                <View className="flex-row items-center justify-between">
+                  <View className="flex-1">
+                    <View className="flex-row items-center">
+                      <Text className={`font-bold text-base ${assignment.isAccepted ? 'text-green-800' : 'text-red-800'}`} numberOfLines={1}>
+                        Fire Report #{assignment.fireReportId}
                       </Text>
+                      {assignment.isAccepted && (
+                        <View className="ml-2 bg-green-100 px-2 py-1 rounded-full">
+                          <Text className="text-green-800 text-xs font-bold">ACCEPTED</Text>
+                        </View>
+                      )}
+                      <View 
+                        className="ml-2 px-2 py-1 rounded-full"
+                        style={{ backgroundColor: getFireReportStatusBgColor(assignment.status) }}
+                      >
+                        <Text 
+                          className="text-xs font-bold"
+                          style={{ color: getFireReportStatusColor(assignment.status) }}
+                        >
+                          {assignment.status?.toUpperCase() || 'UNKNOWN'}
+                        </Text>
+                      </View>
                     </View>
+                    <Text className={`text-sm mt-1 ${assignment.isAccepted ? 'text-green-700' : 'text-red-700'}`} numberOfLines={1}>
+                      📍 {assignment.location}
+                    </Text>
+                    <Text className={`text-xs mt-1 ${assignment.isAccepted ? 'text-green-600' : 'text-red-600'}`} numberOfLines={1}>
+                      🔥 {assignment.alarmLevel} • 📊 {assignment.aiDetection}
+                    </Text>
+                    {assignment.createdAt && (
+                      <Text className={`text-xs mt-1 ${assignment.isAccepted ? 'text-green-500' : 'text-red-500'}`}>
+                        Received: {new Date(assignment.createdAt).toLocaleString()}
+                      </Text>
+                    )}
                   </View>
-          
-          {/* Compact Assignment Card */}
-          <TouchableOpacity 
-            className={`p-3 rounded-lg ${currentAssignment.isAccepted ? 'bg-green-50' : 'bg-red-50'}`}
-            onPress={() => setShowFullReport(true)}
-          >
-            <View className="flex-row items-center justify-between">
-              <View className="flex-1">
-                <View className="flex-row items-center">
-                  <Text className={`font-bold text-base ${currentAssignment.isAccepted ? 'text-green-800' : 'text-red-800'}`} numberOfLines={1}>
-                    {currentAssignment.title}
-                  </Text>
-                  {currentAssignment.isAccepted && (
-                    <View className="ml-2 bg-green-100 px-2 py-1 rounded-full">
-                      <Text className="text-green-800 text-xs font-bold">ACCEPTED</Text>
-                    </View>
-                  )}
+                  <MaterialIcons name="chevron-right" size={24} color={assignment.isAccepted ? "#059669" : "#dc2626"} />
                 </View>
-                <Text className={`text-sm mt-1 ${currentAssignment.isAccepted ? 'text-green-700' : 'text-red-700'}`} numberOfLines={1}>
-                  📍 {currentAssignment.location}
-                </Text>
-                <Text className={`text-xs mt-1 ${currentAssignment.isAccepted ? 'text-green-600' : 'text-red-600'}`} numberOfLines={1}>
-                  🔥 {currentAssignment.alarmLevel} • 📊 {currentAssignment.aiDetection}
-                </Text>
-                {currentAssignment.createdAt && (
-                  <Text className={`text-xs mt-1 ${currentAssignment.isAccepted ? 'text-green-500' : 'text-red-500'}`}>
-                    Received: {new Date(currentAssignment.createdAt).toLocaleString()}
-                  </Text>
-                )}
-              </View>
-              <MaterialIcons name="chevron-right" size={24} color={currentAssignment.isAccepted ? "#059669" : "#dc2626"} />
-            </View>
-          </TouchableOpacity>
-        </View>
-      ) : (
-        <View className="bg-white mx-4 mt-4 rounded-xl p-4 shadow-sm mb-6">
-          <Text className="text-lg font-semibold text-gray-800 mb-3">Current Assignment</Text>
+              </TouchableOpacity>
+            ))}
+          </ScrollView>
+        ) : (
           <View className="bg-gray-50 p-6 rounded-lg items-center">
             <MaterialIcons name="assignment" size={48} color="#9ca3af" />
             <Text className="text-gray-500 text-center mt-2">No active assignments</Text>
             <Text className="text-gray-400 text-sm text-center">You'll be notified when a new assignment comes in</Text>
           </View>
-        </View>
-      )}
+        )}
+      </View>
 
       {/* Full Report Modal */}
       <Modal
@@ -359,7 +392,7 @@ export default function RStatus() {
           </View>
 
           <ScrollView className="flex-1 p-4">
-            {currentAssignment && (
+            {selectedAssignment && (
               <View className="space-y-4">
                 {/* Fire Report Header */}
                 <View className="bg-white p-4 rounded-lg border border-gray-200">
@@ -379,20 +412,20 @@ export default function RStatus() {
                   {/* Reporter */}
                   <View className="mb-3">
                     <Text className="text-gray-600 text-sm font-semibold mb-1">Reporter</Text>
-                    <Text className="text-gray-800 text-base">{currentAssignment.reporter}</Text>
+                    <Text className="text-gray-800 text-base">{selectedAssignment.reporter}</Text>
                   </View>
 
                   {/* Cause */}
                   <View className="mb-3">
                     <Text className="text-gray-600 text-sm font-semibold mb-1">Cause</Text>
-                    <Text className="text-gray-800 text-base">{currentAssignment.cause}</Text>
+                    <Text className="text-gray-800 text-base">{selectedAssignment.cause}</Text>
                   </View>
 
                   {/* Alarm Level with Badge */}
                   <View className="mb-3">
                     <Text className="text-gray-600 text-sm font-semibold mb-1">Alarm Level</Text>
                     <View className="bg-red-600 px-3 py-1 rounded-full self-start">
-                      <Text className="text-white text-sm font-bold">{currentAssignment.alarmLevel}</Text>
+                      <Text className="text-white text-sm font-bold">{selectedAssignment.alarmLevel}</Text>
                     </View>
                   </View>
 
@@ -400,49 +433,49 @@ export default function RStatus() {
                   <View className="mb-3">
                     <Text className="text-gray-600 text-sm font-semibold mb-1">AI Fire Detection</Text>
                     <View className="bg-red-600 px-3 py-1 rounded-full self-start">
-                      <Text className="text-white text-sm font-bold">{currentAssignment.aiDetection}</Text>
+                      <Text className="text-white text-sm font-bold">{selectedAssignment.aiDetection}</Text>
                     </View>
                   </View>
 
                   {/* Smoke Analysis */}
                   <View className="mb-3">
                     <Text className="text-gray-600 text-sm font-semibold mb-1">Smoke Analysis</Text>
-                    <Text className="text-gray-800 text-base">{currentAssignment.smokeAnalysis}</Text>
+                    <Text className="text-gray-800 text-base">{selectedAssignment.smokeAnalysis}</Text>
                   </View>
 
                   {/* Structure */}
                   <View className="mb-3">
                     <Text className="text-gray-600 text-sm font-semibold mb-1">Structure</Text>
-                    <Text className="text-gray-800 text-base">{currentAssignment.structure}</Text>
+                    <Text className="text-gray-800 text-base">{selectedAssignment.structure}</Text>
                   </View>
 
                   {/* Structures Affected */}
                   <View className="mb-3">
                     <Text className="text-gray-600 text-sm font-semibold mb-1">Structures Affected</Text>
-                    <Text className="text-gray-800 text-base">{currentAssignment.structuresAffected}</Text>
+                    <Text className="text-gray-800 text-base">{selectedAssignment.structuresAffected}</Text>
                   </View>
 
                   {/* Location */}
                   <View className="mb-3">
                     <Text className="text-gray-600 text-sm font-semibold mb-1">Location</Text>
-                    <Text className="text-gray-800 text-base">{currentAssignment.location}</Text>
+                    <Text className="text-gray-800 text-base">{selectedAssignment.location}</Text>
                   </View>
 
                   {/* Reported Time */}
                   <View className="mb-4">
                     <Text className="text-gray-600 text-sm font-semibold mb-1">Reported</Text>
-                    <Text className="text-gray-800 text-base">{currentAssignment.reportedTime}</Text>
+                    <Text className="text-gray-800 text-base">{selectedAssignment.reportedTime}</Text>
                   </View>
 
                   {/* Fire Report Image */}
                   <View className="mb-4">
-                    {currentAssignment.imageUrl ? (
+                    {selectedAssignment.imageUrl ? (
                       <Image
-                        source={{ uri: currentAssignment.imageUrl }}
+                        source={{ uri: selectedAssignment.imageUrl }}
                         className="w-full h-48 rounded-lg"
                         resizeMode="cover"
                         onError={() => {
-                          console.log('Error loading image:', currentAssignment.imageUrl);
+                          console.log('Error loading image:', selectedAssignment.imageUrl);
                         }}
                       />
                     ) : (
@@ -456,7 +489,7 @@ export default function RStatus() {
 
                 {/* Action Buttons */}
                 <View className="flex-row space-x-3 mt-6">
-                  {currentAssignment.isAccepted ? (
+                  {selectedAssignment.isAccepted ? (
                     <View className="bg-green-100 flex-1 py-3 rounded-lg flex-row items-center justify-center">
                       <MaterialIcons name="check-circle" size={20} color="#059669" />
                       <Text className="text-green-800 text-center font-bold text-base ml-2">Assignment Accepted</Text>
