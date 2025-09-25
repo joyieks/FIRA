@@ -317,7 +317,44 @@ const LoginComponent = () => {
         return;
       }
 
-      // Note: Responder check is now handled in the Supabase Auth fallback above
+      // Check if this user exists in 'responders' table (after successful Auth)
+      const { data: responderAfterAuth, error: responderAfterAuthError } = await supabase
+        .from('responders')
+        .select('*')
+        .eq('email', email.toLowerCase())
+        .single();
+
+      if (responderAfterAuth) {
+        console.log('✅ User found in responders table (post-auth):', responderAfterAuth);
+
+        const userData = {
+          uid: responderAfterAuth.id,
+          firstName: responderAfterAuth.first_name,
+          lastName: responderAfterAuth.last_name,
+          email: responderAfterAuth.email,
+          phoneNumber: responderAfterAuth.phone,
+          userType: 'responder',
+          displayName: `${responderAfterAuth.first_name} ${responderAfterAuth.last_name}`.trim(),
+          status: responderAfterAuth.status || 'active',
+          stationId: responderAfterAuth.station_id,
+          stationName: 'Station',
+          position: responderAfterAuth.user_position,
+          isOnline: responderAfterAuth.is_online || false,
+          createdAt: responderAfterAuth.created_at,
+          middleName: responderAfterAuth.middle_name,
+          stationContactNumber: responderAfterAuth.station_contact_number,
+          address: responderAfterAuth.address,
+          birthdate: responderAfterAuth.birthdate,
+          age: responderAfterAuth.age,
+          gender: responderAfterAuth.gender
+        };
+
+        setShowToast(false);
+        setToastMessage('');
+        await loginResponder(userData);
+        displayToast(`Welcome to Project FIRA, ${userData.displayName}! 🚑`, 'success');
+        return;
+      }
 
       // If no records found at all
       {
