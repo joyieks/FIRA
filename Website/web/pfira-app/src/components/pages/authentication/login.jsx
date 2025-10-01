@@ -41,7 +41,7 @@ const Login = () => {
     try {
       const cleanEmail = email.trim().toLowerCase();
       console.log(`Checking ${tableName} table for email: ${cleanEmail}`);
-      
+
       const { data, error } = await supabase
         .from(tableName)
         .select('*')
@@ -61,7 +61,46 @@ const Login = () => {
           docId: data.id
         };
       }
-      
+
+      return { exists: false };
+    } catch (error) {
+      console.error(`Error checking ${tableName}:`, error);
+      return { exists: false, error };
+    }
+  };
+
+  // Password verification utility for web
+  const verifyPassword = (password, hashedPassword) => {
+    if (!password || !hashedPassword) return false;
+    // Simple verification for demo - use proper hashing in production
+    const hashedInput = btoa(password + 'project_fira_salt_2024');
+    return hashedInput === hashedPassword;
+  };
+
+  const checkUserInSupabaseTableByUserId = async (userId, tableName) => {
+    try {
+      console.log(`Checking ${tableName} table for user_id: ${userId}`);
+
+      const { data, error } = await supabase
+        .from(tableName)
+        .select('*')
+        .eq('user_id', userId)
+        .single();
+
+      if (error && error.code !== 'PGRST116') {
+        console.error(`Error checking ${tableName}:`, error);
+        return { exists: false, error };
+      }
+
+      if (data) {
+        console.log(`${tableName} user found:`, data);
+        return {
+          exists: true,
+          data: data,
+          docId: data.id
+        };
+      }
+
       return { exists: false };
     } catch (error) {
       console.error(`Error checking ${tableName}:`, error);
@@ -79,42 +118,10 @@ const Login = () => {
 
     console.log('🔍 Login attempt:', { email, password });
 
-    // Note: Admin authentication now handled through Supabase Auth + admin_users table
-
     try {
-      console.log('🔄 Starting authentication process...');
-      
-      // First, check if user exists in station_users table (no Auth required)
-      console.log('🔍 Checking station_users table first...');
-      const stationCheck = await checkUserInSupabaseTable(email, 'station_users');
-      console.log('📊 Station check result:', stationCheck);
-      
-      if (stationCheck.exists) {
-        console.log('✅ Station user found in station_users table, user data:', stationCheck.data);
-        
-        // For stations, we'll use a simple token-based auth since they don't have Auth accounts
-        const userData = {
-          ...stationCheck.data,
-          docId: stationCheck.docId,
-          userType: 'station'
-        };
-        
-        console.log('🚀 Setting station user data:', userData);
-        // Store station sessions per-tab to avoid cross-tab overrides
-        sessionStorage.setItem('authToken', `station_${stationCheck.docId}`);
-        sessionStorage.setItem('userType', 'station');
-        sessionStorage.setItem('loginTime', Date.now().toString());
-        sessionStorage.setItem('userData', JSON.stringify(userData));
-        
-        console.log('🎯 Navigating to station dashboard...');
-        navigate('/station-dashboard');
-        return;
-      }
+      console.log('🔐 Attempting Supabase Auth...');
 
-      // If not a station, try Supabase Auth for admin users
-      console.log('🔄 Attempting Supabase authentication for admin...');
-      
-      // Sign in with Supabase Auth
+      // Sign in with Supabase Auth first
       const { data: authData, error: authError } = await supabase.auth.signInWithPassword({
         email: email,
         password: password
@@ -128,37 +135,79 @@ const Login = () => {
       const user = authData.user;
       console.log('✅ Supabase Auth successful:', user.id);
 
+      // Check if this authenticated user exists in our custom tables
+      console.log('🔍 Checking user tables for authenticated user...');
+
+      // Check if user exists in station_users table (by user_id)
+      const stationCheck = await checkUserInSupabaseTableByUserId(user.id, 'station_users');
+      if (stationCheck.exists) {
+        console.log('✅ Authenticated user found in station_users table');
+
+        const userData = {
+          ...stationCheck.data,
+          docId: stationCheck.docId,
+          userType: 'station'
+        };
+
+        sessionStorage.setItem('authToken', `station_${stationCheck.docId}`);
+        sessionStorage.setItem('userType', 'station');
+        sessionStorage.setItem('loginTime', Date.now().toString());
+        sessionStorage.setItem('userData', JSON.stringify(userData));
+
+        console.log('🎯 Navigating to station dashboard...');
+        navigate('/station-dashboard');
+        return;
+      }
+
+      // Check if user exists in responders table (by user_id)
+      const responderCheck = await checkUserInSupabaseTableByUserId(user.id, 'responders');
+      if (responderCheck.exists) {
+        console.log('✅ Authenticated user found in responders table');
+
+        const userData = {
+          ...responderCheck.data,
+          docId: responderCheck.docId,
+          userType: 'responder'
+        };
+
+        sessionStorage.setItem('authToken', `responder_${responderCheck.docId}`);
+        sessionStorage.setItem('userType', 'responder');
+        sessionStorage.setItem('loginTime', Date.now().toString());
+        sessionStorage.setItem('userData', JSON.stringify(userData));
+
+        console.log('🎯 Navigating to responder dashboard...');
+        navigate('/responder-dashboard');
+        return;
+      }
+
       // Check if user exists in admin_users table
-      console.log('🔍 Checking admin_users table...');
       const adminCheck = await checkUserInSupabaseTable(email, 'admin_users');
-      console.log('📊 Admin check result:', adminCheck);
-      
       if (adminCheck.exists) {
         console.log('✅ Admin user found in admin_users table');
-        // User is an admin
+
         const userData = {
           ...adminCheck.data,
           docId: adminCheck.docId,
           userType: 'admin'
         };
-        
+
         localStorage.setItem('authToken', user.id);
         localStorage.setItem('userType', 'admin');
         localStorage.setItem('loginTime', Date.now().toString());
         localStorage.setItem('userData', JSON.stringify(userData));
-        
+
         console.log('✅ Admin login successful, navigating to dashboard');
         navigate('/admin-dashboard');
         return;
       }
 
-      // User authenticated but not found in either table
+      // User authenticated but not found in any table
       console.log('❌ User authenticated but not found in authorized tables');
       setError('User not found in authorized tables. Please contact administrator to register your account.');
-      
+
     } catch (error) {
       console.error('❌ Login error:', error);
-      
+
       // Handle specific Supabase Auth errors
       switch (error.message) {
         case 'Invalid login credentials':

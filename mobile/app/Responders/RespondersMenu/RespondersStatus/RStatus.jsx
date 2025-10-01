@@ -112,7 +112,7 @@ export default function RStatus() {
         let fireReport = null; // Store fire report for AI detection formatting
         
         try {
-          const response = await fetch('https://fire-detection-api-production-f543.up.railway.app/get_reports');
+          const response = await fetch('https://fire-detection-api-production-f8a3.up.railway.app/get_reports');
           if (response.ok) {
             const reports = await response.json();
             fireReport = reports.find(report => String(report.id) === String(notification.fire_report_id));

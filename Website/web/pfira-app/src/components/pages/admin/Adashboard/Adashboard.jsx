@@ -99,7 +99,7 @@ const Adashboard = () => {
   const fetchFireReports = useCallback(async () => {
     setReportsLoading(true);
     try {
-      const response = await fetch('https://fire-detection-api-production-f543.up.railway.app/get_reports');
+      const response = await fetch('https://fire-detection-api-production-f8a3.up.railway.app/get_reports');
       
       if (response.ok) {
         const data = await response.json();
@@ -519,12 +519,12 @@ const Adashboard = () => {
                   fillColor: getMarkerColor(report),
                   fillOpacity: 1,
                   strokeColor: '#FFFFFF',
-                  strokeWeight: 3,
-                  scale: 20,
+                  strokeWeight: 4,
+                  scale: 30,
                 }}
                 label={{
                   text: '🔥',
-                  fontSize: '16px'
+                  fontSize: '32px'
                 }}
                 zIndex={1000}
               />

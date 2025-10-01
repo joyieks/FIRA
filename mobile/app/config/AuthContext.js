@@ -1,7 +1,21 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import CryptoJS from 'crypto-js';
 
 const AuthContext = createContext();
+
+// Password hashing utilities
+const hashPassword = (password) => {
+  // Use SHA-256 with a salt for basic hashing
+  const salt = 'project_fira_salt_2024'; // In production, use a unique salt per user
+  return CryptoJS.SHA256(password + salt).toString();
+};
+
+const verifyPassword = (password, hashedPassword) => {
+  const salt = 'project_fira_salt_2024'; // Same salt used in hashPassword
+  const hashedInput = CryptoJS.SHA256(password + salt).toString();
+  return hashedInput === hashedPassword;
+};
 
 export const useAuth = () => {
   const context = useContext(AuthContext);
@@ -10,6 +24,9 @@ export const useAuth = () => {
   }
   return context;
 };
+
+// Export password utilities for use in login component
+export { hashPassword, verifyPassword };
 
 export const AuthProvider = ({ children }) => {
   const [isAuthenticated, setIsAuthenticated] = useState(false);

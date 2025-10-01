@@ -99,47 +99,47 @@ const LoginComponent = () => {
         return;
       }
 
-      // IMPORTANT: Do NOT pre-empt with responder login by email only.
-      // Always authenticate with Supabase Auth first to respect password for the email.
+      // Try Supabase Auth first for all users
+      console.log('🔐 Attempting Supabase Auth...');
+      const { data: authData, error: authError } = await supabase.auth.signInWithPassword({
+        email: email.toLowerCase(),
+        password: password
+      });
 
-      // Try Station login (no Supabase Auth account required) - mirrors web logic
-      console.log('🔍 Checking station_users for station login...');
-      let stationDirect = null;
-      {
-        const { data, error } = await supabase
-          .from('station_users')
-          .select('*')
-          .eq('email', email.toLowerCase())
-          .single();
-        if (data) stationDirect = data;
+      if (authError) {
+        console.log('❌ Supabase Auth failed:', authError.message);
+        throw authError;
       }
 
-      // If not found by email and user typed a station name (no @), try name match
-      if (!stationDirect && !email.includes('@')) {
-        console.log('🔍 Email field looks like a name; trying station_name match...');
-        const { data } = await supabase
-          .from('station_users')
-          .select('*')
-          .ilike('station_name', email)
-          .maybeSingle();
-        if (data) stationDirect = data;
-      }
+      const user = authData.user;
+      console.log('✅ Supabase Auth successful for user:', user.id);
 
-      if (stationDirect) {
-        console.log('✅ Station found in station_users (direct login):', stationDirect);
+      // Check if this authenticated user exists in our custom tables
+      console.log('✅ Supabase Auth successful, checking user tables...');
+
+      // Check if this user exists in 'station_users' table first (by user_id)
+      const { data: stationData, error: stationError } = await supabase
+        .from('station_users')
+        .select('*')
+        .eq('user_id', user.id)
+        .single();
+
+      if (stationData) {
+        console.log('✅ Authenticated user found in station_users table:', stationData);
+
         const userData = {
-          uid: stationDirect.id,
-          firstName: stationDirect.station_name,
+          uid: stationData.id,
+          firstName: stationData.station_name,
           lastName: '',
-          email: stationDirect.email,
-          phoneNumber: stationDirect.phone,
+          email: stationData.email,
+          phoneNumber: stationData.phone,
           userType: 'station',
-          displayName: stationDirect.station_name,
-          status: stationDirect.status,
-          address: stationDirect.address,
-          position: stationDirect.position,
-          isOnline: stationDirect.is_online,
-          createdAt: stationDirect.created_at
+          displayName: stationData.station_name,
+          status: stationData.status,
+          address: stationData.address,
+          position: stationData.position,
+          isOnline: stationData.is_online,
+          createdAt: stationData.created_at
         };
 
         setShowToast(false); setToastMessage('');
@@ -148,34 +148,30 @@ const LoginComponent = () => {
         return;
       }
 
-      // For responders: check email existence only (same as stations)
-      console.log('🔍 Checking responders table for responder login...');
-      let responderDirect = null;
-      {
-        const { data, error } = await supabase
-          .from('responders')
-          .select('*')
-          .eq('email', email.toLowerCase())
-          .single();
-        if (data) responderDirect = data;
-      }
+      // Check if this user exists in 'responders' table (by user_id)
+      const { data: responderData, error: responderError } = await supabase
+        .from('responders')
+        .select('*')
+        .eq('user_id', user.id)
+        .single();
 
-      if (responderDirect) {
-        console.log('✅ Responder found in responders (direct login):', responderDirect);
+      if (responderData) {
+        console.log('✅ Authenticated user found in responders table:', responderData);
+
         const userData = {
-          id: responderDirect.id,
-          uid: responderDirect.id,
-          firstName: responderDirect.first_name,
-          lastName: responderDirect.last_name,
-          email: responderDirect.email,
-          phoneNumber: responderDirect.phone,
+          id: responderData.id,
+          uid: responderData.id,
+          firstName: responderData.first_name,
+          lastName: responderData.last_name,
+          email: responderData.email,
+          phoneNumber: responderData.phone,
           userType: 'responder',
-          displayName: `${responderDirect.first_name} ${responderDirect.last_name}`.trim(),
-          status: responderDirect.status || 'active',
-          stationId: responderDirect.station_id,
-          position: responderDirect.user_position,
-          isOnline: responderDirect.is_online || false,
-          createdAt: responderDirect.created_at,
+          displayName: `${responderData.first_name} ${responderData.last_name}`.trim(),
+          status: responderData.status || 'active',
+          stationId: responderData.station_id,
+          position: responderData.user_position,
+          isOnline: responderData.is_online || false,
+          createdAt: responderData.created_at,
         };
 
         setShowToast(false); setToastMessage('');
@@ -184,81 +180,11 @@ const LoginComponent = () => {
         return;
       }
 
-      // For all other emails, try Supabase Auth (admin, citizens)
-      console.log('🔍 Trying Supabase Auth for login:', email);
-      
-      const { data: authData, error: authError } = await supabase.auth.signInWithPassword({
-        email: email.toLowerCase(),
-        password: password
-      });
-
-      if (authError) {
-        // Log the specific error for debugging
-        console.log('🔍 Supabase Auth failed:', authError.message);
-        console.log('🔍 Auth error details:', authError);
-        
-        // Don't throw error immediately - check if this is a responder authenticating
-        // against the responders table USING email + password (separate credential store).
-        console.log('🔄 Supabase Auth failed, checking responders table with password...');
-
-        const { data: responderData, error: responderError } = await supabase
-          .from('responders')
-          .select('*')
-          .eq('email', email.toLowerCase())
-          .eq('password', password)
-          .single();
-
-        if (responderError && responderError.code !== 'PGRST116') {
-          // Unexpected error other than "No rows"
-          console.log('ℹ️ Responder lookup error:', responderError.message);
-        }
-
-        if (responderData) {
-          console.log('✅ Responder authenticated via responders table');
-
-        const userData = {
-          id: responderData.id,
-          uid: responderData.id,
-            firstName: responderData.first_name,
-            lastName: responderData.last_name,
-            email: responderData.email,
-            phoneNumber: responderData.phone,
-            userType: 'responder',
-            displayName: `${responderData.first_name} ${responderData.last_name}`.trim(),
-            status: responderData.status || 'active',
-            stationId: responderData.station_id,
-            stationName: 'Station',
-            position: responderData.user_position,
-            isOnline: responderData.is_online || false,
-            createdAt: responderData.created_at,
-            middleName: responderData.middle_name,
-            stationContactNumber: responderData.station_contact_number,
-            address: responderData.address,
-            birthdate: responderData.birthdate,
-            age: responderData.age,
-            gender: responderData.gender
-          };
-
-          setShowToast(false);
-          setToastMessage('');
-          await loginResponder(userData);
-          displayToast(`Welcome to Project FIRA, ${userData.displayName}! 🚑`, 'success');
-          return;
-        }
-
-        // If neither Supabase Auth nor responders table matched, rethrow auth error
-        console.log('❌ Credentials did not match Supabase Auth or responders table');
-        throw authError;
-      }
-
-      const user = authData.user;
-      console.log('✅ Supabase Auth successful, checking user tables...');
-
-      // Check if this user exists in 'admin_users' table first
+      // Check if this user exists in 'admin_users' table
       const { data: adminData, error: adminError } = await supabase
         .from('admin_users')
         .select('*')
-        .eq('email', email.toLowerCase())
+        .eq('email', user.email)
         .single();
 
       if (adminData) {
@@ -317,49 +243,10 @@ const LoginComponent = () => {
         return;
       }
 
-      // Check if this user exists in 'station_users' table
-      const { data: stationData, error: stationError } = await supabase
-        .from('station_users')
-        .select('*')
-        .eq('email', email.toLowerCase())
-        .single();
-
-      if (stationData) {
-        console.log('✅ User found in station_users table:', stationData);
-        
-        // Convert Supabase data format to match your app's expected format
-        const userData = {
-          uid: stationData.id,
-          firstName: stationData.station_name,
-          lastName: '',
-          email: stationData.email,
-          phoneNumber: stationData.phone,
-          userType: 'station',
-          displayName: stationData.station_name,
-          status: stationData.status,
-          address: stationData.address,
-          position: stationData.position,
-          isOnline: stationData.is_online,
-          createdAt: stationData.created_at
-        };
-
-        // Clear any existing toast before login
-        setShowToast(false);
-        setToastMessage('');
-        
-        await loginStation(userData);
-        
-        // Show success toast after successful login
-        displayToast(`Welcome to Project FIRA, ${userData.displayName}! 🚒`, 'success');
-        return;
-      }
-
-      // Responder post-auth lookup removed (Option A uses table-based login above)
-
-      // If no records found at all
+      // If no records found in any table after successful auth
       {
-        console.log('❌ User not found in any user table');
-        displayToast('No user record found. Please register first.', 'error');
+        console.log('❌ Authenticated user not found in any authorized table');
+        displayToast('User not found in authorized tables. Please contact administrator.', 'error');
       }
     } catch (error) {
       // Only log to console in development, don't use console.error to avoid error overlay

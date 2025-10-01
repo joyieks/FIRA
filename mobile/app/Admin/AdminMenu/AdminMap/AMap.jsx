@@ -78,7 +78,7 @@ export default function AMap({ isSidebarOpen = false }) {
   const fetchFireReports = useCallback(async () => {
     setReportsLoading(true);
     try {
-      const response = await fetch('https://fire-detection-api-production-f543.up.railway.app/get_reports');
+      const response = await fetch('https://fire-detection-api-production-f8a3.up.railway.app/get_reports');
       
       if (response.ok) {
         const data = await response.json();
@@ -937,16 +937,21 @@ const styles = StyleSheet.create({
     marginBottom: 2,
   },
   fireMarker: {
-    width: 30,
-    height: 30,
-    borderRadius: 15,
+    width: 70,
+    height: 70,
+    borderRadius: 35,
     justifyContent: 'center',
     alignItems: 'center',
-    borderWidth: 2,
+    borderWidth: 4,
     borderColor: 'white',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.5,
+    shadowRadius: 6,
+    elevation: 10,
   },
   fireMarkerText: {
-    fontSize: 16,
+    fontSize: 38,
   },
   stationMarker: {
     width: 40,

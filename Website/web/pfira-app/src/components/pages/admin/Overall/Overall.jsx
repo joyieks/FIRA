@@ -27,7 +27,7 @@ const Overview = () => {
   const [timeRangeFilter, setTimeRangeFilter] = useState('all');
 
   // API endpoint for fetching reports
-  const API_URL = 'https://fire-detection-api-production-f543.up.railway.app';
+  const API_URL = 'https://fire-detection-api-production-f8a3.up.railway.app';
 
   // Fetch reports from Firebase via Flask API
   const fetchReports = async () => {

@@ -12,7 +12,7 @@ const Station_Overview = () => {
   const [openStatusDropdown, setOpenStatusDropdown] = useState(null);
   const [openAlarmDropdown, setOpenAlarmDropdown] = useState(null);
 
-  const API_URL = 'https://fire-detection-api-production-f543.up.railway.app';
+  const API_URL = 'https://fire-detection-api-production-f8a3.up.railway.app';
 
   const formatTime = (timestamp) => {
     if (!timestamp) return 'Unknown';
@@ -33,40 +33,113 @@ const Station_Overview = () => {
         const userData = JSON.parse(sessionStorage.getItem('userData') || localStorage.getItem('userData') || '{}');
         const stationId = userData?.id;
         if (!stationId) { setReports([]); return; }
+        
+        // Fetch both assigned and forwarded reports
         const { data: assignments, error } = await supabase
           .from('report_assignments')
           .select('report_id')
           .eq('assignee_type','station')
           .eq('assignee_id', stationId);
         if (error) throw error;
-        const ids = new Set((assignments||[]).map(a=>String(a.report_id)));
+        
+        const { data: forwarded, error: forwardError } = await supabase
+          .from('report_routes')
+          .select('report_id, note, forwarded_at')
+          .eq('target', `station:${stationId}`);
+        if (forwardError) console.error('Error fetching forwarded reports:', forwardError);
+        
+        // Get original assignee info for forwarded reports
+        const forwardedReportIds = (forwarded||[]).map(f => String(f.report_id));
+        let originalAssignees = new Map();
+        
+        if (forwardedReportIds.length > 0) {
+          const { data: assignmentData } = await supabase
+            .from('report_assignments')
+            .select('report_id, assignee_type, assignee_id')
+            .in('report_id', forwardedReportIds);
+          
+          if (assignmentData) {
+            const stationAssignees = assignmentData.filter(a => a.assignee_type === 'station');
+            if (stationAssignees.length > 0) {
+              const stationIds = stationAssignees.map(a => a.assignee_id);
+              const { data: stationNames } = await supabase
+                .from('station_users')
+                .select('id, station_name')
+                .in('id', stationIds);
+              
+              if (stationNames) {
+                const stationNameMap = new Map(stationNames.map(s => [s.id, s.station_name]));
+                assignmentData.forEach(a => {
+                  if (a.assignee_type === 'station') {
+                    originalAssignees.set(String(a.report_id), {
+                      type: 'station',
+                      name: stationNameMap.get(a.assignee_id) || 'Unknown Station'
+                    });
+                  } else {
+                    originalAssignees.set(String(a.report_id), {
+                      type: 'responder',
+                      name: 'Responder'
+                    });
+                  }
+                });
+              }
+            }
+          }
+        }
+        
+        // Create map of forwarded metadata
+        const forwardedMetadata = new Map();
+        (forwarded||[]).forEach(f => {
+          const originalAssignee = originalAssignees.get(String(f.report_id));
+          forwardedMetadata.set(String(f.report_id), {
+            note: f.note,
+            forwarded_at: f.forwarded_at,
+            original_assignee: originalAssignee
+          });
+        });
+        
+        // Combine both
+        const assignedIds = new Set((assignments||[]).map(a=>String(a.report_id)));
+        const forwardedIds = new Set((forwarded||[]).map(f=>String(f.report_id)));
+        const ids = new Set([...assignedIds, ...forwardedIds]);
+        
+        console.log(`Station Overall: ${assignedIds.size} assigned, ${forwardedIds.size} forwarded`);
+        
         if (!ids.size) { setReports([]); return; }
         const resp = await fetch(`${API_URL}/get_reports`);
         const data = resp.ok ? await resp.json() : [];
         const filtered = (data||[]).filter(r=>ids.has(String(r.id)));
-        const mapped = filtered.map(r=>({
-          id: r.id,
-          time: formatTime(r.formatted_timestamp || r.created_at),
-          reporter: r.reporter || 'Unknown Reporter',
-          location: r.address || r.geotag_location || 'Location unavailable',
-          status: r.status || 'On Going',
-          suggestedAlarmLevel: r.recommended_alarm_level || r.alarm_level || 'Unknown',
-          finalAlarmLevel: r.final_fire_alarm_level || '1st Alarm',
-          description: r.cause_of_fire || 'No cause specified',
-          picture: r.image_url,
-          minutesAgo: minutesAgo(r.created_at || r.timestamp),
-          prediction: r.prediction,
-          confidence: r.confidence,
-          structure: r.structure,
-          smokeIntensity: r.smoke_intensity,
-          smokeConfidence: r.smoke_confidence,
-          numberOfStructures: r.number_of_structures_on_fire,
-          timestamp: r.created_at || r.timestamp,
-          latitude: r.latitude,
-          longitude: r.longitude,
-          address: r.address,
-          geotag_location: r.geotag_location
-        }));
+        const mapped = filtered.map(r=>{
+          const forwardingInfo = forwardedMetadata.get(String(r.id));
+          return {
+            id: r.id,
+            time: formatTime(r.formatted_timestamp || r.created_at),
+            reporter: r.reporter || 'Unknown Reporter',
+            location: r.address || r.geotag_location || 'Location unavailable',
+            status: r.status || 'On Going',
+            suggestedAlarmLevel: r.recommended_alarm_level || r.alarm_level || 'Unknown',
+            finalAlarmLevel: r.final_fire_alarm_level || '1st Alarm',
+            description: r.cause_of_fire || 'No cause specified',
+            picture: r.image_url,
+            minutesAgo: minutesAgo(r.created_at || r.timestamp),
+            prediction: r.prediction,
+            confidence: r.confidence,
+            structure: r.structure,
+            smokeIntensity: r.smoke_intensity,
+            smokeConfidence: r.smoke_confidence,
+            numberOfStructures: r.number_of_structures_on_fire,
+            timestamp: r.created_at || r.timestamp,
+            latitude: r.latitude,
+            longitude: r.longitude,
+            address: r.address,
+            geotag_location: r.geotag_location,
+            // Attach forwarding metadata
+            is_forwarded: !!forwardingInfo,
+            forwarding_note: forwardingInfo?.note,
+            forwarded_at: forwardingInfo?.forwarded_at,
+            original_assignee: forwardingInfo?.original_assignee
+          };
+        });
         setReports(mapped.sort((a,b)=> new Date(b.timestamp||0)-new Date(a.timestamp||0)));
       } catch (e) {
         console.error('Station Overall load error:', e);
@@ -318,6 +391,33 @@ const Station_Overview = () => {
                         className="w-full h-64 object-cover rounded-lg"
                       />
                     </div>
+
+                    {/* Show forwarding information if this report was forwarded */}
+                    {selectedReport.is_forwarded && (
+                      <div className="bg-amber-50 border-2 border-amber-300 rounded-lg p-4">
+                        <div className="flex items-start gap-2">
+                          <span className="text-2xl">📨</span>
+                          <div className="flex-1">
+                            <h4 className="text-lg font-bold text-amber-900 mb-2">Forwarded Report</h4>
+                            {selectedReport.original_assignee && (
+                              <p className="text-base text-amber-800 mb-2">
+                                <strong>Originally assigned to:</strong> {selectedReport.original_assignee.name}
+                              </p>
+                            )}
+                            {selectedReport.forwarding_note && (
+                              <p className="text-base text-amber-800 mb-2">
+                                <strong>Note:</strong> {selectedReport.forwarding_note}
+                              </p>
+                            )}
+                            {selectedReport.forwarded_at && (
+                              <p className="text-sm text-amber-700">
+                                Forwarded: {new Date(selectedReport.forwarded_at).toLocaleString()}
+                              </p>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    )}
 
                     {/* Location and Time */}
                     <div className="flex justify-between items-center">

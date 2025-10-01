@@ -35,7 +35,9 @@ const Auser_management = () => {
     email: '',
     phone: '',
     position: '',
-    password: ''
+    password: '',
+    lat: '',
+    lng: ''
   });
 
 
@@ -200,7 +202,18 @@ const citizens = citizensData.map(data => {
   const handleDelete = async (type, id) => {
     if (window.confirm('Are you sure you want to delete this user?')) {
       try {
+        let userId = null;
+
         if (type === 'citizens') {
+          // Get user_id before deleting
+          const { data: citizenData } = await supabase
+            .from('citizen_users')
+            .select('user_id')
+            .eq('id', id)
+            .single();
+          
+          userId = citizenData?.user_id;
+
           // Delete citizen from Supabase
           const { error } = await supabase
             .from('citizen_users')
@@ -212,6 +225,15 @@ const citizens = citizensData.map(data => {
             throw new Error(`Failed to delete citizen: ${error.message}`);
           }
         } else {
+          // Get user_id before deleting station
+          const { data: stationData } = await supabase
+            .from('station_users')
+            .select('user_id')
+            .eq('id', id)
+            .single();
+          
+          userId = stationData?.user_id;
+
           // Delete station from Supabase
           const { error } = await supabase
             .from('station_users')
@@ -221,6 +243,19 @@ const citizens = citizensData.map(data => {
           if (error) {
             console.error('Error deleting station:', error);
             throw new Error(`Failed to delete station: ${error.message}`);
+          }
+        }
+
+        // Delete the associated auth user if it exists
+        if (userId) {
+          console.log('🗑️ Deleting auth user:', userId);
+          const { error: authError } = await supabase.auth.admin.deleteUser(userId);
+          
+          if (authError) {
+            console.warn('⚠️ Could not delete auth user:', authError.message);
+            // Don't throw error here - the main record is already deleted
+          } else {
+            console.log('✅ Auth user deleted successfully');
           }
         }
 
@@ -530,13 +565,40 @@ const citizens = citizensData.map(data => {
         return;
       }
 
-      // Create station data for Supabase
+      // Create Supabase Auth account for the station
+      console.log('🔐 Creating Supabase Auth account for station...');
+      const { data: authData, error: authError } = await supabase.auth.signUp({
+        email: newStation.email.toLowerCase(),
+        password: newStation.password,
+        options: {
+          data: {
+            full_name: newStation.name,
+            display_name: newStation.name,
+            station_name: newStation.name,
+            user_type: 'station',
+            role: 'station'
+          }
+        }
+      });
+
+      if (authError) {
+        console.error('❌ Error creating Supabase Auth account:', authError);
+        alert(`Error creating station account: ${authError.message}`);
+        return;
+      }
+
+      console.log('✅ Supabase Auth account created:', authData.user.id);
+
+      // Create station data for Supabase (linked to auth user)
       const supabaseData = {
+        user_id: authData.user.id,
         station_name: newStation.name,
         email: newStation.email.toLowerCase(),
         address: newStation.location,
         phone: newStation.phone || '',
         position: newStation.position || '',
+        lat: newStation.lat ? parseFloat(newStation.lat) : null,
+        lng: newStation.lng ? parseFloat(newStation.lng) : null,
         role: 'stationUser',
         active: true,
         status: 'active',
@@ -601,7 +663,9 @@ const citizens = citizensData.map(data => {
         email: '',
         phone: '',
         position: '',
-        password: ''
+        password: '',
+        lat: '',
+        lng: ''
       });
       
       setShowAddStationModal(false);
@@ -1412,6 +1476,34 @@ const citizens = citizensData.map(data => {
                         className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-red-500 focus:border-red-500 transition-all duration-200 bg-gray-50 focus:bg-white"
                         placeholder="Enter password for the station"
                         required
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">
+                        Latitude
+                      </label>
+                      <input
+                        type="number"
+                        step="any"
+                        value={newStation.lat}
+                        onChange={(e) => setNewStation({...newStation, lat: e.target.value})}
+                        className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-red-500 focus:border-red-500 transition-all duration-200 bg-gray-50 focus:bg-white"
+                        placeholder="e.g., 10.3157"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">
+                        Longitude
+                      </label>
+                      <input
+                        type="number"
+                        step="any"
+                        value={newStation.lng}
+                        onChange={(e) => setNewStation({...newStation, lng: e.target.value})}
+                        className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-red-500 focus:border-red-500 transition-all duration-200 bg-gray-50 focus:bg-white"
+                        placeholder="e.g., 123.8854"
                       />
                     </div>
                   </div>

@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState, useCallback } from 'react';
 import { View, Text, TouchableOpacity, ScrollView, RefreshControl, TextInput, Modal, Image, Platform, Alert } from 'react-native';
 
-const API_URL = 'https://fire-detection-api-production-f543.up.railway.app';
+const API_URL = 'https://fire-detection-api-production-f8a3.up.railway.app';
 
 export default function AOverview() {
   const [reports, setReports] = useState([]);

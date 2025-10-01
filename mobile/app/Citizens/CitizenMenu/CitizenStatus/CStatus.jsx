@@ -7,8 +7,8 @@ import * as Location from 'expo-location';
 import { useAuth } from '../../../config/AuthContext';
 
 // Fire Detection API base
-const API_URL = 'https://fire-detection-api-production-f543.up.railway.app/predict';
-const API_BASE = 'https://fire-detection-api-production-f543.up.railway.app';
+const API_URL = 'https://fire-detection-api-production-f8a3.up.railway.app/predict';
+const API_BASE = 'https://fire-detection-api-production-f8a3.up.railway.app';
 
 const CStatus = () => {
   const [activeTab, setActiveTab] = useState('All');
@@ -72,7 +72,7 @@ const CStatus = () => {
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 15000); // 15 second timeout
       
-      const response = await fetch('https://fire-detection-api-production-f543.up.railway.app/get_reports', {
+      const response = await fetch('https://fire-detection-api-production-f8a3.up.railway.app/get_reports', {
         signal: controller.signal,
         headers: {
           'Accept': 'application/json',

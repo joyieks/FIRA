@@ -20,6 +20,7 @@ const Sdashboard = () => {
   // Strictly rely on the logged-in station identity; avoid fallback switching
   const [fallbackStationData, setFallbackStationData] = useState(null);
   const [showStationInfoWindow, setShowStationInfoWindow] = useState(false);
+  const [showCommandCenterInfo, setShowCommandCenterInfo] = useState(false);
   const [jurisdictionRadius, setJurisdictionRadius] = useState(2000); // 2km radius in meters
   const [allStations, setAllStations] = useState([]); // raw stations from DB
   const [geocodedStations, setGeocodedStations] = useState([]); // [{id, name, address, lat, lng}]
@@ -145,7 +146,7 @@ const Sdashboard = () => {
 
         const { data: stations, error } = await supabase
           .from('station_users')
-          .select('id, station_name, address');
+          .select('id, station_name, address, lat, lng');
 
         if (error) {
           console.error('❌ Error fetching stations list:', error);
@@ -161,6 +162,23 @@ const Sdashboard = () => {
         const results = await Promise.all(
           (stations || []).map((s) => {
             return new Promise((resolve) => {
+              // First, check if lat/lng already exist in the database
+              const latNum = s?.lat != null ? parseFloat(s.lat) : NaN;
+              const lngNum = s?.lng != null ? parseFloat(s.lng) : NaN;
+              
+              // If we have valid coordinates, use them directly
+              if (!isNaN(latNum) && !isNaN(lngNum)) {
+                resolve({ 
+                  id: s.id, 
+                  name: s.station_name || 'Station',
+                  address: s.address, 
+                  lat: latNum, 
+                  lng: lngNum 
+                });
+                return;
+              }
+              
+              // Otherwise, fall back to geocoding the address
               if (!s?.address) {
                 resolve(null);
                 return;
@@ -213,15 +231,81 @@ const Sdashboard = () => {
           return;
         }
 
-        // Normalize IDs to strings to avoid numeric vs string mismatch
+        // 2) Fetch forwarded reports for this station with notes
+        const { data: forwarded, error: forwardError } = await supabase
+          .from('report_routes')
+          .select('report_id, note, forwarded_at')
+          .eq('target', `station:${stationId}`);
+
+        if (forwardError) {
+          console.error('❌ Error fetching forwarded reports for station:', forwardError);
+        }
+
+        // 3) For forwarded reports, get the original assignee info
+        const forwardedReportIds = (forwarded || []).map(f => String(f.report_id));
+        let originalAssignees = new Map();
+        
+        if (forwardedReportIds.length > 0) {
+          const { data: assignmentData, error: assignError } = await supabase
+            .from('report_assignments')
+            .select('report_id, assignee_type, assignee_id')
+            .in('report_id', forwardedReportIds);
+          
+          if (!assignError && assignmentData) {
+            // Fetch station names for station assignees
+            const stationAssignees = assignmentData.filter(a => a.assignee_type === 'station');
+            if (stationAssignees.length > 0) {
+              const stationIds = stationAssignees.map(a => a.assignee_id);
+              const { data: stationNames, error: stationError } = await supabase
+                .from('station_users')
+                .select('id, station_name')
+                .in('id', stationIds);
+              
+              if (!stationError && stationNames) {
+                const stationNameMap = new Map(stationNames.map(s => [s.id, s.station_name]));
+                assignmentData.forEach(a => {
+                  if (a.assignee_type === 'station') {
+                    originalAssignees.set(String(a.report_id), {
+                      type: 'station',
+                      name: stationNameMap.get(a.assignee_id) || 'Unknown Station'
+                    });
+                  } else {
+                    originalAssignees.set(String(a.report_id), {
+                      type: 'responder',
+                      name: 'Responder'
+                    });
+                  }
+                });
+              }
+            }
+          }
+        }
+
+        // Create a map of forwarded report IDs to their metadata (note, forwarded_at, original assignee)
+        const forwardedMetadata = new Map();
+        (forwarded || []).forEach(f => {
+          const originalAssignee = originalAssignees.get(String(f.report_id));
+          forwardedMetadata.set(String(f.report_id), {
+            note: f.note,
+            forwarded_at: f.forwarded_at,
+            original_assignee: originalAssignee
+          });
+        });
+
+        // Combine both assigned and forwarded report IDs
         const assignedIds = new Set((assignments || []).map(a => String(a.report_id)));
-        if (assignedIds.size === 0) {
+        const forwardedIds = new Set((forwarded || []).map(f => String(f.report_id)));
+        const allReportIds = new Set([...assignedIds, ...forwardedIds]);
+
+        console.log(`📋 Station has ${assignedIds.size} assigned and ${forwardedIds.size} forwarded reports`);
+
+        if (allReportIds.size === 0) {
           setAssignedReports([]);
           return;
         }
 
-        // 2) Fetch full fire reports from the same API used by admin
-        const response = await fetch('https://fire-detection-api-production-f543.up.railway.app/get_reports');
+        // 3) Fetch full fire reports from the same API used by admin
+        const response = await fetch('https://fire-detection-api-production-f8a3.up.railway.app/get_reports');
         if (!response.ok) {
           console.error('❌ Failed to fetch fire reports for station view:', response.status);
           return;
@@ -229,11 +313,11 @@ const Sdashboard = () => {
         const reports = await response.json();
         let withCoords = (reports || []).filter(r => {
           const rid = r?.id != null ? String(r.id) : '';
-          return rid && assignedIds.has(rid) && r.latitude && r.longitude && !isNaN(r.latitude) && !isNaN(r.longitude);
+          return rid && allReportIds.has(rid) && r.latitude && r.longitude && !isNaN(r.latitude) && !isNaN(r.longitude);
         });
 
-        // 3) Fallback to snapshot table for any assigned IDs missing in external API
-        const missingIds = Array.from(assignedIds).filter(id => !withCoords.find(r => String(r.id) === id));
+        // 4) Fallback to snapshot table for any report IDs missing in external API
+        const missingIds = Array.from(allReportIds).filter(id => !withCoords.find(r => String(r.id) === id));
         if (missingIds.length > 0) {
           const { data: snaps, error: snapErr } = await supabase
             .from('assigned_report_snapshots')
@@ -253,9 +337,33 @@ const Sdashboard = () => {
           }
         }
 
-        console.log('📌 Assigned report IDs:', Array.from(assignedIds));
-        console.log('📌 Assigned reports (withCoords from API + snapshots):', withCoords.map(r => ({ id: r.id, lat: r.latitude, lng: r.longitude })));
-        setAssignedReports(withCoords);
+        // 5) Attach forwarding metadata to each report
+        const reportsWithMetadata = withCoords.map(report => {
+          const rid = String(report.id);
+          const forwardingInfo = forwardedMetadata.get(rid);
+          
+          if (forwardingInfo) {
+            // This report was forwarded
+            return {
+              ...report,
+              is_forwarded: true,
+              forwarding_note: forwardingInfo.note,
+              forwarded_at: forwardingInfo.forwarded_at,
+              original_assignee: forwardingInfo.original_assignee
+            };
+          }
+          
+          // This report was directly assigned
+          return {
+            ...report,
+            is_forwarded: false
+          };
+        });
+
+        console.log('📌 Directly assigned report IDs:', Array.from(assignedIds));
+        console.log('📨 Forwarded report IDs:', Array.from(forwardedIds));
+        console.log('📍 Total reports on map (assigned + forwarded):', reportsWithMetadata.map(r => ({ id: r.id, lat: r.latitude, lng: r.longitude, forwarded: r.is_forwarded })));
+        setAssignedReports(reportsWithMetadata);
       } catch (e) {
         console.error('❌ Error loading assigned reports:', e);
       }
@@ -510,6 +618,51 @@ const Sdashboard = () => {
             />
           )}
 
+          {/* Command Center - BFP Regional Office VII */}
+          {mapLoaded && (
+            <Marker
+              position={{ lat: 10.3157, lng: 123.8854 }}
+              title="BFP Regional Office VII - Command Center"
+              icon={{
+                path: window.google.maps.SymbolPath.CIRCLE,
+                fillColor: '#1E40AF',
+                fillOpacity: 1,
+                strokeColor: '#FFFFFF',
+                strokeWeight: 3,
+                scale: 25,
+              }}
+              label={{
+                text: '🏢',
+                fontSize: '20px'
+              }}
+              zIndex={3000}
+              onClick={() => setShowCommandCenterInfo(true)}
+              cursor="pointer"
+            />
+          )}
+
+          {/* Command Center Info Window */}
+          {showCommandCenterInfo && mapLoaded && (
+            <InfoWindow
+              position={{ lat: 10.3157, lng: 123.8854 }}
+              onCloseClick={() => setShowCommandCenterInfo(false)}
+            >
+              <div className="p-3 max-w-sm">
+                <h3 className="font-bold text-lg mb-2 text-blue-600">🏢 BFP Regional Office VII</h3>
+                <p className="text-sm text-blue-600 font-medium mb-2">📍 Command Center</p>
+                <div className="space-y-1 text-sm text-gray-700">
+                  <p><strong>Address:</strong> 6000 Natalio B. Bacalso Ave</p>
+                  <p><strong>City:</strong> Cebu City, Cebu 6000</p>
+                  <p><strong>Plus Code:</strong> 7VXR+5VG</p>
+                  <p><strong>Coordinates:</strong></p>
+                  <p className="ml-2">Lat: 10.3157</p>
+                  <p className="ml-2">Lng: 123.8854</p>
+                  <p><strong>Status:</strong> <span className="text-green-600 font-semibold">Active</span></p>
+                </div>
+              </div>
+            </InfoWindow>
+          )}
+
           {/* Other stations: markers and jurisdiction circles */}
           {mapLoaded && geocodedStations.map((s) => {
             const isSelf = currentStationId && s.id === currentStationId;
@@ -563,10 +716,10 @@ const Sdashboard = () => {
                   fillColor: color,
                   fillOpacity: 1,
                   strokeColor: '#ffffff',
-                  strokeWeight: 2,
-                  scale: 12
+                  strokeWeight: 4,
+                  scale: 30
                 }}
-                label={{ text: '🔥', fontSize: '14px' }}
+                label={{ text: '🔥', fontSize: '32px' }}
                 zIndex={4000}
                 onClick={() => setSelectedAssignedReport({
                   ...report,
@@ -588,6 +741,29 @@ const Sdashboard = () => {
             >
               <div className="p-3 max-w-sm">
                 <h3 className="font-bold text-lg mb-2 text-red-600">🔥 Fire Report</h3>
+                
+                {/* Show forwarding information if this report was forwarded */}
+                {selectedAssignedReport.is_forwarded && (
+                  <div className="mb-3 p-2 bg-amber-50 border border-amber-200 rounded">
+                    <p className="text-xs font-semibold text-amber-800 mb-1">📨 Forwarded Report</p>
+                    {selectedAssignedReport.original_assignee && (
+                      <p className="text-xs text-amber-700 mb-1">
+                        <strong>Originally assigned to:</strong> {selectedAssignedReport.original_assignee.name}
+                      </p>
+                    )}
+                    {selectedAssignedReport.forwarding_note && (
+                      <p className="text-xs text-amber-700">
+                        <strong>Note:</strong> {selectedAssignedReport.forwarding_note}
+                      </p>
+                    )}
+                    {selectedAssignedReport.forwarded_at && (
+                      <p className="text-xs text-amber-600 mt-1">
+                        Forwarded: {new Date(selectedAssignedReport.forwarded_at).toLocaleString()}
+                      </p>
+                    )}
+                  </div>
+                )}
+                
                 <div className="space-y-2 text-sm">
                   {selectedAssignedReport.reporter && (
                     <p><strong>Reporter:</strong> {selectedAssignedReport.reporter}</p>
