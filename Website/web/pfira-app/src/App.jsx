@@ -22,6 +22,7 @@ import Station_ChangePass from './components/pages/stations/SAccount/Station_Cha
 import Sfira_chat from './components/pages/stations/Station Chat/Sfira_chat.jsx';
 // import ProtectedRoute from './components/ProtectedRoute.jsx'; // Temporarily disabled for testing
 import ForgotPassword from './components/pages/Forgot Password/forgotpassword.jsx';
+import { NotificationProvider } from './contexts/NotificationContext.jsx';
 import { Routes, Route } from 'react-router-dom'
 
 const App = () => {
@@ -31,11 +32,19 @@ const App = () => {
       <Route path="/forgot-password" element={<ForgotPassword />} />
 
       {/* Full-screen map routes */}
-      <Route path="/admin-map" element={<Adashboard />} />
+      <Route path="/admin-map" element={
+        <NotificationProvider>
+          <Adashboard />
+        </NotificationProvider>
+      } />
       <Route path="/station-map" element={<Sdashboard />} />
 
       {/* Admin routes without protection */}
-      <Route path="/admin-dashboard" element={<AdminLayout />}>
+      <Route path="/admin-dashboard" element={
+        <NotificationProvider>
+          <AdminLayout />
+        </NotificationProvider>
+      }>
         <Route index element={<Adashboard />} />
         <Route path="overall" element={<Overview />} />
         <Route path="notification" element={<Notification />} />

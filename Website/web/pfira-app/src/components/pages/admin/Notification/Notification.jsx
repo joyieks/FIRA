@@ -1,52 +1,48 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { FiBell, FiX, FiUser, FiFileText, FiCheck, FiClock, FiTrash2 } from 'react-icons/fi';
+import { useNotifications } from '../../../../contexts/NotificationContext';
 
 const Notification = () => {
-  const [notifications, setNotifications] = useState([]);
   const [filter, setFilter] = useState('all'); // all, unread, read
+  const {
+    notifications,
+    loading,
+    unreadCount,
+    audioEnabled,
+    audioBlocked,
+    playAlert,
+    stopAlert,
+    loadNotifications,
+    markAsRead,
+    markAllAsRead,
+    deleteNotification,
+    clearAllNotifications,
+    setAudioEnabled,
+    setAudioBlocked,
+    checkForNewFireReports,
+    resetFireReportMonitoring
+  } = useNotifications();
 
-  useEffect(() => {
-    loadNotifications();
-  }, []);
+  // Stop alert sound when notification page is viewed
+  React.useEffect(() => {
+    console.log('📄 Notification page mounted - stopping any playing alarms');
+    stopAlert();
+  }, [stopAlert]);
 
-  const loadNotifications = () => {
-    const storedNotifications = JSON.parse(localStorage.getItem('adminNotifications') || '[]');
-    setNotifications(storedNotifications);
-  };
-
-  const markAsRead = (id) => {
-    const updatedNotifications = notifications.map(notification =>
-      notification.id === id ? { ...notification, read: true } : notification
-    );
-    setNotifications(updatedNotifications);
-    localStorage.setItem('adminNotifications', JSON.stringify(updatedNotifications));
-  };
-
-  const markAllAsRead = () => {
-    const updatedNotifications = notifications.map(notification => ({ ...notification, read: true }));
-    setNotifications(updatedNotifications);
-    localStorage.setItem('adminNotifications', JSON.stringify(updatedNotifications));
-  };
-
-  const deleteNotification = (id) => {
-    const updatedNotifications = notifications.filter(notification => notification.id !== id);
-    setNotifications(updatedNotifications);
-    localStorage.setItem('adminNotifications', JSON.stringify(updatedNotifications));
-  };
-
-  const clearAllNotifications = () => {
-    if (window.confirm('Are you sure you want to clear all notifications?')) {
-      setNotifications([]);
-      localStorage.setItem('adminNotifications', JSON.stringify([]));
-    }
-  };
 
   const getNotificationIcon = (type) => {
     switch (type) {
+      case 'fire_alert':
+      case 'emergency':
+        return <FiBell className="text-red-600" />;
+      case 'assignment':
+        return <FiFileText className="text-blue-600" />;
+      case 'user_action':
       case 'new_registration':
-        return <FiUser className="text-blue-600" />;
-      case 'document_upload':
-        return <FiFileText className="text-green-600" />;
+        return <FiUser className="text-purple-600" />;
+      case 'system':
+      case 'info':
+        return <FiClock className="text-gray-600" />;
       default:
         return <FiBell className="text-gray-600" />;
     }
@@ -54,10 +50,17 @@ const Notification = () => {
 
   const getNotificationColor = (type) => {
     switch (type) {
-      case 'new_registration':
+      case 'fire_alert':
+      case 'emergency':
+        return 'bg-red-50 border-red-200';
+      case 'assignment':
         return 'bg-blue-50 border-blue-200';
-      case 'document_upload':
-        return 'bg-green-50 border-green-200';
+      case 'user_action':
+      case 'new_registration':
+        return 'bg-purple-50 border-purple-200';
+      case 'system':
+      case 'info':
+        return 'bg-gray-50 border-gray-200';
       default:
         return 'bg-gray-50 border-gray-200';
     }
@@ -66,16 +69,24 @@ const Notification = () => {
   const formatDate = (dateString) => {
     const date = new Date(dateString);
     const now = new Date();
-    const diffInHours = Math.floor((now - date) / (1000 * 60 * 60));
+    const diffInSeconds = Math.floor((now - date) / 1000);
+    const diffInMinutes = Math.floor(diffInSeconds / 60);
+    const diffInHours = Math.floor(diffInMinutes / 60);
+    const diffInDays = Math.floor(diffInHours / 24);
     
-    if (diffInHours < 1) {
+    if (diffInSeconds < 60) {
       return 'Just now';
+    } else if (diffInMinutes < 60) {
+      return `${diffInMinutes} minute${diffInMinutes > 1 ? 's' : ''} ago`;
     } else if (diffInHours < 24) {
       return `${diffInHours} hour${diffInHours > 1 ? 's' : ''} ago`;
+    } else if (diffInDays < 7) {
+      return `${diffInDays} day${diffInDays > 1 ? 's' : ''} ago`;
     } else {
       return date.toLocaleDateString('en-US', {
         month: 'short',
         day: 'numeric',
+        year: date.getFullYear() !== now.getFullYear() ? 'numeric' : undefined,
         hour: '2-digit',
         minute: '2-digit'
       });
@@ -83,20 +94,36 @@ const Notification = () => {
   };
 
   const filteredNotifications = notifications.filter(notification => {
-    if (filter === 'unread') return !notification.read;
-    if (filter === 'read') return notification.read;
+    if (filter === 'unread') return !notification.is_read;
+    if (filter === 'read') return notification.is_read;
     return true;
   });
-
-  const unreadCount = notifications.filter(n => !n.read).length;
 
   return (
     <div className="p-6 bg-gray-50 min-h-screen">
       <div className="w-full">
-
-
-        {/* Filters */}
+        {/* Filters and Controls */}
         <div className="bg-white rounded-lg shadow-sm p-4 mb-6">
+          <div className="flex justify-between items-center mb-4">
+            <h2 className="text-xl font-semibold text-gray-900">Notifications</h2>
+            <div className="flex space-x-2">
+              <button
+                onClick={loadNotifications}
+                disabled={loading}
+                className="bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400 text-white px-4 py-2 rounded-lg font-medium transition-colors flex items-center"
+              >
+                {loading ? 'Loading...' : 'Refresh'}
+              </button>
+              {notifications.length > 0 && (
+                <button
+                  onClick={clearAllNotifications}
+                  className="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-lg font-medium transition-colors"
+                >
+                  Clear All
+                </button>
+              )}
+            </div>
+          </div>
           <div className="flex space-x-4">
             <button
               onClick={() => setFilter('all')}
@@ -146,8 +173,12 @@ const Notification = () => {
             filteredNotifications.map((notification) => (
               <div
                 key={notification.id}
-                className={`bg-white rounded-lg shadow-sm border-l-4 border-l-red-600 p-4 ${
-                  !notification.read ? 'ring-2 ring-red-100' : ''
+                className={`bg-white rounded-lg shadow-sm border-l-4 ${
+                  notification.priority === 'urgent' ? 'border-l-red-600' : 
+                  notification.priority === 'high' ? 'border-l-orange-600' : 
+                  'border-l-blue-600'
+                } p-4 ${
+                  !notification.is_read ? 'ring-2 ring-red-100' : ''
                 }`}
               >
                 <div className="flex items-start justify-between">
@@ -161,9 +192,14 @@ const Notification = () => {
                         <h3 className="text-sm font-medium text-gray-900">
                           {notification.title}
                         </h3>
-                        {!notification.read && (
+                        {!notification.is_read && (
                           <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-red-100 text-red-800">
                             New
+                          </span>
+                        )}
+                        {notification.priority === 'urgent' && (
+                          <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-red-600 text-white">
+                            URGENT
                           </span>
                         )}
                       </div>
@@ -175,35 +211,17 @@ const Notification = () => {
                       <div className="flex items-center space-x-4 text-xs text-gray-500">
                         <span className="flex items-center">
                           <FiClock className="mr-1" />
-                          {formatDate(notification.timestamp)}
+                          {formatDate(notification.created_at)}
                         </span>
-                        {notification.type === 'new_registration' && (
-                          <span className="flex items-center">
-                            <FiUser className="mr-1" />
-                            Registration Application
-                          </span>
-                        )}
+                        <span className="flex items-center capitalize">
+                          {notification.type.replace('_', ' ')}
+                        </span>
                       </div>
-
-                      {/* Registration Details (if available) */}
-                      {notification.registrationData && (
-                        <div className="mt-3 p-3 bg-gray-50 rounded-lg">
-                          <h4 className="text-xs font-medium text-gray-700 mb-2">Application Details:</h4>
-                          <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-xs text-gray-600">
-                            <p><span className="font-medium">Name:</span> {notification.registrationData.firstName} {notification.registrationData.lastName}</p>
-                            <p><span className="font-medium">Email:</span> {notification.registrationData.email}</p>
-                            <p><span className="font-medium">Mobile:</span> {notification.registrationData.mobile}</p>
-                            <p><span className="font-medium">Headquarters:</span> {notification.registrationData.headquarter}</p>
-                            <p><span className="font-medium">Expertise:</span> {notification.registrationData.emergencyExpertise}</p>
-                            <p><span className="font-medium">Address:</span> {notification.registrationData.address}</p>
-                          </div>
-                        </div>
-                      )}
                     </div>
                   </div>
                   
                   <div className="flex items-center space-x-2 ml-4">
-                    {!notification.read && (
+                    {!notification.is_read && (
                       <button
                         onClick={() => markAsRead(notification.id)}
                         className="p-1 text-gray-400 hover:text-green-600"

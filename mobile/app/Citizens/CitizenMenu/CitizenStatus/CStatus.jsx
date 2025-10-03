@@ -5,6 +5,7 @@ import { MaterialIcons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
 import * as Location from 'expo-location';
 import { useAuth } from '../../../config/AuthContext';
+import { supabase } from '../../../config/supabase';
 
 // Fire Detection API base
 const API_URL = 'https://fire-detection-api-production-f8a3.up.railway.app/predict';
@@ -113,6 +114,14 @@ const CStatus = () => {
         console.log('Active user reports:', userReports.length);
         console.log('Active other reports:', otherReports.length);
         
+        // Debug: Log sample report data to understand timestamp structure
+        if (userReports.length > 0) {
+          console.log('Sample user report data:', JSON.stringify(userReports[0], null, 2));
+        }
+        if (otherReports.length > 0) {
+          console.log('Sample other report data:', JSON.stringify(otherReports[0], null, 2));
+        }
+        
         // Enrich with readable addresses best-effort
         const enrichAddresses = async (reports, cap = 8) => {
           const results = [...reports];
@@ -182,6 +191,24 @@ const CStatus = () => {
         return '#10b981';
       default:
         return '#6b7280';
+    }
+  };
+
+  const formatTimestamp = (timestamp) => {
+    if (!timestamp) return 'Unknown time';
+    
+    // If it's "Just now", keep it
+    if (timestamp === 'Just now') return timestamp;
+    
+    try {
+      const date = new Date(timestamp);
+      if (isNaN(date.getTime())) return String(timestamp);
+      return date.toLocaleString('en-US', {
+        year: 'numeric', month: 'short', day: 'numeric',
+        hour: '2-digit', minute: '2-digit', hour12: true
+      });
+    } catch {
+      return String(timestamp);
     }
   };
 
@@ -446,6 +473,94 @@ const CStatus = () => {
 
       console.log('Created new report:', newReport);
 
+      // ✅ Create notifications for all admin users
+      try {
+        console.log('🔔 Starting notification creation...');
+        console.log('🔍 Current user context:', {
+          uid: currentUser?.uid,
+          email: currentUser?.email,
+          isAuthenticated: isAuthenticated
+        });
+        
+        // Test Supabase connection first
+        console.log('🔍 Testing Supabase connection...');
+        const { data: testData, error: testError } = await supabase
+          .from('admin_users')
+          .select('count')
+          .limit(1);
+        
+        console.log('🔍 Supabase connection test:', { testData, testError });
+        
+        // Get all admin users
+        console.log('🔍 Fetching admin users...');
+        const { data: adminUsers, error: adminError } = await supabase
+          .from('admin_users')
+          .select('id, email, first_name, last_name, status, role');
+        
+        console.log('📊 Admin users query result:', { 
+          adminUsers, 
+          adminError, 
+          count: adminUsers?.length,
+          errorDetails: adminError ? {
+            message: adminError.message,
+            details: adminError.details,
+            hint: adminError.hint,
+            code: adminError.code
+          } : null
+        });
+        
+        if (adminError) {
+          console.error('❌ Error fetching admin users:', adminError);
+          console.error('❌ This might be an RLS policy issue. Check your Supabase RLS policies.');
+          throw adminError;
+        }
+        
+        if (!adminUsers || adminUsers.length === 0) {
+          console.warn('⚠️ No admin users found in database!');
+          console.warn('Please ensure admin_users table has at least one user');
+          return;
+        }
+        
+        console.log(`✅ Found ${adminUsers.length} admin user(s), creating notifications...`);
+        
+        const notifications = adminUsers.map(admin => ({
+          user_id: admin.id,
+          user_type: 'admin',
+          title: '🔥 New Fire Report Submitted',
+          message: `${userName} reported a fire: ${emergencyData.cause}. Location: ${pickedAddress || currentLocation}. Prediction: ${data?.prediction || 'Unknown'} (Confidence: ${data?.confidence || 'N/A'})`,
+          type: 'fire_alert',
+          priority: data?.prediction === 'Fire' ? 'urgent' : 'high',
+          is_read: false,
+          related_report_id: data?.id || String(newReport.id),
+        }));
+        
+        console.log('📝 Notifications to insert:', JSON.stringify(notifications, null, 2));
+        
+        const { data: insertedData, error: notifError } = await supabase
+          .from('notifications')
+          .insert(notifications)
+          .select();
+        
+        if (notifError) {
+          console.error('❌ Error creating notifications:', notifError);
+          console.error('❌ Notification error details:', {
+            message: notifError.message,
+            details: notifError.details,
+            hint: notifError.hint,
+            code: notifError.code
+          });
+          throw notifError;
+        } else {
+          console.log('✅ Successfully created notifications:', insertedData);
+          console.log(`✅ Created ${insertedData?.length || 0} notification(s) for ${adminUsers.length} admin user(s)`);
+        }
+      } catch (notifErr) {
+        console.error('❌ Notification creation failed:', notifErr);
+        console.error('❌ Error details:', JSON.stringify(notifErr, null, 2));
+        console.error('❌ This is likely an RLS policy issue. Please check your Supabase policies.');
+        // Don't fail the report submission if notification creation fails
+      }
+
       // Add to local state immediately for better UX
       setYourReports(prevReports => [newReport, ...prevReports]);
 
@@ -556,25 +671,7 @@ const CStatus = () => {
         <View className="flex-row items-center justify-between mb-2">
           <Text className="text-sm text-gray-500">{displayReporter}</Text>
           <Text className="text-sm text-gray-500">
-            {(() => {
-              // Format timestamp to be more readable
-              const timestamp = displayTimestamp;
-              if (!timestamp) return 'Unknown time';
-              
-              // If it's "Just now", keep it
-              if (timestamp === 'Just now') return timestamp;
-              
-              try {
-                const date = new Date(timestamp);
-                if (isNaN(date.getTime())) return String(timestamp);
-                return date.toLocaleString('en-US', {
-                  year: 'numeric', month: 'short', day: 'numeric',
-                  hour: '2-digit', minute: '2-digit', hour12: true
-                });
-              } catch {
-                return String(timestamp);
-              }
-            })()}
+            {formatTimestamp(displayTimestamp)}
           </Text>
         </View>
 
@@ -622,13 +719,138 @@ const CStatus = () => {
         break;
     }
 
+    // Sort reports by timestamp (most recent first)
+    const sortedReports = reports.sort((a, b) => {
+      // Helper function to get timestamp for sorting
+      const getTimestamp = (report) => {
+        // Check all possible timestamp fields in order of preference
+        const timestamp = report.formatted_timestamp || report.created_at || report.timestamp || report.time;
+        
+        // Debug logging
+        console.log('Sorting report ID:', report.id, 'timestamp fields:', {
+          formatted_timestamp: report.formatted_timestamp,
+          created_at: report.created_at,
+          timestamp: report.timestamp,
+          time: report.time,
+          selected: timestamp
+        });
+        
+        // Handle "Just now" case - treat as most recent
+        if (timestamp === 'Just now') {
+          console.log('Report ID', report.id, 'has "Just now" timestamp');
+          return new Date().getTime();
+        }
+        
+        // Try to parse the timestamp with multiple strategies
+        try {
+          let date;
+          
+          // Strategy 1: Direct Date constructor
+          date = new Date(timestamp);
+          if (!isNaN(date.getTime())) {
+            console.log('Report ID', report.id, 'parsed timestamp (direct):', date.toISOString(), 'milliseconds:', date.getTime());
+            return date.getTime();
+          }
+          
+          // Strategy 2: Handle readable formats like "October 2, 2025 5:30 pm"
+          if (typeof timestamp === 'string' && timestamp.includes('October')) {
+            // Try to parse readable date format
+            const parsedDate = new Date(timestamp);
+            if (!isNaN(parsedDate.getTime())) {
+              console.log('Report ID', report.id, 'parsed readable timestamp:', parsedDate.toISOString(), 'milliseconds:', parsedDate.getTime());
+              return parsedDate.getTime();
+            }
+            
+            // If direct parsing fails, manually parse the format
+            try {
+              // Parse "October 2, 2025 5:30 pm" format manually
+              const monthNames = {
+                'January': 0, 'February': 1, 'March': 2, 'April': 3, 'May': 4, 'June': 5,
+                'July': 6, 'August': 7, 'September': 8, 'October': 9, 'November': 10, 'December': 11
+              };
+              
+              // Match pattern: "October 2, 2025 5:30 pm"
+              const match = timestamp.match(/(\w+) (\d+), (\d{4}) (\d+):(\d+) (am|pm)/i);
+              if (match) {
+                const [, monthName, day, year, hour, minute, ampm] = match;
+                const month = monthNames[monthName];
+                if (month !== undefined) {
+                  let hour24 = parseInt(hour);
+                  if (ampm.toLowerCase() === 'pm' && hour24 !== 12) {
+                    hour24 += 12;
+                  } else if (ampm.toLowerCase() === 'am' && hour24 === 12) {
+                    hour24 = 0;
+                  }
+                  
+                  const date = new Date(parseInt(year), month, parseInt(day), hour24, parseInt(minute));
+                  if (!isNaN(date.getTime())) {
+                    console.log('Report ID', report.id, 'manually parsed timestamp:', date.toISOString(), 'milliseconds:', date.getTime());
+                    return date.getTime();
+                  }
+                }
+              }
+              
+              // Fallback: try to convert to a more standard format
+              let normalizedTimestamp = timestamp.replace(/(\d+:\d+)\s+(am|pm)/i, '$1 $2'.toUpperCase());
+              normalizedTimestamp = normalizedTimestamp.replace(/(\d{4})\s+(\d+:\d+)/, '$1, $2');
+              
+              const convertedDate = new Date(normalizedTimestamp);
+              if (!isNaN(convertedDate.getTime())) {
+                console.log('Report ID', report.id, 'parsed normalized timestamp:', convertedDate.toISOString(), 'milliseconds:', convertedDate.getTime());
+                return convertedDate.getTime();
+              }
+            } catch (e) {
+              console.log('Report ID', report.id, 'error parsing readable timestamp:', e.message);
+            }
+          }
+          
+          // Strategy 3: Try parsing as ISO string or other common formats
+          if (typeof timestamp === 'string') {
+            // Check if it's already in ISO format or has timezone info
+            if (timestamp.includes('T') || timestamp.includes('Z') || timestamp.includes('+')) {
+              date = new Date(timestamp);
+              if (!isNaN(date.getTime())) {
+                console.log('Report ID', report.id, 'parsed ISO timestamp:', date.toISOString(), 'milliseconds:', date.getTime());
+                return date.getTime();
+              }
+            }
+          }
+          
+          console.log('Report ID', report.id, 'could not parse timestamp:', timestamp);
+        } catch (e) {
+          console.log('Report ID', report.id, 'error parsing timestamp:', timestamp, 'error:', e.message);
+        }
+        
+        // If all parsing fails, return 0 (will be sorted to bottom)
+        console.log('Report ID', report.id, 'using fallback timestamp 0');
+        return 0;
+      };
+
+      const timestampA = getTimestamp(a);
+      const timestampB = getTimestamp(b);
+      
+      console.log('Comparing report A (ID:', a.id, 'timestamp:', timestampA, ') vs report B (ID:', b.id, 'timestamp:', timestampB, ')');
+      
+      // Sort in descending order (newest first)
+      const result = timestampB - timestampA;
+      console.log('Sort result:', result, result > 0 ? 'B is newer' : result < 0 ? 'A is newer' : 'same time');
+      return result;
+    });
+
+    // Debug: Log final sorted order
+    console.log('Final sorted reports order:');
+    sortedReports.forEach((report, index) => {
+      const timestamp = report.formatted_timestamp || report.created_at || report.timestamp || report.time;
+      console.log(`${index + 1}. Report ID: ${report.id}, Timestamp: ${timestamp}`);
+    });
+
     return (
       <View className="flex-1">
         <Text className="text-lg font-semibold text-gray-800 mb-4">
-          {title} ({reports.length})
+          {title} ({sortedReports.length})
         </Text>
         
-        {reports.length === 0 ? (
+        {sortedReports.length === 0 ? (
           <View className="flex-1 justify-center items-center py-12">
             <MaterialIcons name="report" size={64} color="#d1d5db" />
             <Text className="text-gray-500 text-lg font-medium mt-4 text-center">
@@ -647,7 +869,7 @@ const CStatus = () => {
             </Text>
           </View>
         ) : (
-          reports.map(renderReportCard)
+          sortedReports.map(renderReportCard)
         )}
       </View>
     );
@@ -1078,24 +1300,7 @@ const CStatus = () => {
                 <View className="mb-4">
                   <Text className="text-gray-600 text-sm">Reported</Text>
                   <Text className="text-gray-800">
-                    {(() => {
-                      // Format timestamp to be more readable
-                      const timestamp = selectedReport.formatted_timestamp || selectedReport.created_at || selectedReport.timestamp;
-                      if (!timestamp) return 'Unknown time';
-                      
-                      // If it's "Just now", keep it
-                      if (timestamp === 'Just now') return timestamp;
-                      try {
-                        const date = new Date(timestamp);
-                        if (isNaN(date.getTime())) return String(timestamp);
-                        return date.toLocaleString('en-US', {
-                          year: 'numeric', month: 'short', day: 'numeric',
-                          hour: '2-digit', minute: '2-digit', hour12: true
-                        });
-                      } catch {
-                        return String(timestamp);
-                      }
-                    })()}
+                    {formatTimestamp(selectedReport.formatted_timestamp || selectedReport.created_at || selectedReport.timestamp)}
                   </Text>
                 </View>
 

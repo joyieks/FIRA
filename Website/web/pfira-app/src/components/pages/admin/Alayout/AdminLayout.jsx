@@ -6,39 +6,23 @@ import { IoIosNotifications } from "react-icons/io";
 import { LuMessageCircleMore } from "react-icons/lu";
 import { FaUserFriends } from "react-icons/fa";
 import { Link, useLocation, Outlet } from 'react-router-dom';
+import { useNotifications } from '../../../../contexts/NotificationContext';
 
 const AdminLayout = ({ children }) => {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [profileOpen, setProfileOpen] = useState(false);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
-  const [notifications, setNotifications] = useState([]);
   const location = useLocation();
   const profileRef = useRef(null);
   const notificationsRef = useRef(null);
+  
+  // Use global notification context
+  const { notifications, unreadCount, markAsRead } = useNotifications();
 
   const toggleSidebar = () => setSidebarOpen(!sidebarOpen);
   const toggleProfile = () => setProfileOpen(!profileOpen);
   const toggleNotifications = () => setNotificationsOpen(!notificationsOpen);
 
-  // Load notifications from localStorage
-  useEffect(() => {
-    const loadNotifications = () => {
-      const storedNotifications = JSON.parse(localStorage.getItem('adminNotifications') || '[]');
-      setNotifications(storedNotifications);
-    };
-
-    loadNotifications();
-
-    // Listen for storage changes (when new notifications are added)
-    const handleStorageChange = (e) => {
-      if (e.key === 'adminNotifications') {
-        loadNotifications();
-      }
-    };
-
-    window.addEventListener('storage', handleStorageChange);
-    return () => window.removeEventListener('storage', handleStorageChange);
-  }, []);
 
   // Handle clicks outside dropdowns
   useEffect(() => {
@@ -57,16 +41,6 @@ const AdminLayout = ({ children }) => {
     };
   }, []);
 
-  const unreadCount = notifications.filter(n => !n.read).length;
-
-  const markNotificationAsRead = (id) => {
-    const updatedNotifications = notifications.map(notification =>
-      notification.id === id ? { ...notification, read: true } : notification
-    );
-    setNotifications(updatedNotifications);
-    localStorage.setItem('adminNotifications', JSON.stringify(updatedNotifications));
-  };
-
   const formatDate = (dateString) => {
     const date = new Date(dateString);
     const now = new Date();
@@ -79,7 +53,9 @@ const AdminLayout = ({ children }) => {
     } else {
       return date.toLocaleDateString('en-US', {
         month: 'short',
-        day: 'numeric'
+        day: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit'
       });
     }
   };
@@ -162,17 +138,18 @@ const AdminLayout = ({ children }) => {
             <div className="flex items-center space-x-4">
               {/* Notifications */}
               <div className="relative" ref={notificationsRef}>
-                <button 
-                  onClick={toggleNotifications}
-                  className="relative p-2 text-gray-400 hover:text-gray-600 focus:outline-none"
-                >
-                  <FiBell size={20} />
-                  {unreadCount > 0 && (
-                    <span className="absolute -top-1 -right-1 bg-red-500 text-white text-xs rounded-full h-5 w-5 flex items-center justify-center">
-                      {unreadCount > 9 ? '9+' : unreadCount}
-                    </span>
-                  )}
-                </button>
+                <Link to="/admin-dashboard/notification">
+                  <button 
+                    className="relative p-2 text-gray-400 hover:text-gray-600 focus:outline-none"
+                  >
+                    <FiBell size={20} />
+                    {unreadCount > 0 && (
+                      <span className="absolute -top-1 -right-1 bg-red-500 text-white text-xs rounded-full h-5 w-5 flex items-center justify-center">
+                        {unreadCount > 9 ? '9+' : unreadCount}
+                      </span>
+                    )}
+                  </button>
+                </Link>
                 
                 {notificationsOpen && (
                   <div className="absolute right-0 mt-2 w-80 bg-white rounded-md shadow-lg py-1 z-20 max-h-96 overflow-y-auto">
@@ -194,9 +171,9 @@ const AdminLayout = ({ children }) => {
                           <div
                             key={notification.id}
                             className={`px-4 py-3 hover:bg-gray-50 cursor-pointer ${
-                              !notification.read ? 'bg-blue-50' : ''
+                              !notification.is_read ? 'bg-blue-50' : ''
                             }`}
-                            onClick={() => markNotificationAsRead(notification.id)}
+                            onClick={() => markAsRead(notification.id)}
                           >
                             <div className="flex items-start space-x-3">
                               <div className="flex-shrink-0">
@@ -210,10 +187,10 @@ const AdminLayout = ({ children }) => {
                                   {notification.message}
                                 </p>
                                 <p className="text-xs text-gray-400 mt-1">
-                                  {formatDate(notification.timestamp)}
+                                  {formatDate(notification.created_at)}
                                 </p>
                               </div>
-                              {!notification.read && (
+                              {!notification.is_read && (
                                 <div className="flex-shrink-0">
                                   <div className="h-2 w-2 bg-red-500 rounded-full"></div>
                                 </div>

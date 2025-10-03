@@ -1,8 +1,10 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { GoogleMap, LoadScript, Marker, InfoWindow, Circle } from '@react-google-maps/api';
 import { supabase } from '../../../../config/supabase';
+import { useNotifications } from '../../../../contexts/NotificationContext';
 
 const Adashboard = () => {
+  const { unreadCount, stopAlert, audioBlocked, playAlert } = useNotifications();
   const GOOGLE_MAPS_API_KEY = 'AIzaSyBX5taF1AgNhicxw5_BXUJDs6ouniAuiQI';
   const [mapLoaded, setMapLoaded] = useState(false);
   const [mapError, setMapError] = useState(null);
@@ -24,6 +26,8 @@ const Adashboard = () => {
   const [assigneeId, setAssigneeId] = useState('');
   const [redirectTarget, setRedirectTarget] = useState(''); // e.g., 'station:<id>' | 'agency:police'
   const [redirectNote, setRedirectNote] = useState('');
+  const [currentAssignment, setCurrentAssignment] = useState(null); // Current assignment info
+  const [forwardedTo, setForwardedTo] = useState([]); // List of stations this was forwarded to
 
   // Fixed location for Bureau of Fire Protection - Regional Office VII
   // 7VXR+5VG, 6000 Natalio B. Bacalso Ave, Cebu City, 6000 Cebu
@@ -243,6 +247,108 @@ const Adashboard = () => {
     loadResponders();
   }, []);
 
+  // Fetch current assignment and forwarding info for a report
+  const loadAssignmentInfo = useCallback(async (reportId) => {
+    if (!reportId) return;
+
+    try {
+      // 1. Fetch current assignment
+      const { data: assignment, error: assignError } = await supabase
+        .from('report_assignments')
+        .select('assignee_type, assignee_id, assigned_at')
+        .eq('report_id', reportId)
+        .single();
+
+      if (assignError && assignError.code !== 'PGRST116') {
+        console.error('Error fetching assignment:', assignError);
+      }
+
+      // If we have an assignment and it's a station, get the station name
+      if (assignment && assignment.assignee_type === 'station') {
+        const { data: stationData } = await supabase
+          .from('station_users')
+          .select('station_name')
+          .eq('id', assignment.assignee_id)
+          .single();
+
+        setCurrentAssignment({
+          type: assignment.assignee_type,
+          id: assignment.assignee_id,
+          name: stationData?.station_name || 'Unknown Station',
+          assigned_at: assignment.assigned_at
+        });
+      } else if (assignment && assignment.assignee_type === 'responder') {
+        setCurrentAssignment({
+          type: assignment.assignee_type,
+          id: assignment.assignee_id,
+          name: 'Responder',
+          assigned_at: assignment.assigned_at
+        });
+      } else {
+        setCurrentAssignment(null);
+      }
+
+      // 2. Fetch forwarding history
+      const { data: forwards, error: forwardError } = await supabase
+        .from('report_routes')
+        .select('target, note, forwarded_at')
+        .eq('report_id', reportId)
+        .order('forwarded_at', { ascending: false });
+
+      if (forwardError) {
+        console.error('Error fetching forwards:', forwardError);
+      }
+
+      // Parse the forwarded stations
+      if (forwards && forwards.length > 0) {
+        const forwardedStations = await Promise.all(
+          forwards.map(async (forward) => {
+            // Parse target format: 'station:<id>' or 'agency:police'
+            const [targetType, targetId] = forward.target.split(':');
+            
+            if (targetType === 'station') {
+              const { data: stationData } = await supabase
+                .from('station_users')
+                .select('station_name')
+                .eq('id', targetId)
+                .single();
+
+              return {
+                type: 'station',
+                name: stationData?.station_name || 'Unknown Station',
+                note: forward.note,
+                forwarded_at: forward.forwarded_at
+              };
+            } else {
+              return {
+                type: 'agency',
+                name: targetId,
+                note: forward.note,
+                forwarded_at: forward.forwarded_at
+              };
+            }
+          })
+        );
+
+        setForwardedTo(forwardedStations);
+      } else {
+        setForwardedTo([]);
+      }
+    } catch (err) {
+      console.error('Error loading assignment info:', err);
+    }
+  }, []);
+
+  // Load assignment info when a report is selected
+  useEffect(() => {
+    if (selectedReport) {
+      loadAssignmentInfo(selectedReport.id);
+    } else {
+      setCurrentAssignment(null);
+      setForwardedTo([]);
+    }
+  }, [selectedReport, loadAssignmentInfo]);
+
   const handleAssign = useCallback(async () => {
     try {
       if (!selectedReport) {
@@ -280,11 +386,13 @@ const Adashboard = () => {
         console.warn('Snapshot upsert failed (table may not exist):', snapErr?.message || snapErr);
       }
       alert('Report assigned successfully.');
+      // Reload the assignment info
+      loadAssignmentInfo(selectedReport.id);
     } catch (e) {
       console.error('❌ Assign failed:', e);
       alert('Failed to assign report. Check console.');
     }
-  }, [selectedReport, assigneeType, assigneeId]);
+  }, [selectedReport, assigneeType, assigneeId, loadAssignmentInfo]);
 
   const handleRedirect = useCallback(async () => {
     try {
@@ -308,11 +416,13 @@ const Adashboard = () => {
       if (error) throw error;
       alert('Report forwarded successfully.');
       setRedirectNote('');
+      // Reload the forwarding info
+      loadAssignmentInfo(selectedReport.id);
     } catch (e) {
       console.error('❌ Redirect failed:', e);
       alert('Failed to forward report. Check console.');
     }
-  }, [selectedReport, redirectTarget, redirectNote]);
+  }, [selectedReport, redirectTarget, redirectNote, loadAssignmentInfo]);
 
   // Handle auto-selection when both map and reports are loaded
   useEffect(() => {
@@ -430,6 +540,54 @@ const Adashboard = () => {
 
   return (
     <div className="relative">
+      {/* Audio Blocked Warning */}
+      {audioBlocked && (
+        <div 
+          onClick={playAlert}
+          className="fixed top-24 left-6 z-50 bg-orange-600 text-white rounded-lg shadow-2xl cursor-pointer hover:bg-orange-700 transition-all p-4 max-w-sm"
+        >
+          <div className="flex items-center space-x-3">
+            <svg className="h-6 w-6 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.536 8.464a5 5 0 010 7.072m2.828-9.9a9 9 0 010 12.728M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
+              <line x1="1" y1="1" x2="23" y2="23" stroke="currentColor" strokeWidth={2} />
+            </svg>
+            <div className="flex-1">
+              <p className="font-bold text-sm">Sound Blocked</p>
+              <p className="text-xs">Click here to enable fire alarm</p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Fire Alert Indicator - Shows when there are unread fire notifications */}
+      {unreadCount > 0 && (
+        <div 
+          onClick={stopAlert}
+          className="fixed top-24 right-6 z-50 bg-red-600 text-white rounded-full shadow-2xl cursor-pointer hover:bg-red-700 transition-all duration-300 animate-pulse"
+          style={{ width: '80px', height: '80px' }}
+        >
+          <div className="flex flex-col items-center justify-center h-full">
+            <svg 
+              xmlns="http://www.w3.org/2000/svg" 
+              className="h-10 w-10 mb-1" 
+              fill="none" 
+              viewBox="0 0 24 24" 
+              stroke="currentColor"
+            >
+              <path 
+                strokeLinecap="round" 
+                strokeLinejoin="round" 
+                strokeWidth={2} 
+                d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" 
+              />
+            </svg>
+            <span className="text-xs font-bold">{unreadCount} ALERT{unreadCount > 1 ? 'S' : ''}</span>
+          </div>
+          {/* Pulsing ring effect */}
+          <div className="absolute inset-0 rounded-full border-4 border-red-400 animate-ping opacity-75"></div>
+        </div>
+      )}
+      
       <LoadScript 
         key={`maps-${retryCount}-${mapLoadTimeout ? Date.now() : 'initial'}`}
         googleMapsApiKey={GOOGLE_MAPS_API_KEY}
@@ -614,6 +772,45 @@ const Adashboard = () => {
                       />
                     </div>
                   )}
+                  {/* Current Assignment Display */}
+                  {currentAssignment && (
+                    <div className="mt-3 border-t pt-3">
+                      <div className="bg-blue-50 border-l-4 border-blue-500 p-3 rounded">
+                        <p className="font-semibold text-blue-900 mb-1">📍 Currently Assigned To:</p>
+                        <p className="text-blue-800 text-sm">
+                          <strong>{currentAssignment.name}</strong>
+                        </p>
+                        <p className="text-blue-600 text-xs mt-1">
+                          Assigned: {new Date(currentAssignment.assigned_at).toLocaleString()}
+                        </p>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Forwarded To Display */}
+                  {forwardedTo.length > 0 && (
+                    <div className="mt-3">
+                      <div className="bg-amber-50 border-l-4 border-amber-500 p-3 rounded">
+                        <p className="font-semibold text-amber-900 mb-2">📨 Forwarded To:</p>
+                        {forwardedTo.map((forward, index) => (
+                          <div key={index} className={`${index > 0 ? 'mt-2 pt-2 border-t border-amber-200' : ''}`}>
+                            <p className="text-amber-800 text-sm">
+                              <strong>{forward.name}</strong>
+                            </p>
+                            {forward.note && (
+                              <p className="text-amber-700 text-xs mt-1">
+                                <em>Note: {forward.note}</em>
+                              </p>
+                            )}
+                            <p className="text-amber-600 text-xs mt-1">
+                              Forwarded: {new Date(forward.forwarded_at).toLocaleString()}
+                            </p>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
                   {/* Assignment controls */}
                   <div className="mt-3 border-t pt-3">
                     <p className="font-semibold mb-2">Assignment</p>
