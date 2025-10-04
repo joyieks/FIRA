@@ -1,8 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { View, Text, ScrollView, TouchableOpacity } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 export default function SNotifications({ onUnreadCountChange }) {
+  const insets = useSafeAreaInsets();
   const [notifications, setNotifications] = useState([
     {
       id: 1,
@@ -114,7 +116,14 @@ export default function SNotifications({ onUnreadCountChange }) {
   return (
     <View className="flex-1 bg-gray-50">
       {/* Filter Tabs */}
-      <View className="bg-white border-b border-gray-200 pt-20">
+      <View 
+        style={{
+          backgroundColor: '#ffffff',
+          borderBottomWidth: 1,
+          borderBottomColor: '#e5e7eb',
+          paddingTop: insets.top + 60, // Lowered from pt-20 (80px) to 60px + safe area
+        }}
+      >
         <ScrollView horizontal showsHorizontalScrollIndicator={false} className="px-4 py-2">
           <TouchableOpacity className="bg-fire px-4 py-2 rounded-lg mr-2">
             <Text className="text-white font-medium">All</Text>
@@ -135,7 +144,10 @@ export default function SNotifications({ onUnreadCountChange }) {
       </View>
 
       {/* Notifications List */}
-      <ScrollView className="flex-1 px-4 pt-4">
+      <ScrollView 
+        className="flex-1 px-4 pt-4"
+        contentContainerStyle={{ paddingBottom: 100 + insets.bottom }}
+      >
         {notifications.map((notification) => {
           const icon = getNotificationIcon(notification.type);
           const priorityColor = getPriorityColor(notification.priority);

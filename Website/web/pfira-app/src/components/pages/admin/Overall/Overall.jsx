@@ -1,7 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { FiSearch, FiFilter, FiClock, FiMapPin, FiUser, FiAlertTriangle, FiBell, FiTrendingUp, FiX, FiRefreshCw } from 'react-icons/fi';
+import { useNavigate } from 'react-router-dom';
+import { supabase } from '../../../../config/supabase';
 
 const Overview = () => {
+  const navigate = useNavigate();
   const [searchQuery, setSearchQuery] = useState('');
   const [showFilters, setShowFilters] = useState(false);
   const [selectedReport, setSelectedReport] = useState(null);
@@ -12,9 +15,21 @@ const Overview = () => {
   const [lastRefresh, setLastRefresh] = useState(new Date());
   const [editingStatus, setEditingStatus] = useState({});
   const [editingFinalAlarm, setEditingFinalAlarm] = useState({});
+  const [aiChatSuggestions, setAiChatSuggestions] = useState([]);
+  
+  // Admin cancellation states
+  const [showCancelModal, setShowCancelModal] = useState(false);
+  const [cancelReason, setCancelReason] = useState('');
+  const [reportToCancel, setReportToCancel] = useState(null);
+  const [isCancelling, setIsCancelling] = useState(false);
+
+  // Filter states
+  const [statusFilter, setStatusFilter] = useState('all');
+  const [alarmLevelFilter, setAlarmLevelFilter] = useState('all');
+  const [timeRangeFilter, setTimeRangeFilter] = useState('all');
 
   // API endpoint for fetching reports
-  const API_URL = 'https://fire-predictor-api-production.up.railway.app';
+  const API_URL = 'https://fire-detection-api-production-f543.up.railway.app';
 
   // Fetch reports from Firebase via Flask API
   const fetchReports = async () => {
@@ -55,10 +70,28 @@ const Overview = () => {
           latitude: report.latitude,
           longitude: report.longitude,
           address: report.address,
-          geotag_location: report.geotag_location
+          geotag_location: report.geotag_location,
+          // Cancellation info
+          cancelled_by: report.cancelled_by,
+          cancellation_reason: report.cancellation_reason
         }));
         
         console.log('Transformed reports:', transformedReports);
+        console.log('Debug - Sample report cancelled_by field:', transformedReports.find(r => r.status === 'Cancelled')?.cancelled_by);
+        
+        // Debug: Log raw API data for cancelled reports
+        const cancelledReports = data.filter(r => r.status === 'Cancelled');
+        console.log('Debug - Raw API data for cancelled reports:', cancelledReports);
+        cancelledReports.forEach((report, index) => {
+          console.log(`Debug - Cancelled report ${index + 1}:`, {
+            id: report.id,
+            status: report.status,
+            cancelled_by: report.cancelled_by,
+            cancellation_reason: report.cancellation_reason,
+            allKeys: Object.keys(report)
+          });
+        });
+        
         setReports(transformedReports);
         setLastRefresh(new Date());
       } else {
@@ -147,12 +180,104 @@ const Overview = () => {
     return () => clearInterval(interval);
   }, []);
 
-  // Filter reports based on search
+  // Fetch recent AI suggestions from chat messages (best-effort)
+  useEffect(() => {
+    const loadAiSuggestions = async () => {
+      try {
+        const { data, error } = await supabase
+          .from('messages')
+          .select('id, text, ai_suggested_alarm, created_at, sender_type')
+          .not('ai_suggested_alarm', 'is', null)
+          .order('created_at', { ascending: false })
+          .limit(20);
+        if (!error) {
+          setAiChatSuggestions(data || []);
+        }
+      } catch (_) {
+        // ignore; UI degrades gracefully
+      }
+    };
+    loadAiSuggestions();
+    const interval = setInterval(loadAiSuggestions, 30000);
+    return () => clearInterval(interval);
+  }, []);
+
+  const normalizeAiLabel = (aiValue) => {
+    if (!aiValue) return null;
+    
+    // Handle both old format (suggested_alarm) and new format (original_response.alarm_level)
+    let suggested = null;
+    if (typeof aiValue === 'string') {
+      suggested = aiValue;
+    } else if (aiValue?.suggested_alarm) {
+      suggested = aiValue.suggested_alarm;
+    } else if (aiValue?.original_response?.alarm_level) {
+      suggested = aiValue.original_response.alarm_level.toLowerCase().replace(/\s+/g, '_');
+    }
+    
+    if (!suggested) return null;
+    
+    const map = {
+      none: 'Under Control',
+      first: '1st Alarm',
+      'first_alarm': '1st Alarm',
+      second: '2nd Alarm',
+      'second_alarm': '2nd Alarm',
+      third: '3rd Alarm',
+      'third_alarm': '3rd Alarm',
+      fourth: '4th Alarm',
+      'fourth_alarm': '4th Alarm',
+      fifth: '5th Alarm',
+      'fifth_alarm': '5th Alarm',
+      task_force_alpha: 'TASK FORCE ALPHA',
+      task_force_bravo: 'TASK FORCE BRAVO',
+      task_force_charlie: 'TASK FORCE CHARLIE',
+      task_force_delta_echo_hotel_india: 'TASK FORCE DELTA',
+      general: 'GENERAL ALARM'
+    };
+    
+    return map[suggested] || suggested;
+  };
+
+  // Filter reports based on search and filters
   const filteredReports = reports.filter(report => {
-    return report.location.toLowerCase().includes(searchQuery.toLowerCase()) ||
-           report.reporter.toLowerCase().includes(searchQuery.toLowerCase()) ||
-           report.description.toLowerCase().includes(searchQuery.toLowerCase()) ||
-           report.structure?.toLowerCase().includes(searchQuery.toLowerCase());
+    // Search filter
+    const matchesSearch = report.location.toLowerCase().includes(searchQuery.toLowerCase()) ||
+                         report.reporter.toLowerCase().includes(searchQuery.toLowerCase()) ||
+                         report.description.toLowerCase().includes(searchQuery.toLowerCase()) ||
+                         report.structure?.toLowerCase().includes(searchQuery.toLowerCase());
+
+    // Status filter
+    const matchesStatus = statusFilter === 'all' || report.status === statusFilter;
+
+    // Alarm level filter
+    const matchesAlarmLevel = alarmLevelFilter === 'all' || 
+                             report.suggestedAlarmLevel === alarmLevelFilter ||
+                             report.finalAlarmLevel === alarmLevelFilter;
+
+    // Time range filter
+    const matchesTimeRange = (() => {
+      if (timeRangeFilter === 'all') return true;
+      
+      const reportDate = new Date(report.timestamp || report.created_at || 0);
+      const now = new Date();
+      
+      switch (timeRangeFilter) {
+        case 'today':
+          const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+          return reportDate >= today;
+        case 'week':
+          const weekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+          return reportDate >= weekAgo;
+        case 'month':
+          const monthAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+          return reportDate >= monthAgo;
+        default:
+          return true;
+      }
+    })();
+
+    return matchesSearch && matchesStatus && matchesAlarmLevel && matchesTimeRange;
   }).sort((a, b) => {
     // Sort reports from most recent to oldest
     const dateA = new Date(a.timestamp || 0);
@@ -163,6 +288,25 @@ const Overview = () => {
   const handleReportClick = (report) => {
     setSelectedReport(report);
     setShowReportModal(true);
+  };
+
+  // Handle map redirection with report selection
+  const handleMapRedirect = (report) => {
+    // Check if report is cancelled or fire out - don't redirect if so
+    const status = (report.status || '').toString().toLowerCase();
+    const isCancelled = status.includes('cancelled') || status.includes('canceled');
+    const isFireOut = status.includes('fire out');
+    
+    if (isCancelled || isFireOut) {
+      // Show a message explaining why redirection is not available
+      alert('This report cannot be viewed on the map because it has been cancelled or the fire is out.');
+      return;
+    }
+    
+    // Store the selected report ID in localStorage for the map to pick up
+    localStorage.setItem('selectedReportId', report.id);
+    // Navigate to the map dashboard
+    navigate('/admin-dashboard');
   };
 
   const handleGeneralAlarm = (reportId) => {
@@ -184,17 +328,35 @@ const Overview = () => {
   };
 
   // Update status in database
-  const updateReportStatus = async (reportId, newStatus) => {
+  const updateReportStatus = async (reportId, newStatus, reason = null) => {
     try {
+      console.log('[updateReportStatus] Sending status update', { reportId, newStatus, reason, url: `${API_URL}/update_report_status` });
+      
+      const payload = {
+        report_id: reportId,
+        status: newStatus
+      };
+      
+      // Add reason and cancelled_by if status is Cancelled
+      if (newStatus === 'Cancelled') {
+        if (!reason || !reason.trim()) {
+          alert('Please provide a reason for cancellation.');
+          return;
+        }
+        payload.reason = reason.trim();
+        payload.cancelled_by = 'Admin User';
+        payload.cancelled_by_role = 'admin';
+      }
+      
+      console.log('[updateReportStatus] Payload being sent:', payload);
+      
       const response = await fetch(`${API_URL}/update_report_status`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          'Accept': 'application/json',
         },
-        body: JSON.stringify({
-          report_id: reportId,
-          status: newStatus
-        })
+        body: JSON.stringify(payload)
       });
       
       if (response.ok) {
@@ -204,12 +366,76 @@ const Overview = () => {
         ));
         console.log(`Status updated for report ${reportId}: ${newStatus}`);
       } else {
-        console.error('Failed to update status');
-        alert('Failed to update status. Please try again.');
+        // If cancelling and primary endpoint failed, try dedicated cancel endpoint
+        if (newStatus === 'Cancelled') {
+          console.log('Primary endpoint failed for cancellation, trying dedicated cancel endpoint...');
+          try {
+            const cancelResponse = await fetch(`${API_URL}/cancel_report/${reportId}`, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'Accept': 'application/json',
+              },
+              body: JSON.stringify({
+                reason: reason,
+                cancellation_reason: reason,
+                cancelled_by: 'Admin User',
+                cancelled_by_role: 'admin',
+                cancellation_timestamp: new Date().toLocaleString('en-US', { 
+                  year: 'numeric', 
+                  month: 'long', 
+                  day: 'numeric', 
+                  hour: 'numeric', 
+                  minute: '2-digit' 
+                }).replace('AM', 'am').replace('PM', 'pm')
+              })
+            });
+            
+            if (cancelResponse.ok) {
+              // Update local state
+              setReports(prev => prev.map(report => 
+                report.id === reportId ? { 
+                  ...report, 
+                  status: newStatus,
+                  cancelled_by: 'Admin User',
+                  cancellation_reason: reason,
+                  cancellation_timestamp: new Date().toLocaleString('en-US', { 
+                    year: 'numeric', 
+                    month: 'long', 
+                    day: 'numeric', 
+                    hour: 'numeric', 
+                    minute: '2-digit' 
+                  }).replace('AM', 'am').replace('PM', 'pm')
+                } : report
+              ));
+              console.log(`Report cancelled via dedicated endpoint for report ${reportId}`);
+              return;
+            } else {
+              console.error('Dedicated cancel endpoint also failed:', cancelResponse.status);
+            }
+          } catch (cancelError) {
+            console.error('Error with dedicated cancel endpoint:', cancelError);
+          }
+        }
+        
+        let errorText = '';
+        try {
+          // Try to parse JSON error first
+          const errJson = await response.clone().json();
+          errorText = errJson?.error || errJson?.message || JSON.stringify(errJson);
+        } catch (_) {
+          try {
+            errorText = await response.text();
+          } catch (_) {
+            errorText = `HTTP ${response.status} ${response.statusText}`;
+          }
+        }
+        console.error('[updateReportStatus] Backend error:', response.status, response.statusText, errorText);
+        alert(`Failed to update status (HTTP ${response.status}).\n${errorText || 'Please try again.'}`);
       }
     } catch (error) {
-      console.error('Error updating status:', error);
-      alert('Error updating status. Please try again.');
+      console.error('[updateReportStatus] Network/JS error:', error);
+      alert(`Error updating status: ${error?.message || 'Unknown error'}`);
     }
   };
 
@@ -243,25 +469,18 @@ const Overview = () => {
     }
   };
 
-  // Handle status change with confirmation
+  // Handle status change
   const handleStatusChange = (reportId, newStatus) => {
-    const currentReport = reports.find(r => r.id === reportId);
-    const currentStatus = currentReport?.status || 'Unknown';
+    setEditingStatus(prev => ({ ...prev, [reportId]: false }));
     
-    // Show confirmation dialog
-    const confirmed = window.confirm(
-      `Are you sure you want to change the status from "${currentStatus}" to "${newStatus}"?\n\n` +
-      `Report ID: ${reportId}\n` +
-      `Location: ${currentReport?.location || 'Unknown'}\n\n` +
-      `This action will update the emergency response status and may affect resource allocation.`
-    );
-    
-    if (confirmed) {
-      setEditingStatus(prev => ({ ...prev, [reportId]: false }));
-      updateReportStatus(reportId, newStatus);
+    // If cancelling, show the cancel modal instead of direct update
+    if (newStatus === 'Cancelled') {
+      const report = reports.find(r => r.id === reportId);
+      setReportToCancel(report);
+      setCancelReason('');
+      setShowCancelModal(true);
     } else {
-      // If user cancels, just close the editing mode without saving
-      setEditingStatus(prev => ({ ...prev, [reportId]: false }));
+      updateReportStatus(reportId, newStatus);
     }
   };
 
@@ -287,11 +506,55 @@ const Overview = () => {
     }
   };
 
+  // Cancel report with reason
+  const cancelReport = async () => {
+    if (!reportToCancel || !cancelReason.trim()) {
+      alert('Please provide a reason for cancellation.');
+      return;
+    }
+
+    try {
+      setIsCancelling(true);
+      console.log('Admin cancelling report:', reportToCancel.id, 'Reason:', cancelReason);
+      
+      // Use the updateReportStatus function which handles the reason requirement
+      await updateReportStatus(reportToCancel.id, 'Cancelled', cancelReason);
+      
+      // Update local state with additional cancellation details
+      setReports(prev => prev.map(report => 
+        report.id === reportToCancel.id ? { 
+          ...report, 
+          status: 'Cancelled',
+          cancelled_by: 'Admin User',
+          cancellation_reason: cancelReason,
+          cancellation_timestamp: new Date().toLocaleString('en-US', { 
+            year: 'numeric', 
+            month: 'long', 
+            day: 'numeric', 
+            hour: 'numeric', 
+            minute: '2-digit' 
+          }).replace('AM', 'am').replace('PM', 'pm')
+        } : report
+      ));
+      
+      alert('Report cancelled successfully.');
+      setShowCancelModal(false);
+      setCancelReason('');
+      setReportToCancel(null);
+    } catch (error) {
+      console.error('Error cancelling report:', error);
+      alert(`Failed to cancel report: ${error.message}`);
+    } finally {
+      setIsCancelling(false);
+    }
+  };
+
   const getStatusColor = (status) => {
     switch (status) {
       case 'On Going': return 'bg-red-100 text-red-800 border-red-200';
       case 'Under Control': return 'bg-yellow-100 text-yellow-800 border-yellow-200';
       case 'Fire Out': return 'bg-green-100 text-green-800 border-green-200';
+      case 'Cancelled': return 'bg-gray-100 text-gray-800 border-gray-200';
       default: return 'bg-gray-100 text-gray-800 border-gray-200';
     }
   };
@@ -384,29 +647,45 @@ const Overview = () => {
               <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-3">Status</label>
-                  <select className="w-full px-4 py-3 text-lg border border-gray-300 rounded-md focus:ring-red-500 focus:border-red-500">
+                  <select 
+                    value={statusFilter}
+                    onChange={(e) => setStatusFilter(e.target.value)}
+                    className="w-full px-4 py-3 text-lg border border-gray-300 rounded-md focus:ring-red-500 focus:border-red-500"
+                  >
                     <option value="all">All Statuses</option>
                     <option value="On Going">On Going</option>
                     <option value="Under Control">Under Control</option>
                     <option value="Fire Out">Fire Out</option>
+                    <option value="Cancelled">Cancelled</option>
                   </select>
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-3">Fire Alarm Level</label>
-                  <select className="w-full px-4 py-3 text-lg border border-gray-300 rounded-md focus:ring-red-500 focus:border-red-500">
+                  <select 
+                    value={alarmLevelFilter}
+                    onChange={(e) => setAlarmLevelFilter(e.target.value)}
+                    className="w-full px-4 py-3 text-lg border border-gray-300 rounded-md focus:ring-red-500 focus:border-red-500"
+                  >
                     <option value="all">All Levels</option>
                     <option value="1st Alarm">1st Alarm</option>
                     <option value="2nd Alarm">2nd Alarm</option>
                     <option value="3rd Alarm">3rd Alarm</option>
                     <option value="4th Alarm">4th Alarm</option>
                     <option value="5th Alarm">5th Alarm</option>
-                    <option value="TASK FORCE">TASK FORCE</option>
-                    <option value="General Alarm">General Alarm</option>
+                    <option value="TASK FORCE ALPHA">TASK FORCE ALPHA</option>
+                    <option value="TASK FORCE BRAVO">TASK FORCE BRAVO</option>
+                    <option value="TASK FORCE CHARLIE">TASK FORCE CHARLIE</option>
+                    <option value="TASK FORCE DELTA">TASK FORCE DELTA</option>
+                    <option value="GENERAL ALARM">GENERAL ALARM</option>
                   </select>
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-3">Time Range</label>
-                  <select className="w-full px-4 py-3 text-lg border border-gray-300 rounded-md focus:ring-red-500 focus:border-red-500">
+                  <select 
+                    value={timeRangeFilter}
+                    onChange={(e) => setTimeRangeFilter(e.target.value)}
+                    className="w-full px-4 py-3 text-lg border border-gray-300 rounded-md focus:ring-red-500 focus:border-red-500"
+                  >
                     <option value="all">All Times</option>
                     <option value="today">Today</option>
                     <option value="week">This Week</option>
@@ -415,7 +694,12 @@ const Overview = () => {
                 </div>
                 <div className="flex items-end">
                   <button
-                    onClick={() => setSearchQuery('')}
+                    onClick={() => {
+                      setSearchQuery('');
+                      setStatusFilter('all');
+                      setAlarmLevelFilter('all');
+                      setTimeRangeFilter('all');
+                    }}
                     className="w-full px-6 py-3 bg-gray-500 text-white rounded-md hover:bg-gray-600 transition-colors text-lg font-medium"
                   >
                     Clear Filters
@@ -431,6 +715,27 @@ const Overview = () => {
           <div className="bg-white rounded-xl shadow-sm p-8 mb-6 text-center">
             <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-red-600 mx-auto mb-4"></div>
             <p className="text-gray-600">Loading reports...</p>
+          </div>
+        )}
+
+        {/* Recent AI suggestions from chats */}
+        {aiChatSuggestions.length > 0 && (
+          <div className="bg-white rounded-xl shadow-sm p-4 mb-6">
+            <div className="flex items-center justify-between mb-3">
+              <div className="font-semibold text-gray-900">AI Suggested Alarms (Chats)</div>
+              <div className="text-xs text-gray-500">Latest {Math.min(aiChatSuggestions.length, 20)} items</div>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {aiChatSuggestions.slice(0, 10).map((m) => {
+                const label = normalizeAiLabel(m.ai_suggested_alarm);
+                if (!label) return null;
+                return (
+                  <span key={m.id} className={`px-3 py-1 rounded-md text-xs font-medium border ${getAlarmLevelColor(label)}`}>
+                    AI Suggested: {label}
+                  </span>
+                );
+              })}
+            </div>
           </div>
         )}
 
@@ -458,13 +763,35 @@ const Overview = () => {
                       </td>
                     </tr>
                   ) : (
-                    filteredReports.map((report) => (
-                      <tr 
-                        key={report.id} 
-                        className="hover:bg-gray-50 transition-colors"
-                      >
-                        <td className="px-4 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
-                          {report.time}
+                    filteredReports.map((report) => {
+                      // Check if report is cancelled or fire out
+                      const status = (report.status || '').toString().toLowerCase();
+                      const isCancelled = status.includes('cancelled') || status.includes('canceled');
+                      const isFireOut = status.includes('fire out');
+                      const isMapClickable = !isCancelled && !isFireOut;
+                      
+                      return (
+                        <tr 
+                          key={report.id} 
+                          className={`transition-all duration-200 group ${
+                            isMapClickable 
+                              ? 'hover:bg-blue-50 hover:shadow-md cursor-pointer' 
+                              : 'hover:bg-gray-50 cursor-default'
+                          }`}
+                          onClick={() => isMapClickable ? handleMapRedirect(report) : null}
+                          title={isMapClickable ? "Click to view on map" : "Report not available on map (cancelled or fire out)"}
+                        >
+                        <td className={`px-4 py-4 whitespace-nowrap text-sm font-medium transition-colors ${
+                          isMapClickable 
+                            ? 'text-gray-900 group-hover:text-blue-600' 
+                            : 'text-gray-500'
+                        }`}>
+                          <div className="flex items-center space-x-2">
+                            <span>{report.time}</span>
+                            {isMapClickable && (
+                              <FiMapPin className="opacity-0 group-hover:opacity-100 transition-opacity text-blue-500" size={14} />
+                            )}
+                          </div>
                         </td>
                         <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-900">
                           {report.reporter}
@@ -481,24 +808,53 @@ const Overview = () => {
                               onClick={(e) => e.stopPropagation()}
                               className="px-2 py-1 text-xs border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                               autoFocus
+                              disabled={report.status === 'Cancelled'}
                             >
                               <option value="On Going">On Going</option>
+                              <option value="Under Control">Under Control</option>
                               <option value="Fire Out">Fire Out</option>
+                              <option value="Cancelled">Cancelled</option>
                             </select>
                           ) : (
                             <span 
-                              className={`px-3 py-1 rounded-md text-xs font-medium border cursor-pointer hover:bg-opacity-80 ${getStatusColor(report.status)}`}
+                              className={`px-3 py-1 rounded-md text-xs font-medium border ${report.status === 'Cancelled' ? 'cursor-not-allowed opacity-70' : 'cursor-pointer hover:bg-opacity-80'} ${getStatusColor(report.status)}`}
                               onClick={(e) => {
                                 e.stopPropagation();
+                                if (report.status === 'Cancelled') {
+                                  const cancelledBy = report?.cancelled_by;
+                                  const cancellationReason = report?.cancellation_reason;
+                                  console.log('Debug - Status span click - cancelled_by value:', cancelledBy, 'Type:', typeof cancelledBy);
+                                  console.log('Debug - Status span click - report object:', report);
+                                  
+                                  if (cancelledBy === 'Admin User' || cancelledBy === 'admin' || cancelledBy === 'Admin') {
+                                    const reasonText = cancellationReason ? `\n\nReason: ${cancellationReason}` : '';
+                                    alert(`This report was cancelled by an admin and cannot be edited.${reasonText}`);
+                                  } else if (cancelledBy) {
+                                    const reasonText = cancellationReason ? `\n\nReason: ${cancellationReason}` : '';
+                                    alert(`This report was cancelled by the citizen and cannot be edited.${reasonText}`);
+                                  } else {
+                                    const reasonText = cancellationReason ? `\n\nReason: ${cancellationReason}` : '';
+                                    alert(`This report was cancelled and cannot be edited.${reasonText}`);
+                                  }
+                                  return;
+                                }
                                 setEditingStatus(prev => ({ ...prev, [report.id]: true }));
                               }}
+                              title={report.status === 'Cancelled' ? 
+                                `Cancelled by ${report?.cancelled_by === 'Admin User' || report?.cancelled_by === 'admin' || report?.cancelled_by === 'Admin' ? 'admin' : 'citizen'} - cannot be edited` : 
+                                'Click to edit status'}
                             >
                               {report.status}
+                              {report.status === 'Cancelled' && report?.cancelled_by && (
+                                <span className="ml-1 text-xs opacity-75">
+                                  ({report.cancelled_by === 'Admin User' || report.cancelled_by === 'admin' || report.cancelled_by === 'Admin' ? 'by admin' : 'by citizen'})
+                                </span>
+                              )}
                             </span>
                           )}
                         </td>
                         <td className="px-4 py-4 whitespace-nowrap">
-                          <span className={`px-3 py-1 rounded-md text-xs font-medium border ${getAlarmLevelColor(report.suggestedAlarmLevel)}`}>
+                          <span className={`px-3 py-1 rounded-md text-xs font-medium border ${report.status === 'Cancelled' ? 'opacity-50 cursor-not-allowed' : ''} ${getAlarmLevelColor(report.suggestedAlarmLevel)}`}>
                             {report.suggestedAlarmLevel}
                           </span>
                         </td>
@@ -511,6 +867,7 @@ const Overview = () => {
                               onClick={(e) => e.stopPropagation()}
                               className="px-2 py-1 text-xs border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                               autoFocus
+                              disabled={report.status === 'Cancelled'}
                             >
                               <option value="1st Alarm">1st Alarm</option>
                               <option value="2nd Alarm">2nd Alarm</option>
@@ -528,23 +885,57 @@ const Overview = () => {
                               <button
                                 onClick={(e) => {
                                   e.stopPropagation();
+                                  if (report.status === 'Cancelled') {
+                                    const cancelledBy = report?.cancelled_by;
+                                    const cancellationReason = report?.cancellation_reason;
+                                    if (cancelledBy === 'Admin User' || cancelledBy === 'admin' || cancelledBy === 'Admin') {
+                                      const reasonText = cancellationReason ? `\n\nReason: ${cancellationReason}` : '';
+                                      alert(`This report was cancelled by an admin and cannot be edited.${reasonText}`);
+                                    } else if (cancelledBy) {
+                                      const reasonText = cancellationReason ? `\n\nReason: ${cancellationReason}` : '';
+                                      alert(`This report was cancelled by the citizen and cannot be edited.${reasonText}`);
+                                    } else {
+                                      const reasonText = cancellationReason ? `\n\nReason: ${cancellationReason}` : '';
+                                      alert(`This report was cancelled and cannot be edited.${reasonText}`);
+                                    }
+                                    return;
+                                  }
                                   handleGeneralAlarm(report.id);
                                 }}
                                 className={`px-3 py-1 rounded-md text-xs font-medium text-white transition-all duration-300 transform hover:scale-105 ${
-                                  generalAlarmStates[report.id] 
+                                  report.status === 'Cancelled' 
+                                    ? 'opacity-50 cursor-not-allowed' 
+                                    : generalAlarmStates[report.id] 
                                     ? 'bg-red-600 animate-pulse shadow-red-500/50 ring-4 ring-red-400 ring-opacity-75 animate-bounce' 
                                     : 'bg-red-500 hover:bg-red-600 shadow-red-400/50 hover:ring-2 hover:ring-red-300 hover:ring-opacity-50'
                                 }`}
+                                disabled={report.status === 'Cancelled'}
                               >
                                 {generalAlarmStates[report.id] ? '🚨 GENERAL ALARM ACTIVE 🚨' : 'GENERAL ALARM'}
                               </button>
                             ) : (
                               <span 
-                                className={`px-3 py-1 rounded-md text-xs font-medium border cursor-pointer hover:bg-opacity-80 ${getAlarmLevelColor(report.finalAlarmLevel)}`}
+                                className={`px-3 py-1 rounded-md text-xs font-medium border ${report.status === 'Cancelled' ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer hover:bg-opacity-80'} ${getAlarmLevelColor(report.finalAlarmLevel)}`}
                                 onClick={(e) => {
                                   e.stopPropagation();
+                                  if (report.status === 'Cancelled') {
+                                    const cancelledBy = report?.cancelled_by;
+                                    const cancellationReason = report?.cancellation_reason;
+                                    if (cancelledBy === 'Admin User' || cancelledBy === 'admin' || cancelledBy === 'Admin') {
+                                      const reasonText = cancellationReason ? `\n\nReason: ${cancellationReason}` : '';
+                                      alert(`This report was cancelled by an admin and cannot be edited.${reasonText}`);
+                                    } else if (cancelledBy) {
+                                      const reasonText = cancellationReason ? `\n\nReason: ${cancellationReason}` : '';
+                                      alert(`This report was cancelled by the citizen and cannot be edited.${reasonText}`);
+                                    } else {
+                                      const reasonText = cancellationReason ? `\n\nReason: ${cancellationReason}` : '';
+                                      alert(`This report was cancelled and cannot be edited.${reasonText}`);
+                                    }
+                                    return;
+                                  }
                                   setEditingFinalAlarm(prev => ({ ...prev, [report.id]: true }));
                                 }}
+                                title={report.status === 'Cancelled' ? 'Cancelled reports cannot be edited' : 'Click to edit final alarm level'}
                               >
                                 {report.finalAlarmLevel}
                               </span>
@@ -553,17 +944,22 @@ const Overview = () => {
                         </td>
                         <td className="px-4 py-4 whitespace-nowrap">
                           <button
-                            className="px-3 py-1 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors text-xs font-medium"
+                            className="px-3 py-1 bg-gray-600 text-white rounded-md hover:bg-gray-700 transition-colors text-xs font-medium flex items-center space-x-1"
                             onClick={(e) => {
                               e.stopPropagation();
                               handleReportClick(report);
                             }}
+                            title="View Details"
                           >
-                            View Details
+                            <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
+                              <path d="M10 6a2 2 0 110-4 2 2 0 010 4zM10 12a2 2 0 110-4 2 2 0 010 4zM10 18a2 2 0 110-4 2 2 0 010 4z" />
+                            </svg>
+                            <span>Details</span>
                           </button>
                         </td>
                       </tr>
-                    ))
+                      );
+                    })
                   )}
                 </tbody>
               </table>
@@ -701,6 +1097,82 @@ const Overview = () => {
                   >
                     Close
                   </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Admin Cancellation Modal */}
+        {showCancelModal && (
+          <div className="fixed inset-0 backdrop-blur-sm bg-black bg-opacity-30 flex items-center justify-center p-4 z-50">
+            <div className="bg-white rounded-xl shadow-xl max-w-md w-full">
+              <div className="p-6">
+                <div className="flex justify-between items-center mb-6">
+                  <h3 className="text-xl font-bold text-gray-900">Cancel Report</h3>
+                  <button
+                    onClick={() => {
+                      setShowCancelModal(false);
+                      setCancelReason('');
+                      setReportToCancel(null);
+                    }}
+                    className="text-gray-400 hover:text-gray-600"
+                    disabled={isCancelling}
+                  >
+                    <FiX size={24} />
+                  </button>
+                </div>
+
+                <div className="space-y-4">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      Report Details:
+                    </label>
+                    <div className="bg-gray-50 rounded-lg p-3 text-sm">
+                      <p><strong>Reporter:</strong> {reportToCancel?.reporter}</p>
+                      <p><strong>Location:</strong> {reportToCancel?.location}</p>
+                      <p><strong>Current Status:</strong> {reportToCancel?.status}</p>
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      Reason for Cancellation *
+                    </label>
+                    <textarea
+                      value={cancelReason}
+                      onChange={(e) => setCancelReason(e.target.value)}
+                      placeholder="Please provide a reason for cancelling this report..."
+                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-red-500 focus:border-red-500 resize-none"
+                      rows={4}
+                      disabled={isCancelling}
+                    />
+                  </div>
+
+                  <div className="flex space-x-3 pt-4">
+                    <button
+                      onClick={() => {
+                        setShowCancelModal(false);
+                        setCancelReason('');
+                        setReportToCancel(null);
+                      }}
+                      disabled={isCancelling}
+                      className="flex-1 px-4 py-2 bg-gray-300 text-gray-700 rounded-md hover:bg-gray-400 transition-colors disabled:opacity-50"
+                    >
+                      Back
+                    </button>
+                    <button
+                      onClick={cancelReport}
+                      disabled={!cancelReason.trim() || isCancelling}
+                      className={`flex-1 px-4 py-2 rounded-md transition-colors ${
+                        !cancelReason.trim() || isCancelling
+                          ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                          : 'bg-red-600 text-white hover:bg-red-700'
+                      }`}
+                    >
+                      {isCancelling ? 'Cancelling...' : 'Confirm Cancel'}
+                    </button>
+                  </div>
                 </div>
               </div>
             </div>

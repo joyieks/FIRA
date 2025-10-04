@@ -79,26 +79,7 @@ const Login = () => {
 
     console.log('🔍 Login attempt:', { email, password });
 
-    // Hardcoded authentication for test accounts
-    if (email === 'admin@gmail.com' && password === 'admin123') {
-      console.log('✅ Hardcoded admin login detected');
-      // Admin hardcoded login
-      const userData = {
-        email: 'admin@gmail.com',
-        firstName: 'Admin',
-        lastName: 'User',
-        userType: 'admin'
-      };
-      
-      localStorage.setItem('authToken', 'admin-hardcoded-token');
-      localStorage.setItem('userType', 'admin');
-      localStorage.setItem('loginTime', Date.now().toString());
-      localStorage.setItem('userData', JSON.stringify(userData));
-      
-      console.log('✅ Admin login successful, navigating to dashboard');
-      navigate('/admin-dashboard');
-      return;
-    }
+    // Note: Admin authentication now handled through Supabase Auth + admin_users table
 
     try {
       console.log('🔄 Starting authentication process...');
@@ -119,10 +100,11 @@ const Login = () => {
         };
         
         console.log('🚀 Setting station user data:', userData);
-        localStorage.setItem('authToken', `station_${stationCheck.docId}`);
-        localStorage.setItem('userType', 'station');
-        localStorage.setItem('loginTime', Date.now().toString());
-        localStorage.setItem('userData', JSON.stringify(userData));
+        // Store station sessions per-tab to avoid cross-tab overrides
+        sessionStorage.setItem('authToken', `station_${stationCheck.docId}`);
+        sessionStorage.setItem('userType', 'station');
+        sessionStorage.setItem('loginTime', Date.now().toString());
+        sessionStorage.setItem('userData', JSON.stringify(userData));
         
         console.log('🎯 Navigating to station dashboard...');
         navigate('/station-dashboard');

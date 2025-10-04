@@ -1,6 +1,7 @@
 const functions = require('firebase-functions');
 const admin = require('firebase-admin');
 const nodemailer = require('nodemailer');
+const axios = require('axios');
 
 admin.initializeApp();
 
@@ -577,5 +578,68 @@ exports.createResponderUser = functions.https.onCall(async (data, context) => {
   } catch (error) {
     console.error('❌ Error creating responder user:', error);
     throw new functions.https.HttpsError('internal', 'Failed to create responder user');
+  }
+});
+
+// EmailJS Function for Registration Verification
+exports.sendVerificationEmail = functions.https.onCall(async (data, context) => {
+  try {
+    const { email, firstName, verificationCode } = data;
+
+    // Validate input
+    if (!email || !firstName || !verificationCode) {
+      throw new functions.https.HttpsError('invalid-argument', 'Missing required parameters');
+    }
+
+    // EmailJS configuration
+    const serviceId = 'service_5k3e6xe';
+    const templateId = 'template_ztp029i';
+    const publicKey = 'N_WM9SM_s6cRQPVgT';
+
+    const expirationTime = new Date(Date.now() + 15 * 60 * 1000).toLocaleTimeString();
+
+    const templateParams = {
+      to_name: firstName,
+      passcode: verificationCode,
+      time: expirationTime,
+      user_email: email
+    };
+
+    console.log('📤 Sending verification email via EmailJS...');
+    console.log('📧 Email:', email);
+    console.log('👤 First Name:', firstName);
+    console.log('🔢 Code:', verificationCode);
+
+    // Call EmailJS API from server-side
+    const response = await axios.post('https://api.emailjs.com/api/v1.0/email/send', {
+      service_id: serviceId,
+      template_id: templateId,
+      user_id: publicKey,
+      template_params: templateParams,
+    }, {
+      headers: {
+        'Content-Type': 'application/json',
+      }
+    });
+
+    console.log('✅ EmailJS Response:', response.status);
+
+    return {
+      success: true,
+      message: 'Verification email sent successfully',
+      status: response.status
+    };
+
+  } catch (error) {
+    console.error('❌ EmailJS Error:', error);
+    
+    if (error.response) {
+      console.error('Response status:', error.response.status);
+      console.error('Response data:', error.response.data);
+      
+      throw new functions.https.HttpsError('internal', `EmailJS error: ${error.response.status} - ${error.response.data}`);
+    } else {
+      throw new functions.https.HttpsError('internal', `Failed to send verification email: ${error.message}`);
+    }
   }
 });

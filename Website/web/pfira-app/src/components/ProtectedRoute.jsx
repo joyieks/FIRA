@@ -9,13 +9,14 @@ const ProtectedRoute = ({ children, requiredUserType = null }) => {
 
   useEffect(() => {
     const checkAuth = () => {
-      const authToken = localStorage.getItem('authToken');
-      const userType = localStorage.getItem('userType');
-      const loginTime = localStorage.getItem('loginTime');
+      const authToken = sessionStorage.getItem('authToken') || localStorage.getItem('authToken');
+      const userType = sessionStorage.getItem('userType') || localStorage.getItem('userType');
+      const loginTime = sessionStorage.getItem('loginTime') || localStorage.getItem('loginTime');
 
       // Check if user is authenticated
       if (!authToken || !userType || !loginTime) {
         // No authentication data found
+        sessionStorage.clear();
         localStorage.clear(); // Clear any remaining data
         navigate('/login', { 
           state: { 

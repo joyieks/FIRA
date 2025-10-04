@@ -1,6 +1,5 @@
 import React, { useState } from 'react';
-import { signOut } from 'firebase/auth';
-import { auth } from '../../../../config/firebase';
+
 
 const Settings = () => {
   const [locationOn, setLocationOn] = useState(true);
@@ -9,10 +8,14 @@ const Settings = () => {
 
   const handleLogout = async () => {
     try {
-      // Sign out from Firebase Auth
-      await signOut(auth);
-      
-      // Clear all authentication data
+      // Clear all authentication data (both session and local)
+      sessionStorage.removeItem('authToken');
+      sessionStorage.removeItem('userType');
+      sessionStorage.removeItem('loginTime');
+      sessionStorage.removeItem('adminNotifications');
+      sessionStorage.removeItem('adminUser');
+      sessionStorage.removeItem('adminAuth');
+      sessionStorage.removeItem('userData');
       localStorage.removeItem('authToken');
       localStorage.removeItem('userType');
       localStorage.removeItem('loginTime');

@@ -13,39 +13,34 @@ const TABS = [
 const FIRE_COLOR = '#ff512f';
 const INACTIVE_COLOR = '#fff';
 const BAR_COLOR = '#222';
-const { width } = Dimensions.get('window');
-const TAB_WIDTH = width / TABS.length;
+const { width: screenWidth } = Dimensions.get('window');
 const CIRCLE_SIZE = 56;
 
 const CNavbarMenu = ({ activeTab, setActiveTab, unreadCount = 0 }) => {
-  const animValue = React.useRef(new Animated.Value(activeTab)).current;
+  const [barWidth, setBarWidth] = React.useState(screenWidth);
+  const tabWidth = barWidth / TABS.length;
+  const getX = (idx) => idx * tabWidth + (tabWidth - CIRCLE_SIZE) / 2;
+  const animValue = React.useRef(new Animated.Value(getX(activeTab))).current;
 
   React.useEffect(() => {
     Animated.spring(animValue, {
-      toValue: activeTab,
+      toValue: getX(activeTab),
       useNativeDriver: true,
       friction: 6,
     }).start();
-  }, [activeTab]);
+  }, [activeTab, barWidth]);
 
   const handlePress = (idx) => {
     setActiveTab(idx);
   };
 
-  const translateX = animValue.interpolate({
-    inputRange: [0, TABS.length - 1],
-    outputRange: [TAB_WIDTH / 2 - CIRCLE_SIZE / 2, width - TAB_WIDTH / 2 - CIRCLE_SIZE / 2],
-  });
+  const translateX = animValue;
 
-  const scale = animValue.interpolate({
-    inputRange: [0, TABS.length - 1],
-    outputRange: [1, 1],
-    extrapolate: 'clamp',
-  });
+  const scale = 1;
 
   return (
     <View className="absolute left-0 right-0 bottom-0 h-[70px] items-center z-10 bg-black">
-      <View className="w-full h-[60px] rounded-t-2xl bg-[#222] overflow-visible justify-center">
+      <View className="w-full h-[60px] rounded-t-2xl bg-[#222] overflow-visible justify-center" onLayout={(e) => setBarWidth(e.nativeEvent.layout.width)}>
         {/* Floating Icon */}
         <Animated.View
           style={{
@@ -63,7 +58,7 @@ const CNavbarMenu = ({ activeTab, setActiveTab, unreadCount = 0 }) => {
             shadowRadius: 8,
             shadowOffset: { width: 0, height: 4 },
             zIndex: 2,
-            transform: [{ translateX }, { scale }],
+            transform: [{ translateX: animValue }],
           }}
         >
           <MaterialIcons name={TABS[activeTab].icon} size={32} color="#fff" style={{ zIndex: 2 }} />

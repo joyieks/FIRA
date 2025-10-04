@@ -2,8 +2,9 @@ import React, { useState } from 'react';
 import { View, TouchableOpacity, Text } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { Ionicons } from '@expo/vector-icons';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import ASidebarMenu from '../../Admin/ASidebarMenu/ASidebarMenu';
-import AStatus from '../../Admin/AdminMenu/AdminStatus/AStatus';
+import AOverview from '../../Admin/AdminMenu/AdminOverview/AOverview';
 import ANotifications from '../../Admin/AdminMenu/AdminNotifications/ANotifications';
 import AMap from '../../Admin/AdminMenu/AdminMap/AMap';
 import AFiraChat from '../../Admin/AdminMenu/AdminChat/AFiraChat';
@@ -16,9 +17,10 @@ export default function AdminScreen() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [selectedContact, setSelectedContact] = useState(null);
   const [unreadCount, setUnreadCount] = useState(0);
+  const insets = useSafeAreaInsets();
 
   const TABS = [
-    { component: <AStatus /> },
+    { component: <AOverview /> },
     { component: <AMap /> },
     { component: <ANotifications onUnreadCountChange={setUnreadCount} /> },
     { component: <AFiraChat onContactSelect={setSelectedContact} /> },
@@ -27,9 +29,11 @@ export default function AdminScreen() {
     { component: <ASettings /> },
   ];
 
-  const toggleSidebar = () => {
-    setSidebarOpen(!sidebarOpen);
+  const openSidebar = () => {
+    // Force immediate open and avoid race with previous close
+    setSidebarOpen(true);
   };
+  const closeSidebar = () => setSidebarOpen(false);
 
   const getTabTitle = (tabIndex) => {
     const titles = [
@@ -71,31 +75,56 @@ export default function AdminScreen() {
   };
 
   return (
-    <View className="flex-1 bg-gray-100">
-      <View className="flex-1">
-        {TABS[activeTab].component}
+    <View 
+      style={{
+        flex: 1,
+        backgroundColor: '#f3f4f6',
+        paddingBottom: 90 + insets.bottom, // Add space for navbar
+      }}
+    >
+      {/* Main Content */}
+      <View style={{ flex: 1 }}>
+        {activeTab === 1 ? (
+          <AMap isSidebarOpen={sidebarOpen} />
+        ) : (
+          TABS[activeTab].component
+        )}
       </View>
       
-      {/* Floating Burger Icon with Title */}
-      <View className="absolute top-12 left-0 right-0 flex-row items-center">
-        {/* Only show burger menu when not in chat OR when no contact is selected */}
+      {/* Floating Burger Icon (no section headers as requested) */}
+      <View 
+        style={{
+          position: 'absolute',
+          top: insets.top + 12,
+          left: 0,
+          right: 0,
+          flexDirection: 'row',
+          alignItems: 'center',
+          zIndex: 10000,
+          elevation: 20,
+        }}
+        pointerEvents="auto"
+      >
         {(activeTab !== 3 || !selectedContact) && (
           <TouchableOpacity
-            className="absolute left-4 w-12 h-12 rounded-full bg-[#ff512f] items-center justify-center"
-            onPress={toggleSidebar}
+            style={{
+              position: 'absolute',
+              left: 16,
+              width: 48,
+              height: 48,
+              borderRadius: 24,
+              backgroundColor: '#ff512f',
+              alignItems: 'center',
+              justifyContent: 'center',
+              zIndex: 11000,
+            }}
+            onPress={openSidebar}
             activeOpacity={0.8}
+            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            pointerEvents="auto"
           >
             <MaterialIcons name="menu" size={24} color="#ffffff" />
           </TouchableOpacity>
-        )}
-        
-        {/* Show regular title for other tabs */}
-        {activeTab !== 3 && (
-          <View className="flex-1 items-center justify-center">
-            <Text className="text-xl font-bold text-gray-800">
-              {getTabTitle(activeTab)}
-            </Text>
-          </View>
         )}
       </View>
       
@@ -103,7 +132,8 @@ export default function AdminScreen() {
         activeTab={activeTab} 
         setActiveTab={setActiveTab} 
         isOpen={sidebarOpen} 
-        onToggle={toggleSidebar} 
+        onToggle={closeSidebar} 
+        // Ensure the drawer only opens from explicit button, not gestures
       />
     </View>
   );

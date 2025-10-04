@@ -83,7 +83,6 @@ const CProfile = () => {
 
       {/* Contact Information Section */}
       <View className="bg-white m-4 rounded-2xl p-6 shadow-sm">
-        <Text className="text-lg font-bold text-gray-800 mb-4">Contact Information</Text>
         <ProfileField icon="email" label="Email" value={profile.email} />
         <ProfileField icon="phone" label="Phone" value={profile.phone} />
         <ProfileField icon="home" label="Address" value={profile.address} multiline />

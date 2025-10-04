@@ -4,7 +4,6 @@ import { useRouter } from 'expo-router';
 import { AntDesign } from '@expo/vector-icons';
 import { MaterialIcons } from '@expo/vector-icons';
 import { supabase } from '../config/supabase';
-import { WebBrowser, Crypto, googleSignInConfig } from '../config/googleSignIn';
 import { useAuth } from '../config/AuthContext';
 import AuthGuard from '../components/AuthGuard';
 
@@ -18,15 +17,29 @@ const LoginComponent = () => {
   const [toastMessage, setToastMessage] = useState('');
   const [toastType, setToastType] = useState('success'); // 'success' or 'error'
   const router = useRouter();
-  const { login: authLogin, loginCitizen } = useAuth();
+  const { login: authLogin, loginAdmin, loginCitizen, loginStation, loginResponder, isLoading, resetLoading } = useAuth();
 
-  // Clear toast on component mount/unmount
+  // Clear toast on component mount/unmount and reset loading if stuck
   useEffect(() => {
+    // If we're on the login screen and still loading, reset the loading state
+    if (isLoading) {
+      console.log('🔄 Login component: Resetting stuck loading state');
+      const resetTimer = setTimeout(() => {
+        resetLoading();
+      }, 1000);
+      
+      return () => {
+        clearTimeout(resetTimer);
+        setShowToast(false);
+        setToastMessage('');
+      };
+    }
+    
     return () => {
       setShowToast(false);
       setToastMessage('');
     };
-  }, []);
+  }, [isLoading, resetLoading]);
 
   const validateEmail = (text) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(text);
 
@@ -79,27 +92,100 @@ const LoginComponent = () => {
     if (!isValid) return;
 
     try {
-      // First check if it's a hardcoded user (admin, station, responder)
-      if (email === 'admin@gmail.com' && password === 'admin') {
-        const result = await authLogin(email, password);
-        displayToast('Welcome to Project FIRA! 🔥', 'success');
-        return;
-      }
-      
+      // Check for hardcoded station credentials (stations don't use Supabase Auth)
       if (email === 'stations@gmail.com' && password === 'stations') {
         const result = await authLogin(email, password);
         displayToast('Welcome to Project FIRA! 🚒', 'success');
         return;
       }
-      
-      if (email === 'responder@gmail.com' && password === 'responder') {
-        const result = await authLogin(email, password);
-        displayToast('Welcome to Project FIRA! 🚑', 'success');
+
+      // IMPORTANT: Do NOT pre-empt with responder login by email only.
+      // Always authenticate with Supabase Auth first to respect password for the email.
+
+      // Try Station login (no Supabase Auth account required) - mirrors web logic
+      console.log('🔍 Checking station_users for station login...');
+      let stationDirect = null;
+      {
+        const { data, error } = await supabase
+          .from('station_users')
+          .select('*')
+          .eq('email', email.toLowerCase())
+          .single();
+        if (data) stationDirect = data;
+      }
+
+      // If not found by email and user typed a station name (no @), try name match
+      if (!stationDirect && !email.includes('@')) {
+        console.log('🔍 Email field looks like a name; trying station_name match...');
+        const { data } = await supabase
+          .from('station_users')
+          .select('*')
+          .ilike('station_name', email)
+          .maybeSingle();
+        if (data) stationDirect = data;
+      }
+
+      if (stationDirect) {
+        console.log('✅ Station found in station_users (direct login):', stationDirect);
+        const userData = {
+          uid: stationDirect.id,
+          firstName: stationDirect.station_name,
+          lastName: '',
+          email: stationDirect.email,
+          phoneNumber: stationDirect.phone,
+          userType: 'station',
+          displayName: stationDirect.station_name,
+          status: stationDirect.status,
+          address: stationDirect.address,
+          position: stationDirect.position,
+          isOnline: stationDirect.is_online,
+          createdAt: stationDirect.created_at
+        };
+
+        setShowToast(false); setToastMessage('');
+        await loginStation(userData);
+        displayToast(`Welcome to Project FIRA, ${userData.displayName}! 🚒`, 'success');
         return;
       }
 
-      // For all other emails, try Supabase Auth (citizens)
-      console.log('🔍 Trying Supabase Auth for citizen login:', email);
+      // For responders: check email existence only (same as stations)
+      console.log('🔍 Checking responders table for responder login...');
+      let responderDirect = null;
+      {
+        const { data, error } = await supabase
+          .from('responders')
+          .select('*')
+          .eq('email', email.toLowerCase())
+          .single();
+        if (data) responderDirect = data;
+      }
+
+      if (responderDirect) {
+        console.log('✅ Responder found in responders (direct login):', responderDirect);
+        const userData = {
+          id: responderDirect.id,
+          uid: responderDirect.id,
+          firstName: responderDirect.first_name,
+          lastName: responderDirect.last_name,
+          email: responderDirect.email,
+          phoneNumber: responderDirect.phone,
+          userType: 'responder',
+          displayName: `${responderDirect.first_name} ${responderDirect.last_name}`.trim(),
+          status: responderDirect.status || 'active',
+          stationId: responderDirect.station_id,
+          position: responderDirect.user_position,
+          isOnline: responderDirect.is_online || false,
+          createdAt: responderDirect.created_at,
+        };
+
+        setShowToast(false); setToastMessage('');
+        await loginResponder(userData);
+        displayToast(`Welcome to Project FIRA, ${userData.displayName}! 🚑`, 'success');
+        return;
+      }
+
+      // For all other emails, try Supabase Auth (admin, citizens)
+      console.log('🔍 Trying Supabase Auth for login:', email);
       
       const { data: authData, error: authError } = await supabase.auth.signInWithPassword({
         email: email.toLowerCase(),
@@ -107,34 +193,111 @@ const LoginComponent = () => {
       });
 
       if (authError) {
-        // Only log to console in development, don't use console.error to avoid error overlay
-        if (__DEV__) {
-          console.log('🔍 Supabase Auth failed:', authError.message);
+        // Log the specific error for debugging
+        console.log('🔍 Supabase Auth failed:', authError.message);
+        console.log('🔍 Auth error details:', authError);
+        
+        // Don't throw error immediately - check if this is a responder authenticating
+        // against the responders table USING email + password (separate credential store).
+        console.log('🔄 Supabase Auth failed, checking responders table with password...');
+
+        const { data: responderData, error: responderError } = await supabase
+          .from('responders')
+          .select('*')
+          .eq('email', email.toLowerCase())
+          .eq('password', password)
+          .single();
+
+        if (responderError && responderError.code !== 'PGRST116') {
+          // Unexpected error other than "No rows"
+          console.log('ℹ️ Responder lookup error:', responderError.message);
         }
+
+        if (responderData) {
+          console.log('✅ Responder authenticated via responders table');
+
+        const userData = {
+          id: responderData.id,
+          uid: responderData.id,
+            firstName: responderData.first_name,
+            lastName: responderData.last_name,
+            email: responderData.email,
+            phoneNumber: responderData.phone,
+            userType: 'responder',
+            displayName: `${responderData.first_name} ${responderData.last_name}`.trim(),
+            status: responderData.status || 'active',
+            stationId: responderData.station_id,
+            stationName: 'Station',
+            position: responderData.user_position,
+            isOnline: responderData.is_online || false,
+            createdAt: responderData.created_at,
+            middleName: responderData.middle_name,
+            stationContactNumber: responderData.station_contact_number,
+            address: responderData.address,
+            birthdate: responderData.birthdate,
+            age: responderData.age,
+            gender: responderData.gender
+          };
+
+          setShowToast(false);
+          setToastMessage('');
+          await loginResponder(userData);
+          displayToast(`Welcome to Project FIRA, ${userData.displayName}! 🚑`, 'success');
+          return;
+        }
+
+        // If neither Supabase Auth nor responders table matched, rethrow auth error
+        console.log('❌ Credentials did not match Supabase Auth or responders table');
         throw authError;
       }
 
       const user = authData.user;
-      console.log('✅ Supabase Auth successful, checking citizen_users table...');
+      console.log('✅ Supabase Auth successful, checking user tables...');
 
-      // Check if this user exists in 'citizen_users' table
+      // Check if this user exists in 'admin_users' table first
+      const { data: adminData, error: adminError } = await supabase
+        .from('admin_users')
+        .select('*')
+        .eq('email', email.toLowerCase())
+        .single();
+
+      if (adminData) {
+        console.log('✅ User found in admin_users table:', adminData);
+        
+        // Convert Supabase data format to match your app's expected format
+        const userData = {
+          uid: adminData.id,
+          firstName: adminData.first_name,
+          lastName: adminData.last_name,
+          email: adminData.email,
+          userType: 'admin',
+          displayName: `${adminData.first_name} ${adminData.last_name}`.trim(),
+          role: adminData.role,
+          status: adminData.status,
+          createdAt: adminData.created_at,
+          updatedAt: adminData.updated_at
+        };
+
+        // Clear any existing toast before login
+        setShowToast(false);
+        setToastMessage('');
+        
+        await loginAdmin(userData);
+        
+        // Show success toast after successful login
+        displayToast(`Welcome to Project FIRA, ${userData.displayName}! 🔥`, 'success');
+        return;
+      }
+
+      // Check if this user exists in 'citizen_users' table FIRST (to avoid misrouting to station)
       const { data: citizenData, error: citizenError } = await supabase
         .from('citizen_users')
         .select('*')
         .eq('email', email.toLowerCase())
         .single();
 
-      if (citizenError && citizenError.code !== 'PGRST116') {
-        if (__DEV__) {
-          console.log('🔍 Error checking citizen_users:', citizenError.message);
-        }
-        throw new Error('Error checking user data');
-      }
-
       if (citizenData) {
         console.log('✅ User found in citizen_users table:', citizenData);
-        
-        // Convert Supabase data format to match your app's expected format
         const userData = {
           uid: citizenData.id,
           firstName: citizenData.first_name,
@@ -146,20 +309,56 @@ const LoginComponent = () => {
           status: citizenData.status,
           reports: citizenData.reports,
           isVerified: citizenData.is_verified,
-          googleSignIn: citizenData.google_sign_in,
           createdAt: citizenData.created_at
+        };
+        setShowToast(false); setToastMessage('');
+        await loginCitizen(userData);
+        displayToast(`Welcome to Project FIRA, ${userData.firstName || 'User'}! 👋`, 'success');
+        return;
+      }
+
+      // Check if this user exists in 'station_users' table
+      const { data: stationData, error: stationError } = await supabase
+        .from('station_users')
+        .select('*')
+        .eq('email', email.toLowerCase())
+        .single();
+
+      if (stationData) {
+        console.log('✅ User found in station_users table:', stationData);
+        
+        // Convert Supabase data format to match your app's expected format
+        const userData = {
+          uid: stationData.id,
+          firstName: stationData.station_name,
+          lastName: '',
+          email: stationData.email,
+          phoneNumber: stationData.phone,
+          userType: 'station',
+          displayName: stationData.station_name,
+          status: stationData.status,
+          address: stationData.address,
+          position: stationData.position,
+          isOnline: stationData.is_online,
+          createdAt: stationData.created_at
         };
 
         // Clear any existing toast before login
         setShowToast(false);
         setToastMessage('');
         
-        await loginCitizen(userData);
+        await loginStation(userData);
         
         // Show success toast after successful login
-        displayToast(`Welcome to Project FIRA, ${userData.firstName || 'User'}! 👋`, 'success');
-      } else {
-        console.log('❌ User not found in citizen_users table');
+        displayToast(`Welcome to Project FIRA, ${userData.displayName}! 🚒`, 'success');
+        return;
+      }
+
+      // Responder post-auth lookup removed (Option A uses table-based login above)
+
+      // If no records found at all
+      {
+        console.log('❌ User not found in any user table');
         displayToast('No user record found. Please register first.', 'error');
       }
     } catch (error) {
@@ -189,150 +388,6 @@ const LoginComponent = () => {
     }
   };
 
-  const handleGoogleSignIn = async () => {
-    try {
-      // Clear any existing toast first
-      setShowToast(false);
-      setToastMessage('');
-
-      // Generate a random nonce for security
-      const nonce = await Crypto.digestStringAsync(
-        Crypto.CryptoDigestAlgorithm.SHA256,
-        Math.random().toString(),
-        { encoding: Crypto.CryptoEncoding.HEX }
-      );
-
-      // Create Google OAuth URL
-      const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?` +
-        `client_id=${googleSignInConfig.clientId}&` +
-        `redirect_uri=${encodeURIComponent(googleSignInConfig.redirectUri)}&` +
-        `response_type=id_token&` +
-        `scope=${encodeURIComponent(googleSignInConfig.scopes.join(' '))}&` +
-        `nonce=${nonce}`;
-
-      // Open browser for Google authentication
-      const result = await WebBrowser.openAuthSessionAsync(authUrl, googleSignInConfig.redirectUri);
-
-      if (result.type === 'success') {
-        // Parse the URL to get the id_token
-        const url = result.url;
-        const urlParams = new URLSearchParams(url.split('#')[1]);
-        const idToken = urlParams.get('id_token');
-        
-        if (idToken) {
-          // Sign in to Supabase with Google ID token
-          const { data: authData, error: authError } = await supabase.auth.signInWithIdToken({
-            provider: 'google',
-            token: idToken,
-          });
-
-          if (authError) {
-            if (__DEV__) {
-              console.log('🔍 Supabase Google sign-in failed:', authError.message);
-            }
-            throw new Error(`Google sign-in failed: ${authError.message}`);
-          }
-
-          const user = authData.user;
-          console.log('✅ Google sign-in successful:', user.id);
-
-          // Check if user exists in citizen_users table
-          const { data: citizenData, error: citizenError } = await supabase
-            .from('citizen_users')
-            .select('*')
-            .eq('email', user.email)
-            .single();
-
-          if (citizenError && citizenError.code !== 'PGRST116') {
-            if (__DEV__) {
-              console.log('🔍 Error checking citizen_users:', citizenError.message);
-            }
-            throw new Error('Error checking user data');
-          }
-
-          if (citizenData) {
-            // User exists, just sign in
-            const userData = {
-              uid: citizenData.id,
-              firstName: citizenData.first_name,
-              lastName: citizenData.last_name,
-              email: citizenData.email,
-              phoneNumber: citizenData.phone || citizenData.phone_number,
-              userType: 'citizen',
-              displayName: citizenData.display_name,
-              status: citizenData.status,
-              reports: citizenData.reports,
-              isVerified: citizenData.is_verified,
-              googleSignIn: citizenData.google_sign_in,
-              createdAt: citizenData.created_at
-            };
-
-            await loginCitizen(userData);
-            displayToast(`Welcome back to Project FIRA, ${userData.firstName || 'User'}! 👋`, 'success');
-          } else {
-            // User doesn't exist, create new account
-            const newUserData = {
-              id: user.id,
-              first_name: user.user_metadata?.full_name?.split(' ')[0] || 'Google',
-              last_name: user.user_metadata?.full_name?.split(' ').slice(1).join(' ') || 'User',
-              email: user.email,
-              phone: user.phone || '',
-              phone_number: user.phone || '',
-              display_name: user.user_metadata?.full_name || 'Google User',
-              status: 'active',
-              reports: 0,
-              is_verified: true,
-              google_sign_in: true,
-              created_at: new Date().toISOString(),
-              updated_at: new Date().toISOString()
-            };
-
-            const { data: insertData, error: insertError } = await supabase
-              .from('citizen_users')
-              .insert([newUserData])
-              .select()
-              .single();
-
-            if (insertError) {
-              if (__DEV__) {
-                console.log('🔍 Error creating user:', insertError.message);
-              }
-              throw new Error('Failed to create user account');
-            }
-
-            const userData = {
-              uid: insertData.id,
-              firstName: insertData.first_name,
-              lastName: insertData.last_name,
-              email: insertData.email,
-              phoneNumber: insertData.phone || insertData.phone_number,
-              userType: 'citizen',
-              displayName: insertData.display_name,
-              status: insertData.status,
-              reports: insertData.reports,
-              isVerified: insertData.is_verified,
-              googleSignIn: insertData.google_sign_in,
-              createdAt: insertData.created_at
-            };
-
-            await loginCitizen(userData);
-            displayToast(`Welcome to Project FIRA, ${userData.firstName}! Your Google account has been registered. 🎉`, 'success');
-          }
-        } else {
-          displayToast('No ID token received from Google.', 'error');
-        }
-      } else if (result.type === 'cancel') {
-        displayToast('You cancelled the Google Sign-In process.', 'error');
-      } else {
-        displayToast('An error occurred during sign-in.', 'error');
-      }
-    } catch (error) {
-      if (__DEV__) {
-        console.log('🔍 Google Sign-In attempt failed:', error.message);
-      }
-      displayToast(error.message, 'error');
-    }
-  };
 
   return (
     <KeyboardAvoidingView
@@ -340,8 +395,24 @@ const LoginComponent = () => {
       className="flex-1 bg-white"
     >
       <View className="flex-1 px-8 justify-center">
-        <TouchableOpacity style={{ position: 'absolute', top: 40, left: 20, zIndex: 10 }} onPress={() => router.back()}>
-          <AntDesign name="arrowleft" size={32} color="#dc2626" />
+        <TouchableOpacity 
+          style={{ 
+            position: 'absolute', 
+            top: 50, 
+            left: 20, 
+            zIndex: 10,
+            backgroundColor: 'rgba(255, 255, 255, 0.9)',
+            borderRadius: 20,
+            padding: 8,
+            shadowColor: '#000',
+            shadowOffset: { width: 0, height: 2 },
+            shadowOpacity: 0.1,
+            shadowRadius: 4,
+            elevation: 3
+          }} 
+          onPress={() => router.replace('/get-started/getstarted')}
+        >
+          <MaterialIcons name="arrow-back" size={24} color="#dc2626" />
         </TouchableOpacity>
 
         <View className="items-center mb-12">
@@ -393,50 +464,18 @@ const LoginComponent = () => {
             </TouchableOpacity>
           </View>
           {passwordError ? <Text className="text-fire text-sm">{passwordError}</Text> : null}
+          
+          {/* Forgot Password Link - positioned below password field, right-aligned */}
+          <TouchableOpacity 
+            className="self-end mt-2"
+            onPress={() => router.push('/Authentication/ForgotPassword/forgotpassword')}
+          >
+            <Text className="text-fire font-medium text-sm">Forgot Password?</Text>
+          </TouchableOpacity>
         </View>
 
         <TouchableOpacity className="bg-fire py-4 rounded-xl items-center mb-4" onPress={handleLogin}>
           <Text className="text-white font-bold text-lg">Login</Text>
-        </TouchableOpacity>
-
-        <View className="flex-row items-center mb-4">
-          <View className="flex-1 h-px bg-gray-300" />
-          <Text className="mx-4 text-gray-500 text-sm">or</Text>
-          <View className="flex-1 h-px bg-gray-300" />
-        </View>
-
-        <TouchableOpacity
-          style={{
-            paddingVertical: 16,
-            borderRadius: 12,
-            alignItems: 'center',
-            marginBottom: 16,
-            flexDirection: 'row',
-            justifyContent: 'center',
-            borderWidth: 1,
-            borderColor: '#e5e7eb',
-            backgroundColor: '#ffffff',
-            shadowColor: '#000',
-            shadowOffset: { width: 0, height: 2 },
-            shadowOpacity: 0.1,
-            shadowRadius: 3.84,
-            elevation: 5,
-          }}
-          onPress={handleGoogleSignIn}
-        >
-          <View style={{ width: 24, height: 24, marginRight: 12, justifyContent: 'center', alignItems: 'center' }}>
-            <AntDesign name="google" size={20} color="#dc2626" />
-          </View>
-          <Text style={{ color: '#dc2626', fontWeight: '600', fontSize: 16, letterSpacing: 0.5 }}>
-            Sign in with Google
-          </Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity 
-          className="items-center mb-6"
-          onPress={() => router.push('/Authentication/ForgotPassword/forgotpassword')}
-        >
-          <Text className="text-fire font-medium">Forgot Password?</Text>
         </TouchableOpacity>
 
         <View className="flex-row justify-center">

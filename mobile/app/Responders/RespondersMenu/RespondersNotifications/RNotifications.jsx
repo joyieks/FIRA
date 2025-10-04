@@ -116,7 +116,6 @@ export default function RNotifications({ onUnreadCountChange }) {
       {/* Header */}
       <View className="bg-white pt-12 pb-4 px-4 border-b border-gray-200">
         <View className="flex-row items-center justify-center">
-          <Text className="text-2xl font-bold text-gray-800">Notifications</Text>
           {unreadCount > 0 && (
             <View className="bg-fire rounded-full px-3 py-1 ml-2">
               <Text className="text-white font-bold text-sm">{unreadCount}</Text>

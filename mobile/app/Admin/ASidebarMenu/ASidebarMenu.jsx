@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
-import { View, TouchableOpacity, Text, Image, Animated, Dimensions, Alert } from 'react-native';
+import { View, TouchableOpacity, Text, Image, Animated, Dimensions, Alert, Pressable } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { useAuth } from '../../config/AuthContext';
@@ -19,28 +20,55 @@ const MENU_ITEMS = [
 
 const ASidebarMenu = ({ activeTab, setActiveTab, isOpen, onToggle }) => {
   const router = useRouter();
+  const insets = useSafeAreaInsets();
   const { logout } = useAuth();
   const slideAnim = React.useRef(new Animated.Value(isOpen ? 0 : -width * 0.8)).current;
   const overlayOpacity = React.useRef(new Animated.Value(isOpen ? 0.5 : 0)).current;
+  const [overlayInteractive, setOverlayInteractive] = React.useState(false);
 
   React.useEffect(() => {
+    setOverlayInteractive(false); // disable taps during transition
     Animated.parallel([
       Animated.timing(slideAnim, {
         toValue: isOpen ? 0 : -width * 0.8,
-        duration: 300,
+        duration: 250,
         useNativeDriver: true,
       }),
       Animated.timing(overlayOpacity, {
-        toValue: isOpen ? 0.5 : 0,
-        duration: 300,
+        toValue: isOpen ? 0.3 : 0,
+        duration: 250,
         useNativeDriver: true,
       }),
-    ]).start();
-  }, [isOpen]);
+    ]).start(() => {
+      // enable only after animation completes and drawer is open
+      setOverlayInteractive(!!isOpen);
+    });
+  }, [isOpen, slideAnim, overlayOpacity]);
+
+  // Force-close helper to avoid any race conditions
+  const handleCloseNow = (afterClose) => {
+    setOverlayInteractive(false);
+    Animated.parallel([
+      Animated.timing(slideAnim, {
+        toValue: -width * 0.8,
+        duration: 200,
+        useNativeDriver: true,
+      }),
+      Animated.timing(overlayOpacity, {
+        toValue: 0,
+        duration: 200,
+        useNativeDriver: true,
+      }),
+    ]).start(() => {
+      onToggle && onToggle();
+      if (typeof afterClose === 'function') {
+        requestAnimationFrame(() => afterClose());
+      }
+    });
+  };
 
   const handleMenuPress = (index) => {
-    setActiveTab(index);
-    onToggle(); // Close sidebar after selection
+    handleCloseNow(() => setActiveTab(index));
   };
 
   const handleLogout = () => {
@@ -67,23 +95,6 @@ const ASidebarMenu = ({ activeTab, setActiveTab, isOpen, onToggle }) => {
 
   return (
     <>
-      {/* Overlay - only show when sidebar is open */}
-      {isOpen && (
-        <Animated.View
-          style={{
-            position: 'absolute',
-            top: 0,
-            left: 0,
-            right: 0,
-            bottom: 0,
-            backgroundColor: 'rgba(0, 0, 0, 0.5)',
-            opacity: overlayOpacity,
-            zIndex: 1000,
-          }}
-          onTouchEnd={onToggle}
-        />
-      )}
-
       {/* Sidebar */}
       <Animated.View
         style={{
@@ -94,13 +105,16 @@ const ASidebarMenu = ({ activeTab, setActiveTab, isOpen, onToggle }) => {
           height: height,
           backgroundColor: '#1a1a1a',
           transform: [{ translateX: slideAnim }],
-          zIndex: 1001,
+          zIndex: 2000,
           elevation: 5,
           shadowColor: '#000',
           shadowOffset: { width: 2, height: 0 },
           shadowOpacity: 0.25,
           shadowRadius: 3.84,
         }}
+        pointerEvents="auto"
+        // Prevent iOS edge swipe (like iPhone 6s+) from opening when drawer is closed
+        onStartShouldSetResponder={() => true}
       >
         {/* Profile Section */}
         <View className="bg-[#ff512f] pt-12 pb-6 px-6">
@@ -151,13 +165,45 @@ const ASidebarMenu = ({ activeTab, setActiveTab, isOpen, onToggle }) => {
         </View>
 
         {/* Close Button */}
-        <TouchableOpacity
-          className="absolute top-12 right-4 w-8 h-8 rounded-full bg-white/20 items-center justify-center"
-          onPress={onToggle}
+        <Pressable
+          style={{
+            position: 'absolute',
+            top: (insets?.top || 0) + 12,
+            right: 16,
+            width: 32,
+            height: 32,
+            borderRadius: 16,
+            backgroundColor: 'rgba(255,255,255,0.2)',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 2100,
+          }}
+          onPress={handleCloseNow}
+          hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+          onStartShouldSetResponder={() => true}
         >
           <MaterialIcons name="close" size={20} color="#ffffff" />
-        </TouchableOpacity>
+        </Pressable>
       </Animated.View>
+
+      {/* Overlay - only show when sidebar is open (rendered AFTER drawer) */}
+      {isOpen && (
+        <TouchableOpacity
+          style={{
+            position: 'absolute',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            backgroundColor: 'rgba(0, 0, 0, 0.3)',
+            zIndex: 1500,
+          }}
+          activeOpacity={1}
+          onPress={handleCloseNow}
+          pointerEvents={overlayInteractive ? 'auto' : 'none'}
+          onStartShouldSetResponder={() => true}
+        />
+      )}
     </>
   );
 };

@@ -4,8 +4,6 @@ import { GrOverview } from "react-icons/gr";
 import { FaMapLocationDot } from "react-icons/fa6";
 import { IoIosNotifications } from "react-icons/io";
 import { Link, useLocation, Outlet } from 'react-router-dom';
-import { signOut } from 'firebase/auth';
-import { auth } from '../../../../config/firebase';
 import { supabase } from '../../../../config/supabase';
 
 const StationLayout = ({ children }) => {
@@ -15,7 +13,8 @@ const StationLayout = ({ children }) => {
   const [notifications, setNotifications] = useState([]);
   const [stationData, setStationData] = useState({
     station_name: 'Loading...',
-    email: 'Loading...'
+    email: 'Loading...',
+    address: 'Loading...'
   });
   const location = useLocation();
   const profileRef = useRef(null);
@@ -29,51 +28,98 @@ const StationLayout = ({ children }) => {
   const fetchStationData = async () => {
     try {
       // First try to get from localStorage
-      const userData = JSON.parse(localStorage.getItem('userData') || '{}');
+      const userData = JSON.parse(sessionStorage.getItem('userData') || localStorage.getItem('userData') || '{}');
+      console.log('🔍 UserData from localStorage:', userData);
       
+      // Seed synchronously from localStorage so children have data on first paint
+      if (userData && (userData.station_name || userData.email || userData.address)) {
+        setStationData({
+          station_name: userData.station_name || 'Station Name',
+          email: userData.email || 'station@email.com',
+          address: userData.address || 'Address not specified'
+        });
+      }
+
       if (userData.id) {
+        console.log('🔍 Looking up station with ID:', userData.id);
         // If we have userData, try to fetch from Supabase for latest info
         const { data: stationInfo, error } = await supabase
           .from('station_users')
-          .select('station_name, email')
+          .select('station_name, email, address, lat, lng')
           .eq('id', userData.id)
           .single();
         
+        console.log('🔍 Supabase query result:', { stationInfo, error });
+        
         if (error) {
           console.error('Error fetching station data:', error);
-          // Fallback to localStorage data
-          setStationData({
-            station_name: userData.station_name || 'Station Name',
-            email: userData.email || 'station@email.com'
-          });
+          // Try alternative lookup by email
+          console.log('🔄 Trying alternative lookup by email:', userData.email);
+            const { data: stationByEmail, error: emailError } = await supabase
+            .from('station_users')
+            .select('station_name, email, address, lat, lng')
+            .eq('email', userData.email)
+            .single();
+          
+          console.log('🔍 Email lookup result:', { stationByEmail, emailError });
+          
+          if (emailError) {
+            console.error('Email lookup also failed:', emailError);
+            // Fallback to localStorage data
+            setStationData({
+              station_name: userData.station_name || 'Station Name',
+              email: userData.email || 'station@email.com',
+              address: userData.address || 'Address not specified'
+            });
+          } else if (stationByEmail) {
+            console.log('✅ Found station by email:', stationByEmail);
+            setStationData({
+              station_name: stationByEmail.station_name || 'Station Name',
+              email: stationByEmail.email || 'station@email.com',
+              address: stationByEmail.address || 'Address not specified',
+              lat: stationByEmail.lat ?? null,
+              lng: stationByEmail.lng ?? null
+            });
+          }
         } else if (stationInfo) {
+          console.log('✅ Found station by ID:', stationInfo);
           setStationData({
             station_name: stationInfo.station_name || 'Station Name',
-            email: stationInfo.email || 'station@email.com'
+            email: stationInfo.email || 'station@email.com',
+            address: stationInfo.address || 'Address not specified',
+            lat: stationInfo.lat ?? null,
+            lng: stationInfo.lng ?? null
           });
         }
       } else {
+        console.log('❌ No userData.id found, using fallback');
         // Fallback to default values
         setStationData({
           station_name: 'Station Name',
-          email: 'station@email.com'
+          email: 'station@email.com',
+          address: 'Address not specified'
         });
       }
     } catch (error) {
       console.error('Error fetching station data:', error);
       setStationData({
         station_name: 'Station Name',
-        email: 'station@email.com'
+        email: 'station@email.com',
+        address: 'Address not specified'
       });
     }
   };
 
   const handleLogout = async () => {
     try {
-      // Sign out from Firebase Auth
-      await signOut(auth);
-      
-      // Clear all authentication data
+      // Clear all authentication data (both session and local)
+      sessionStorage.removeItem('authToken');
+      sessionStorage.removeItem('userType');
+      sessionStorage.removeItem('loginTime');
+      sessionStorage.removeItem('stationNotifications');
+      sessionStorage.removeItem('stationUser');
+      sessionStorage.removeItem('stationAuth');
+      sessionStorage.removeItem('userData');
       localStorage.removeItem('authToken');
       localStorage.removeItem('userType');
       localStorage.removeItem('loginTime');
@@ -93,7 +139,7 @@ const StationLayout = ({ children }) => {
   // Load notifications from localStorage (station-specific)
   useEffect(() => {
     const loadNotifications = () => {
-      const storedNotifications = JSON.parse(localStorage.getItem('stationNotifications') || '[]');
+      const storedNotifications = JSON.parse(sessionStorage.getItem('stationNotifications') || localStorage.getItem('stationNotifications') || '[]');
       setNotifications(storedNotifications);
     };
     loadNotifications();
@@ -106,9 +152,29 @@ const StationLayout = ({ children }) => {
     return () => window.removeEventListener('storage', handleStorageChange);
   }, []);
 
+  // Debug function to check station_users table
+  const debugStationTable = async () => {
+    try {
+      console.log('🔍 Debugging station_users table...');
+      const { data: allStations, error } = await supabase
+        .from('station_users')
+        .select('*');
+      
+      if (error) {
+        console.error('❌ Error fetching all stations:', error);
+      } else {
+        console.log('📊 All stations in database:', allStations);
+        console.log('📊 Total stations:', allStations.length);
+      }
+    } catch (error) {
+      console.error('❌ Debug error:', error);
+    }
+  };
+
   // Fetch station data on component mount
   useEffect(() => {
     fetchStationData();
+    debugStationTable(); // Add debug call
   }, []);
 
   // Handle click outside for dropdowns
@@ -135,7 +201,7 @@ const StationLayout = ({ children }) => {
       notification.id === id ? { ...notification, read: true } : notification
     );
     setNotifications(updatedNotifications);
-    localStorage.setItem('stationNotifications', JSON.stringify(updatedNotifications));
+      sessionStorage.setItem('stationNotifications', JSON.stringify(updatedNotifications));
   };
 
   const formatDate = (dateString) => {
@@ -316,7 +382,7 @@ const StationLayout = ({ children }) => {
         </header>
         {/* Main Content Area */}
         <main className="flex-1 overflow-y-auto p-6 bg-gray-50">
-          <Outlet />
+          <Outlet context={{ stationData }} />
         </main>
       </div>
     </div>

@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { FiSend, FiPaperclip, FiUser, FiAlertTriangle, FiImage, FiCheck, FiSearch, FiFilter } from 'react-icons/fi';
 import { supabase } from '../../../../config/supabase';
+import { analyzeMessageForFireAlarm, updateMessageWithAIAnalysis } from '../../../../services/aiService';
 
-const Sfira_chat = () => {
+const Sfira_chat = () => {    
   const [messages, setMessages] = useState([]);
   const [newMessage, setNewMessage] = useState('');
   const [isEmergencyMode, setIsEmergencyMode] = useState(false);
@@ -21,17 +22,22 @@ const Sfira_chat = () => {
   const imageInputRef = useRef(null);
   const [isUploadingImage, setIsUploadingImage] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
+  const [refreshUnreadTick, setRefreshUnreadTick] = useState(0); // bump to refetch unread
 
-  // FIXED: Get current station ID from localStorage - EXACTLY same as User Management
+  // Get current station ID from sessionStorage or localStorage (consistent with other station pages)
   useEffect(() => {
-    const userData = JSON.parse(localStorage.getItem('userData') || '{}');
-    if (userData.id) {
-      setCurrentStationId(userData.id);
-      setCurrentStationName(userData.station_name || userData.name || 'Station');
-      console.log('🏢 Current station ID (Chat):', userData.id);
-    } else {
-      console.error('❌ No station ID found in userData (Chat)');
-      alert('Error: Unable to identify current station. Please log in again.');
+    try {
+      const raw = (typeof window !== 'undefined' ? (sessionStorage.getItem('userData') || localStorage.getItem('userData')) : null) || '{}';
+      const userData = JSON.parse(raw);
+      if (userData && userData.id) {
+        setCurrentStationId(userData.id);
+        setCurrentStationName(userData.station_name || userData.name || 'Station');
+        console.log('🏢 Current station ID (Chat):', userData.id);
+      } else {
+        console.warn('⚠️ No station ID found in stored userData for Chat.');
+      }
+    } catch (e) {
+      console.warn('⚠️ Failed to parse userData from storage in Chat');
     }
   }, []);
 
@@ -268,12 +274,28 @@ const Sfira_chat = () => {
       if (!currentStationId || users.length === 0) return;
 
       try {
+        console.log('🔍 Fetching unread messages for station:', currentStationId);
+        
+        // First, let's check ALL messages for this station to see what we have
+        const { data: allMessages, error: allError } = await supabase
+          .from('messages')
+          .select('*')
+          .eq('receiver_id', currentStationId)
+          .order('created_at', { ascending: false });
+        
+        console.log('🔍 ALL messages for this station:', allMessages);
+        console.log('🔍 ALL messages count:', allMessages?.length || 0);
+        
+        // Now check specifically for unread messages
         const { data: messagesData, error } = await supabase
           .from('messages')
           .select('*')
           .eq('receiver_id', currentStationId)
           .eq('is_read', false)
           .order('created_at', { ascending: false });
+
+        console.log('🔍 Unread messages query result:', messagesData);
+        console.log('🔍 Unread messages count:', messagesData?.length || 0);
 
         if (error) {
           console.error('Error fetching unread messages:', error);
@@ -284,6 +306,7 @@ const Sfira_chat = () => {
         const unreadByUser = {};
         messagesData.forEach(message => {
           const userId = message.sender_id;
+          console.log('🔍 Processing unread message from user:', userId, 'text:', message.text, 'is_read:', message.is_read);
           if (!unreadByUser[userId]) {
             unreadByUser[userId] = {
               count: 0,
@@ -293,23 +316,31 @@ const Sfira_chat = () => {
           }
           unreadByUser[userId].count++;
         });
+        
+        console.log('🔍 Grouped unread messages by user:', unreadByUser);
 
         // Update users with unread count and last message
         const updatedUsers = users.map(user => {
           const unreadInfo = unreadByUser[user.id];
-          return {
+          const updatedUser = {
             ...user,
             unreadCount: unreadInfo ? unreadInfo.count : 0,
             lastMessage: unreadInfo ? unreadInfo.lastMessage : user.lastMessage,
             lastMessageTime: unreadInfo ? unreadInfo.lastMessageTime : user.lastMessageTime
           };
+          console.log('🔍 Updated user:', user.name, 'unreadCount:', updatedUser.unreadCount, 'unreadInfo:', unreadInfo);
+          return updatedUser;
         });
 
+        console.log('🔍 Setting users state with:', updatedUsers.length, 'users');
         setUsers(updatedUsers);
         setFilteredUsers(updatedUsers);
 
         // Set unread users
         const unreadUsersList = updatedUsers.filter(user => user.unreadCount > 0);
+        console.log('🔍 All users with unread counts:', updatedUsers.map(u => ({ name: u.name, unreadCount: u.unreadCount })));
+        console.log('🔍 Filtered unread users:', unreadUsersList.map(u => ({ name: u.name, unreadCount: u.unreadCount })));
+        console.log('🔍 Setting unread users state with:', unreadUsersList.length, 'unread users');
         setUnreadUsers(unreadUsersList);
         setFilteredUnreadUsers(unreadUsersList);
       } catch (error) {
@@ -320,7 +351,38 @@ const Sfira_chat = () => {
     if (users.length > 0) {
       fetchUnreadMessages();
     }
-  }, [currentStationId, users.length]);
+  }, [currentStationId, users.length, refreshUnreadTick]);
+
+  // Global real-time listener for ANY new messages sent to this station (updates unread instantly)
+  useEffect(() => {
+    if (!currentStationId) return;
+
+    const globalChannel = supabase
+      .channel(`messages:inbox:${currentStationId}`)
+      .on('postgres_changes', {
+        event: 'INSERT',
+        schema: 'public',
+        table: 'messages',
+        filter: `receiver_id=eq.${currentStationId}`
+      }, (payload) => {
+        const incoming = payload.new;
+        // If we're currently viewing this sender, append to thread and mark as read
+        if (selectedUser && incoming.sender_id === selectedUser.id) {
+          setMessages(prev => [...prev, incoming]);
+          // Mark as read and keep unread counters clean
+          markMessagesAsRead(incoming.sender_id);
+          return;
+        }
+
+        // Otherwise, trigger a fresh unread fetch to avoid stale state
+        setRefreshUnreadTick(t => t + 1);
+      })
+      .subscribe();
+
+    return () => {
+      globalChannel.unsubscribe();
+    };
+  }, [currentStationId, selectedUser, users]);
 
   // Filter users based on search query and filter type
   useEffect(() => {
@@ -340,6 +402,9 @@ const Sfira_chat = () => {
       });
       setFilteredUsers(filtered);
     } else {
+      console.log('🔍 Filtering unread users - activeTab:', activeTab, 'unreadUsers count:', unreadUsers.length);
+      console.log('🔍 Unread users before filtering:', unreadUsers.map(u => ({ name: u.name, unreadCount: u.unreadCount, type: u.type })));
+      
       filtered = unreadUsers.filter(user => {
         const matchesSearch = user.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
                             user.email.toLowerCase().includes(searchQuery.toLowerCase());
@@ -351,6 +416,8 @@ const Sfira_chat = () => {
         
         return matchesSearch;
       });
+      
+      console.log('🔍 Filtered unread users result:', filtered.map(u => ({ name: u.name, unreadCount: u.unreadCount, type: u.type })));
       setFilteredUnreadUsers(filtered);
     }
   }, [searchQuery, filterType, activeTab, users, unreadUsers]);
@@ -399,6 +466,14 @@ const Sfira_chat = () => {
         console.log('Number of messages fetched:', messagesData?.length || 0);
         console.log('Setting messages state with:', messagesData || []);
         setMessages(messagesData || []);
+        
+        // Mark messages as read when fetching them (when opening a conversation)
+        if (messagesData && messagesData.length > 0) {
+          markMessagesAsRead(selectedUser.id);
+          // Also refresh unread aggregates immediately
+          setRefreshUnreadTick(t => t + 1);
+        }
+        
         setTimeout(scrollToBottom, 100);
       } catch (error) {
         console.error('Error fetching messages:', error);
@@ -443,14 +518,7 @@ const Sfira_chat = () => {
         table: 'messages',
         filter: `or(and(sender_id.eq.${selectedUser.id},receiver_id.eq.${currentStationId}),and(sender_id.eq.${currentStationId},receiver_id.eq.${selectedUser.id}))`
       }, (payload) => {
-        console.log('Real-time message received:', payload);
-        setMessages(prev => {
-          console.log('Previous messages:', prev);
-          console.log('Adding new message:', payload.new);
-          const newMessages = [...prev, payload.new];
-          console.log('Updated messages:', newMessages);
-          return newMessages;
-        });
+        setMessages(prev => [...prev, payload.new]);
         setTimeout(scrollToBottom, 100);
       })
       .subscribe((status) => {
@@ -471,6 +539,58 @@ const Sfira_chat = () => {
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  };
+
+  // Mark messages as read when selecting a user
+  const markMessagesAsRead = async (userId) => {
+    if (!currentStationId || !userId) return;
+
+    try {
+      console.log('🔍 Marking messages as read from user:', userId, 'to station:', currentStationId);
+      
+      const { error } = await supabase
+        .from('messages')
+        .update({ is_read: true })
+        .eq('sender_id', userId)
+        .eq('receiver_id', currentStationId)
+        .eq('is_read', false);
+
+      if (error) {
+        console.error('Error marking messages as read:', error);
+      } else {
+        console.log('✅ Messages marked as read successfully');
+        
+        // Update the local state to reflect the read status
+        setUsers(prevUsers => {
+          const updated = prevUsers.map(user => 
+            user.id === userId 
+              ? { ...user, unreadCount: 0 }
+              : user
+          );
+          console.log('🔍 Updated users after marking as read:', updated.map(u => ({ name: u.name, unreadCount: u.unreadCount })));
+          return updated;
+        });
+        
+        // Update unread users list
+        setUnreadUsers(prevUnread => {
+          const filtered = prevUnread.filter(user => user.id !== userId);
+          console.log('🔍 Updated unread users after marking as read:', filtered.map(u => ({ name: u.name, unreadCount: u.unreadCount })));
+          return filtered;
+        });
+        
+        // Update filtered unread users
+        setFilteredUnreadUsers(prevFiltered => {
+          const filtered = prevFiltered.filter(user => user.id !== userId);
+          console.log('🔍 Updated filtered unread users after marking as read:', filtered.map(u => ({ name: u.name, unreadCount: u.unreadCount })));
+          return filtered;
+        });
+
+        // Force a refresh of unread aggregates for safety
+        setRefreshUnreadTick(t => t + 1);
+      }
+    } catch (error) {
+      console.error('Error marking messages as read:', error);
+    }
   };
 
   const handleSendMessage = async () => {
@@ -505,14 +625,17 @@ const Sfira_chat = () => {
 
       console.log('Message sent successfully:', data);
       setNewMessage('');
-      
-      // Add the message to the local state immediately for better UX
+
+      // After storing, analyze message and update the same record with AI fields
       if (data && data[0]) {
-        setMessages(prev => {
-          console.log('Adding sent message to local state:', data[0]);
-          return [...prev, data[0]];
-        });
-        setTimeout(scrollToBottom, 100);
+        try {
+          const analysis = await analyzeMessageForFireAlarm(messageData.text);
+          if (analysis) {
+            await updateMessageWithAIAnalysis(data[0].id, analysis, supabase);
+          }
+        } catch (_) {
+          // best-effort; ignore errors
+        }
       }
     } catch (error) {
       console.error('Error sending message:', error);
@@ -666,7 +789,11 @@ const Sfira_chat = () => {
                   className={`p-4 border-b border-gray-200 hover:bg-gray-50 cursor-pointer flex items-center ${
                     selectedUser?.id === user.id ? 'bg-red-50' : ''
                   }`}
-                  onClick={() => setSelectedUser(user)}
+                  onClick={() => {
+                    setSelectedUser(user);
+                    // Mark messages as read when selecting a user
+                    markMessagesAsRead(user.id);
+                  }}
                 >
                   <div className={`w-12 h-12 rounded-full flex items-center justify-center font-bold mr-3 text-lg ${
                     user.type === 'admin' ? 'bg-blue-100 text-blue-600' : 
@@ -698,8 +825,15 @@ const Sfira_chat = () => {
           </div>
         ) : (
           <div className="flex-1 overflow-y-auto min-h-0">
+            {console.log('Rendering unread tab - filteredUnreadUsers:', filteredUnreadUsers.length, 'users:', filteredUnreadUsers)}
             {filteredUnreadUsers.length === 0 ? (
-              <div className="text-center text-gray-500 py-8">No unread messages</div>
+              <div className="flex flex-col items-center justify-center h-full text-gray-500">
+                <div className="text-6xl mb-4">📭</div>
+                <h3 className="text-lg font-medium mb-2">You have no unread messages!</h3>
+                <p className="text-sm text-center">
+                  All caught up! Check back later for new messages.
+                </p>
+              </div>
             ) : (
               filteredUnreadUsers.map(user => (
                 <div
@@ -707,7 +841,11 @@ const Sfira_chat = () => {
                   className={`p-4 border-b border-gray-200 hover:bg-gray-50 cursor-pointer flex items-center ${
                     selectedUser?.id === user.id ? 'bg-red-50' : ''
                   }`}
-                  onClick={() => setSelectedUser(user)}
+                  onClick={() => {
+                    setSelectedUser(user);
+                    // Mark messages as read when selecting a user
+                    markMessagesAsRead(user.id);
+                  }}
                 >
                   <div className={`w-12 h-12 rounded-full flex items-center justify-center font-bold mr-3 text-lg ${
                     user.type === 'admin' ? 'bg-blue-100 text-blue-600' : 

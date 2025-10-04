@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { View, Text } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import CStatus from '../../Citizens/CitizenMenu/CitizenStatus/CStatus';
 import CNotifications from '../../Citizens/CitizenMenu/CitizenNotifications/CNotifications';
 import CMap from '../../Citizens/CitizenMenu/CitizenMap/CMap';
@@ -26,6 +27,7 @@ const TAB_NAMES = [
 const CitizenScreen = () => {
   const [activeTab, setActiveTab] = useState(2); // Default to Status
   const [unreadCount, setUnreadCount] = useState(0);
+  const insets = useSafeAreaInsets();
   
   const renderActiveComponent = () => {
     switch (activeTab) {
@@ -45,15 +47,14 @@ const CitizenScreen = () => {
   };
   
   return (
-    <View className="flex-1 bg-white">
-      {/* Header with current section name */}
-      <View className="bg-white pt-12 pb-4 px-4 border-b border-gray-200">
-        <Text className="text-2xl font-bold text-gray-800 text-center">
-          {TAB_NAMES[activeTab]}
-        </Text>
-      </View>
-      
-      <View className="flex-1 pb-20">
+    <View 
+      style={{
+        flex: 1,
+        backgroundColor: '#ffffff',
+        paddingBottom: 80 + insets.bottom, // Add space for navbar
+      }}
+    >
+      <View style={{ flex: 1, paddingTop: insets.top }}>
         {renderActiveComponent()}
       </View>
       <CNavbarMenu activeTab={activeTab} setActiveTab={setActiveTab} unreadCount={unreadCount} />
