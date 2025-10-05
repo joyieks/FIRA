@@ -202,12 +202,41 @@ const Overview = () => {
     return () => clearInterval(interval);
   }, []);
 
+  // If there are no reports from the API, populate the table using AI chat suggestions
+  useEffect(() => {
+    if (!isLoading && reports.length === 0 && aiChatSuggestions.length > 0) {
+      const aiDerivedReports = aiChatSuggestions.map((m) => ({
+        id: `chat-${m.id}`,
+        time: formatTime(m.created_at),
+        reporter: 'AI Chat Suggestion',
+        location: '—',
+        status: 'On Going',
+        suggestedAlarmLevel: normalizeAiLabel(m.ai_suggested_alarm) || 'Under Control',
+        finalAlarmLevel: normalizeAiLabel(m.ai_suggested_alarm) || '1st Alarm',
+        timestamp: m.created_at,
+        isChatSuggestion: true
+      }));
+      setReports(aiDerivedReports);
+    }
+  }, [isLoading, reports.length, aiChatSuggestions]);
+
   const normalizeAiLabel = (aiValue) => {
     if (!aiValue) return null;
     
     // Handle both old format (suggested_alarm) and new format (original_response.alarm_level)
     let suggested = null;
     if (typeof aiValue === 'string') {
+      // If it's a JSON string, try parsing first
+      const trimmed = aiValue.trim();
+      if ((trimmed.startsWith('{') && trimmed.endsWith('}')) || (trimmed.startsWith('[') && trimmed.endsWith(']'))) {
+        try {
+          const parsed = JSON.parse(trimmed);
+          // recurse with parsed object
+          return normalizeAiLabel(parsed);
+        } catch (_) {
+          // fall through to raw string handling
+        }
+      }
       suggested = aiValue;
     } else if (aiValue?.suggested_alarm) {
       suggested = aiValue.suggested_alarm;
@@ -499,6 +528,11 @@ const Overview = () => {
     
     if (confirmed) {
       setEditingFinalAlarm(prev => ({ ...prev, [reportId]: false }));
+      // For AI-derived chat suggestions, update locally only (no backend call needed)
+      if (currentReport?.isChatSuggestion) {
+        setReports(prev => prev.map(r => r.id === reportId ? { ...r, finalAlarmLevel: newAlarmLevel } : r));
+        return;
+      }
       updateFinalAlarmLevel(reportId, newAlarmLevel);
     } else {
       // If user cancels, just close the editing mode without saving
@@ -854,12 +888,36 @@ const Overview = () => {
                           )}
                         </td>
                         <td className="px-4 py-4 whitespace-nowrap">
-                          <span className={`px-3 py-1 rounded-md text-xs font-medium border ${report.status === 'Cancelled' ? 'opacity-50 cursor-not-allowed' : ''} ${getAlarmLevelColor(report.suggestedAlarmLevel)}`}>
-                            {report.suggestedAlarmLevel}
-                          </span>
+                          {(() => {
+                            const suggestedLabel = normalizeAiLabel(report.suggestedAlarmLevel) || report.suggestedAlarmLevel || 'Under Control';
+                            return (
+                              <span className={`px-3 py-1 rounded-md text-xs font-medium border ${report.status === 'Cancelled' ? 'opacity-50 cursor-not-allowed' : ''} ${getAlarmLevelColor(suggestedLabel)}`}>
+                                {suggestedLabel}
+                              </span>
+                            );
+                          })()}
                         </td>
                         <td className="px-4 py-4 whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
-                          {editingFinalAlarm[report.id] ? (
+                          {report.isChatSuggestion ? (
+                            <select
+                              value={report.finalAlarmLevel}
+                              onChange={(e) => handleFinalAlarmChange(report.id, e.target.value)}
+                              onClick={(e) => e.stopPropagation()}
+                              className="px-2 py-1 text-xs border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                              disabled={report.status === 'Cancelled'}
+                            >
+                              <option value="1st Alarm">1st Alarm</option>
+                              <option value="2nd Alarm">2nd Alarm</option>
+                              <option value="3rd Alarm">3rd Alarm</option>
+                              <option value="4th Alarm">4th Alarm</option>
+                              <option value="5th Alarm">5th Alarm</option>
+                              <option value="TASK FORCE ALPHA">TASK FORCE ALPHA</option>
+                              <option value="TASK FORCE BRAVO">TASK FORCE BRAVO</option>
+                              <option value="TASK FORCE CHARLIE">TASK FORCE CHARLIE</option>
+                              <option value="TASK FORCE DELTA">TASK FORCE DELTA</option>
+                              <option value="GENERAL ALARM">GENERAL ALARM</option>
+                            </select>
+                          ) : editingFinalAlarm[report.id] ? (
                             <select
                               value={report.finalAlarmLevel}
                               onChange={(e) => handleFinalAlarmChange(report.id, e.target.value)}
