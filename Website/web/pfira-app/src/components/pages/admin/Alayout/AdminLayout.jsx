@@ -42,22 +42,24 @@ const AdminLayout = ({ children }) => {
   }, []);
 
   const formatDate = (dateString) => {
+    if (!dateString) return 'Just now';
     const date = new Date(dateString);
+    if (isNaN(date.getTime())) return 'Just now';
     const now = new Date();
-    const diffInHours = Math.floor((now - date) / (1000 * 60 * 60));
-    
-    if (diffInHours < 1) {
-      return 'Just now';
-    } else if (diffInHours < 24) {
-      return `${diffInHours} hour${diffInHours > 1 ? 's' : ''} ago`;
-    } else {
-      return date.toLocaleDateString('en-US', {
-        month: 'short',
-        day: 'numeric',
-        hour: '2-digit',
-        minute: '2-digit'
-      });
-    }
+    const diffMs = now.getTime() - date.getTime();
+    const diffSec = Math.floor(diffMs / 1000);
+    const diffMin = Math.floor(diffSec / 60);
+    const diffHrs = Math.floor(diffMin / 60);
+
+    if (diffSec < 60) return 'Just now';
+    if (diffMin < 60) return `${diffMin} min${diffMin !== 1 ? 's' : ''} ago`;
+    if (diffHrs < 24) return `${diffHrs} hour${diffHrs !== 1 ? 's' : ''} ago`;
+    return date.toLocaleDateString('en-US', {
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit'
+    });
   };
 
   const handleLogout = async () => {
@@ -138,18 +140,17 @@ const AdminLayout = ({ children }) => {
             <div className="flex items-center space-x-4">
               {/* Notifications */}
               <div className="relative" ref={notificationsRef}>
-                <Link to="/admin-dashboard/notification">
-                  <button 
-                    className="relative p-2 text-gray-400 hover:text-gray-600 focus:outline-none"
-                  >
-                    <FiBell size={20} />
-                    {unreadCount > 0 && (
-                      <span className="absolute -top-1 -right-1 bg-red-500 text-white text-xs rounded-full h-5 w-5 flex items-center justify-center">
-                        {unreadCount > 9 ? '9+' : unreadCount}
-                      </span>
-                    )}
-                  </button>
-                </Link>
+                <button 
+                  onClick={toggleNotifications}
+                  className="relative p-2 text-gray-400 hover:text-gray-600 focus:outline-none"
+                >
+                  <FiBell size={20} />
+                  {unreadCount > 0 && (
+                    <span className="absolute -top-1 -right-1 bg-red-500 text-white text-xs rounded-full h-5 w-5 flex items-center justify-center">
+                      {unreadCount > 9 ? '9+' : unreadCount}
+                    </span>
+                  )}
+                </button>
                 
                 {notificationsOpen && (
                   <div className="absolute right-0 mt-2 w-80 bg-white rounded-md shadow-lg py-1 z-20 max-h-96 overflow-y-auto">
@@ -173,7 +174,10 @@ const AdminLayout = ({ children }) => {
                             className={`px-4 py-3 hover:bg-gray-50 cursor-pointer ${
                               !notification.is_read ? 'bg-blue-50' : ''
                             }`}
-                            onClick={() => markAsRead(notification.id)}
+                            onClick={() => {
+                              markAsRead(notification.id);
+                              window.location.href = '/admin-dashboard/notification';
+                            }}
                           >
                             <div className="flex items-start space-x-3">
                               <div className="flex-shrink-0">

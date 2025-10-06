@@ -26,6 +26,7 @@ const Adashboard = () => {
   const [assigneeId, setAssigneeId] = useState('');
   const [redirectTarget, setRedirectTarget] = useState(''); // e.g., 'station:<id>' | 'agency:police'
   const [redirectNote, setRedirectNote] = useState('');
+  const [assignmentNote, setAssignmentNote] = useState('');
   const [currentAssignment, setCurrentAssignment] = useState(null); // Current assignment info
   const [forwardedTo, setForwardedTo] = useState([]); // List of stations this was forwarded to
 
@@ -255,7 +256,7 @@ const Adashboard = () => {
       // 1. Fetch current assignment
       const { data: assignment, error: assignError } = await supabase
         .from('report_assignments')
-        .select('assignee_type, assignee_id, assigned_at')
+        .select('assignee_type, assignee_id, assigned_at, note')
         .eq('report_id', reportId)
         .single();
 
@@ -275,14 +276,16 @@ const Adashboard = () => {
           type: assignment.assignee_type,
           id: assignment.assignee_id,
           name: stationData?.station_name || 'Unknown Station',
-          assigned_at: assignment.assigned_at
+          assigned_at: assignment.assigned_at,
+          note: assignment.note || ''
         });
       } else if (assignment && assignment.assignee_type === 'responder') {
         setCurrentAssignment({
           type: assignment.assignee_type,
           id: assignment.assignee_id,
           name: 'Responder',
-          assigned_at: assignment.assigned_at
+          assigned_at: assignment.assigned_at,
+          note: assignment.note || ''
         });
       } else {
         setCurrentAssignment(null);
@@ -365,9 +368,11 @@ const Adashboard = () => {
         assignee_id: assigneeId,
         assigned_at: new Date().toISOString()
       };
+      console.log('[Assign] assignmentNote=', assignmentNote);
+      console.log('[Assign] upsert payload=', { ...payload, note: assignmentNote && assignmentNote.trim() ? assignmentNote.trim() : null });
       const { error } = await supabase
         .from('report_assignments')
-        .upsert(payload, { onConflict: 'report_id' });
+        .upsert({ ...payload, note: assignmentNote && assignmentNote.trim() ? assignmentNote.trim() : null }, { onConflict: 'report_id' });
       if (error) throw error;
       // Snapshot report coordinates so station dashboards can render reliably
       try {
@@ -386,13 +391,14 @@ const Adashboard = () => {
         console.warn('Snapshot upsert failed (table may not exist):', snapErr?.message || snapErr);
       }
       alert('Report assigned successfully.');
+      setAssignmentNote('');
       // Reload the assignment info
       loadAssignmentInfo(selectedReport.id);
     } catch (e) {
       console.error('❌ Assign failed:', e);
       alert('Failed to assign report. Check console.');
     }
-  }, [selectedReport, assigneeType, assigneeId, loadAssignmentInfo]);
+  }, [selectedReport, assigneeType, assigneeId, assignmentNote, loadAssignmentInfo]);
 
   const handleRedirect = useCallback(async () => {
     try {
@@ -783,6 +789,11 @@ const Adashboard = () => {
                         <p className="text-blue-600 text-xs mt-1">
                           Assigned: {new Date(currentAssignment.assigned_at).toLocaleString()}
                         </p>
+                        {currentAssignment.note && (
+                          <p className="text-blue-700 text-xs mt-1">
+                            <em>Note: {currentAssignment.note}</em>
+                          </p>
+                        )}
                       </div>
                     </div>
                   )}
@@ -823,6 +834,13 @@ const Adashboard = () => {
                       </select>
                       <button className="bg-blue-600 text-white px-3 py-1 rounded" onClick={handleAssign}>Assign</button>
                     </div>
+                    <textarea
+                      className="w-full border rounded p-2 text-sm"
+                      rows="2"
+                      placeholder="Assignment note (optional)"
+                      value={assignmentNote || ''}
+                      onChange={(e) => setAssignmentNote((e.target.value || '').toString())}
+                    ></textarea>
                     <p className="text-xs text-gray-500">You can reassign anytime — the latest assignment is active.</p>
                   </div>
 

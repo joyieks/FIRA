@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { GoogleMap, LoadScript, Marker, InfoWindow, Circle } from '@react-google-maps/api';
 import { useOutletContext } from 'react-router-dom';
 import { supabase } from '../../../../config/supabase';
@@ -29,6 +29,231 @@ const Sdashboard = () => {
   const [selectedAssignedReport, setSelectedAssignedReport] = useState(null);
   const [responders, setResponders] = useState([]); // responders assigned to this station
   const [isNotifying, setIsNotifying] = useState(false);
+  const previousReportIdsRef = useRef(new Set());
+  const processedNotificationReportIdsRef = useRef(new Set());
+  const audioRef = useRef(null);
+  const [audioReady, setAudioReady] = useState(false);
+  const audioContextRef = useRef(null);
+  const lastAlertAtRef = useRef(0);
+  const pendingAlertRef = useRef(false);
+  const interactionHandlerRegisteredRef = useRef(false);
+  const [showSoundPrompt, setShowSoundPrompt] = useState(false);
+  const [unreadCount, setUnreadCount] = useState(0);
+
+  // Preload alert audio and try to enable on first user interaction
+  useEffect(() => {
+    try {
+      const audio = new Audio('/assets/sounds/fire_alarm_sound.mp3');
+      audio.preload = 'auto';
+      audio.volume = 1.0;
+      audioRef.current = audio;
+    } catch (e) {
+      console.error('❌ Station: Failed to preload audio', e);
+    }
+
+    const enableAudio = async () => {
+      try {
+        if (audioContextRef.current && audioContextRef.current.state === 'suspended') {
+          await audioContextRef.current.resume();
+        }
+        if (audioRef.current) {
+          const isLooping = !!audioRef.current.loop && audioRef.current.paused === false;
+          if (!isLooping) {
+            await audioRef.current.play();
+            audioRef.current.pause();
+            audioRef.current.currentTime = 0;
+          }
+        }
+        setAudioReady(true);
+        if (pendingAlertRef.current) {
+          pendingAlertRef.current = false;
+          try {
+            if (audioRef.current) {
+              const isLooping = !!audioRef.current.loop && audioRef.current.paused === false;
+              if (!isLooping) {
+                audioRef.current.currentTime = 0;
+                audioRef.current.volume = 1.0;
+                await audioRef.current.play();
+                setTimeout(() => { try { audioRef.current && audioRef.current.pause(); } catch (_) {} }, 2000);
+              }
+            }
+          } catch (_) {}
+        }
+      } catch (_) {
+        // Ignore; will try again later
+      }
+      document.removeEventListener('click', enableAudio);
+      document.removeEventListener('touchstart', enableAudio);
+      document.removeEventListener('keydown', enableAudio);
+      interactionHandlerRegisteredRef.current = false;
+    };
+    if (!interactionHandlerRegisteredRef.current) {
+      document.addEventListener('click', enableAudio);
+      document.addEventListener('touchstart', enableAudio);
+      document.addEventListener('keydown', enableAudio);
+      interactionHandlerRegisteredRef.current = true;
+    }
+    return () => {
+      document.removeEventListener('click', enableAudio);
+      document.removeEventListener('touchstart', enableAudio);
+      document.removeEventListener('keydown', enableAudio);
+      interactionHandlerRegisteredRef.current = false;
+    };
+  }, []);
+
+  // If user hasn't explicitly enabled audio before, show the enable banner on load
+  useEffect(() => {
+    try {
+      const enabled = localStorage.getItem('stationAudioEnabled') === 'true';
+      if (!enabled) setShowSoundPrompt(true);
+    } catch (_) {}
+  }, []);
+
+  // Play a short beep using WebAudio (works once AudioContext is resumed)
+  const playWebAudioBeep = useCallback(async () => {
+    try {
+      console.log('🔊 Station: Trying WebAudio beep');
+      let ctx = audioContextRef.current;
+      if (!ctx) {
+        ctx = new (window.AudioContext || window.webkitAudioContext)();
+        audioContextRef.current = ctx;
+      }
+      if (ctx.state === 'suspended') {
+        await ctx.resume();
+      }
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(880, ctx.currentTime);
+      gain.gain.setValueAtTime(0.0001, ctx.currentTime);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start();
+      gain.gain.exponentialRampToValueAtTime(0.35, ctx.currentTime + 0.05);
+      setTimeout(() => {
+        try {
+          gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.05);
+          osc.stop(ctx.currentTime + 0.1);
+        } catch (_) {}
+      }, 900);
+      console.log('🔊 Station: WebAudio beep played');
+      return true;
+    } catch (e) {
+      console.warn('🔊 Station: WebAudio beep failed', e);
+      return false;
+    }
+  }, []);
+
+  // Start looping fire alarm sound until cleared
+  const startAlarmLoop = useCallback(async () => {
+    const now = Date.now();
+    if (now - lastAlertAtRef.current < 2000) {
+      return; // cooldown to avoid rapid repeats from poll + realtime
+    }
+    lastAlertAtRef.current = now;
+    try {
+      console.log('🔊 Station: startAlarmLoop init. audioRef?', !!audioRef.current);
+      let audio = audioRef.current;
+      if (audio && audio.loop && audio.paused === false) {
+        // Already looping and playing; do nothing
+        return;
+      }
+      if (!audio) {
+        audio = new Audio('/assets/sounds/fire_alarm_sound.mp3');
+        audio.preload = 'auto';
+        audio.volume = 1.0;
+        audioRef.current = audio;
+      }
+      try { audio.muted = false; } catch (_) {}
+      audio.loop = true;
+      audio.currentTime = 0;
+      await audio.play();
+      console.log('🔊 Station: Alarm loop started');
+      try { window.__stationAlarmAudio = audio; } catch (_) {}
+    } catch (e) {
+      console.warn('🔇 Station: Audio blocked; deferring until user interaction', e);
+      setShowSoundPrompt(true);
+      pendingAlertRef.current = true;
+      const attempt = async () => {
+        try {
+          if (audioContextRef.current && audioContextRef.current.state === 'suspended') {
+            await audioContextRef.current.resume();
+          }
+          console.log('🔊 Station: Deferred attempt to start alarm loop');
+          let audio = audioRef.current;
+          if (audio && audio.loop && audio.paused === false) {
+            return;
+          }
+          if (!audio) {
+            audio = new Audio('/assets/sounds/fire_alarm_sound.mp3');
+            audio.preload = 'auto';
+            audio.volume = 1.0;
+            audioRef.current = audio;
+          }
+          try { audio.muted = false; } catch (_) {}
+          audio.loop = true;
+          audio.currentTime = 0;
+          await audio.play();
+          try { window.__stationAlarmAudio = audio; } catch (_) {}
+        } catch (_) {}
+        pendingAlertRef.current = false;
+        document.removeEventListener('click', attempt);
+        document.removeEventListener('touchstart', attempt);
+        document.removeEventListener('keydown', attempt);
+        interactionHandlerRegisteredRef.current = false;
+      };
+      if (!interactionHandlerRegisteredRef.current) {
+        document.addEventListener('click', attempt, { once: true });
+        document.addEventListener('touchstart', attempt, { once: true });
+        document.addEventListener('keydown', attempt, { once: true });
+        interactionHandlerRegisteredRef.current = true;
+      }
+    }
+  }, []);
+
+  const stopAlarmLoop = useCallback(() => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    try {
+      audio.pause();
+      audio.currentTime = 0;
+      audio.loop = false;
+      console.log('🔇 Station: Alarm loop stopped');
+    } catch (_) {}
+  }, []);
+
+  // Poll unread notifications and control alarm loop
+  useEffect(() => {
+    let isMounted = true;
+    const fetchUnread = async () => {
+      try {
+        const userData = JSON.parse(sessionStorage.getItem('userData') || localStorage.getItem('userData') || '{}');
+        const stationId = userData?.id;
+        if (!stationId) return;
+        const { data, error } = await supabase
+          .from('notifications')
+          .select('id, is_read')
+          .eq('user_id', stationId)
+          .eq('user_type', 'station')
+          .eq('is_read', false);
+        if (!error && Array.isArray(data) && isMounted) {
+          const newCount = data.length;
+          setUnreadCount(newCount);
+          if (newCount > 0) {
+            startAlarmLoop();
+          } else {
+            stopAlarmLoop();
+          }
+        }
+      } catch (_) {}
+    };
+    fetchUnread();
+    const interval = setInterval(fetchUnread, 5000);
+    return () => {
+      isMounted = false;
+      clearInterval(interval);
+    };
+  }, [startAlarmLoop, stopAlarmLoop]);
 
   // Optionally get browser's current location (disabled by default)
   useEffect(() => {
@@ -222,7 +447,7 @@ const Sdashboard = () => {
         // 1) Fetch assignments for this station
         const { data: assignments, error } = await supabase
           .from('report_assignments')
-          .select('report_id')
+          .select('report_id, note, assigned_at')
           .eq('assignee_type', 'station')
           .eq('assignee_id', stationId);
 
@@ -304,6 +529,12 @@ const Sdashboard = () => {
           return;
         }
 
+        // Create a map of directly assigned report notes
+        const assignmentMeta = new Map();
+        (assignments || []).forEach(a => {
+          assignmentMeta.set(String(a.report_id), { note: a.note || '', assigned_at: a.assigned_at });
+        });
+
         // 3) Fetch full fire reports from the same API used by admin
         const response = await fetch('https://fire-detection-api-production-f8a3.up.railway.app/get_reports');
         if (!response.ok) {
@@ -356,7 +587,9 @@ const Sdashboard = () => {
           // This report was directly assigned
           return {
             ...report,
-            is_forwarded: false
+            is_forwarded: false,
+            assignment_note: assignmentMeta.get(rid)?.note || '',
+            assigned_at: assignmentMeta.get(rid)?.assigned_at || null
           };
         });
 
@@ -364,6 +597,21 @@ const Sdashboard = () => {
         console.log('📨 Forwarded report IDs:', Array.from(forwardedIds));
         console.log('📍 Total reports on map (assigned + forwarded):', reportsWithMetadata.map(r => ({ id: r.id, lat: r.latitude, lng: r.longitude, forwarded: r.is_forwarded })));
         setAssignedReports(reportsWithMetadata);
+        try {
+          // Detect new report IDs compared to last refresh and trigger alert/notification
+          const currentIds = new Set(reportsWithMetadata.map(r => String(r.id)));
+          const previousIds = previousReportIdsRef.current;
+          const newIds = Array.from(currentIds).filter(id => !previousIds.has(id));
+          // Update ref for next cycle
+          previousReportIdsRef.current = currentIds;
+
+          if (newIds.length > 0 && unreadCount > 0) {
+            // Only start loop if there are unread notifications
+            startAlarmLoop();
+          }
+        } catch (alertErr) {
+          console.error('❌ Station: Error processing station alerts:', alertErr);
+        }
       } catch (e) {
         console.error('❌ Error loading assigned reports:', e);
       }
@@ -377,6 +625,79 @@ const Sdashboard = () => {
     }, 15000);
     return () => clearInterval(interval);
   }, [mapLoaded]);
+
+  // On mount, proactively stop any lingering audio; polling will restart if needed
+  useEffect(() => {
+    stopAlarmLoop();
+    try {
+      if (window.__stationAlarmAudio) {
+        window.__stationAlarmAudio.pause();
+        window.__stationAlarmAudio.currentTime = 0;
+        window.__stationAlarmAudio.loop = false;
+      }
+    } catch (_) {}
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // (Bell dropdown logic moved to StationLayout; no local dropdown here)
+
+  // Real-time: listen for new assignments/forwards to this station and alert immediately
+  useEffect(() => {
+    let channel = null;
+    (async () => {
+      try {
+        const userData = JSON.parse(sessionStorage.getItem('userData') || localStorage.getItem('userData') || '{}');
+        const stationId = userData?.id;
+        if (!stationId) return;
+
+        channel = supabase
+          .channel(`station-assignments-${stationId}`)
+          .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'report_assignments' }, async (payload) => {
+            try {
+              const row = payload?.new;
+              if (!row) return;
+              if (row.assignee_type === 'station' && String(row.assignee_id) === String(stationId)) {
+                // Immediate alert and persist notification
+                const title = 'New Report Assigned to Your Station';
+                const message = `Report ID ${row.report_id}${row.note ? ` • Note: ${row.note}` : ''}`;
+                startAlarmLoop();
+                await supabase.from('notifications').insert({ user_id: stationId, user_type: 'station', type: 'assignment', title, message, is_read: false });
+                // Refresh lists
+                setTimeout(() => {
+                  // trigger reload via polling function by toggling mapLoaded or directly call load (not in scope here)
+                }, 300);
+              }
+            } catch (e) {
+              console.error('❌ Station: RT assignment handler error:', e);
+            }
+          })
+          .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'report_routes' }, async (payload) => {
+            try {
+              const row = payload?.new;
+              if (!row) return;
+              const expectedTarget = `station:${stationId}`;
+              if (row.target === expectedTarget) {
+                const title = 'Report Forwarded to Your Station';
+                const message = `Report ID ${row.report_id}${row.note ? ` • Note: ${row.note}` : ''}`;
+                startAlarmLoop();
+                await supabase.from('notifications').insert({ user_id: stationId, user_type: 'station', type: 'assignment', title, message, is_read: false });
+              }
+            } catch (e) {
+              console.error('❌ Station: RT forward handler error:', e);
+            }
+          })
+          .subscribe((status) => {
+            // Optional: log status
+          });
+      } catch (e) {
+        console.error('❌ Station: Failed to set up real-time subscription:', e);
+      }
+    })();
+
+    return () => {
+      try { channel && channel.unsubscribe(); } catch (_) {}
+    };
+  }, []);
 
   // Load responders assigned to this station
   useEffect(() => {
@@ -763,6 +1084,13 @@ const Sdashboard = () => {
                     )}
                   </div>
                 )}
+                {/* Show assignment note for directly assigned reports */}
+                {!selectedAssignedReport.is_forwarded && selectedAssignedReport.assignment_note && (
+                  <div className="mb-3 p-2 bg-slate-50 border border-slate-200 rounded">
+                    <p className="text-xs font-semibold text-slate-800 mb-1">📝 Assignment Note</p>
+                    <p className="text-xs text-slate-700">{selectedAssignedReport.assignment_note}</p>
+                  </div>
+                )}
                 
                 <div className="space-y-2 text-sm">
                   {selectedAssignedReport.reporter && (
@@ -893,6 +1221,56 @@ const Sdashboard = () => {
         </GoogleMap>
       </LoadScript>
       
+      {/* Sound enable prompt (shown only if browser blocked autoplay) */}
+      {showSoundPrompt && (
+        <div className="absolute top-4 right-4 z-30 space-x-2 flex items-center">
+          <button
+            onClick={async () => {
+              try {
+                if (audioContextRef.current && audioContextRef.current.state === 'suspended') {
+                  await audioContextRef.current.resume();
+                }
+                if (audioRef.current) {
+                  try { audioRef.current.muted = false; } catch (_) {}
+                  try { audioRef.current.load(); } catch (_) {}
+                  const isLooping = !!audioRef.current.loop && audioRef.current.paused === false;
+                  if (!isLooping) {
+                    audioRef.current.currentTime = 0;
+                    audioRef.current.volume = 1.0;
+                    await audioRef.current.play();
+                    setTimeout(() => { try { audioRef.current && audioRef.current.pause(); } catch (_) {} }, 1200);
+                  }
+                }
+                setShowSoundPrompt(false);
+                pendingAlertRef.current = false;
+                try { localStorage.setItem('stationAudioEnabled', 'true'); } catch (_) {}
+              } catch (err) {
+                console.warn('❌ Station: Explicit audio enable failed', err);
+              }
+            }}
+            className="px-3 py-2 bg-red-600 text-white rounded shadow hover:bg-red-700 text-sm"
+          >
+            Enable alert sound
+          </button>
+          <button
+            onClick={async () => {
+              try {
+                if (audioContextRef.current && audioContextRef.current.state === 'suspended') {
+                  await audioContextRef.current.resume();
+                }
+                await startAlarmLoop();
+              } catch (_) {}
+            }}
+            className="px-3 py-2 bg-gray-100 text-gray-800 rounded shadow hover:bg-gray-200 text-sm"
+          >
+            Test alarm
+          </button>
+          <p className="mt-1 text-xs text-gray-700 bg-white/80 rounded px-2 py-1">Click once to allow sound; required by your browser.</p>
+        </div>
+      )}
+
+      {/* (Bell moved to top-right StationLayout) */}
+
       {/* Loading Overlay */}
       {!mapLoaded && !mapError && (
         <div className="absolute inset-0 bg-white bg-opacity-90 flex items-center justify-center z-10">

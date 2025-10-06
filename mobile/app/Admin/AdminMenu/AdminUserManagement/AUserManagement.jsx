@@ -1,10 +1,11 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { View, Text, ScrollView, TouchableOpacity, TextInput, Modal, Alert } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
+import { supabase } from '../../../config/supabase';
 
 const AUserManagement = () => {
   const [searchQuery, setSearchQuery] = useState('');
-  const [activeTab, setActiveTab] = useState('Citizens'); // 'Citizens' or 'Stations'
+  const [activeTab, setActiveTab] = useState('Stations'); // 'Citizens' | 'Stations'
   const [showAddModal, setShowAddModal] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
   const [showProfileModal, setShowProfileModal] = useState(false);
@@ -18,71 +19,9 @@ const AUserManagement = () => {
     address: '',
   });
 
-  const citizens = [
-    { 
-      id: 1, 
-      name: 'John Doe', 
-      email: 'john@fira.com', 
-      phone: '+1234567890',
-      address: '123 Main St, City',
-      status: 'Active',
-      lastActive: '2 min ago',
-      reports: 5
-    },
-    { 
-      id: 2, 
-      name: 'Jane Smith', 
-      email: 'jane@fira.com', 
-      phone: '+1234567891',
-      address: '456 Oak Ave, Town',
-      status: 'Inactive',
-      lastActive: '1 hour ago',
-      reports: 2
-    },
-    { 
-      id: 3, 
-      name: 'Mike Johnson', 
-      email: 'mike@fira.com', 
-      phone: '+1234567892',
-      address: '789 Pine Rd, Village',
-      status: 'Active',
-      lastActive: '5 min ago',
-      reports: 8
-    },
-  ];
-
-  const stations = [
-    { 
-      id: 1, 
-      name: 'Central Fire Station', 
-      email: 'central@fira.com', 
-      phone: '+1234567890',
-      address: '100 Fire Station Rd, City Center',
-      status: 'Active',
-      lastActive: '1 min ago',
-      responders: 15
-    },
-    { 
-      id: 2, 
-      name: 'North Station', 
-      email: 'north@fira.com', 
-      phone: '+1234567891',
-      address: '200 North Ave, North District',
-      status: 'Active',
-      lastActive: '3 min ago',
-      responders: 12
-    },
-    { 
-      id: 3, 
-      name: 'South Station', 
-      email: 'south@fira.com', 
-      phone: '+1234567892',
-      address: '300 South Blvd, South District',
-      status: 'Inactive',
-      lastActive: '2 hours ago',
-      responders: 8
-    },
-  ];
+  const [citizens, setCitizens] = useState([]);
+  const [stations, setStations] = useState([]);
+  const [loading, setLoading] = useState(false);
 
   const currentUsers = activeTab === 'Citizens' ? citizens : stations;
   const filteredUsers = currentUsers.filter(user => 
@@ -94,6 +33,70 @@ const AUserManagement = () => {
     return status === 'Active' ? '#10b981' : '#ef4444';
   };
 
+  useEffect(() => {
+    const fetchUsers = async () => {
+      try {
+        setLoading(true);
+        // Fetch citizens
+        const { data: citizensData, error: citizensError } = await supabase
+          .from('citizen_users')
+          .select('*');
+
+        if (citizensError) {
+          console.error('Error fetching citizens from Supabase:', citizensError);
+        }
+
+        const mappedCitizens = (citizensData || []).map((data) => {
+          const name = data.first_name && data.last_name
+            ? `${data.first_name} ${data.last_name}`
+            : (data.first_name || data.last_name || data.display_name || (data.email ? data.email.split('@')[0] : 'Unknown User'));
+
+          return {
+            id: data.id,
+            name,
+            email: data.email || 'No email',
+            phone: data.phone || data.phone_number || 'No phone',
+            address: data.address || 'No address',
+            status: (data.status || 'active').toLowerCase() === 'active' ? 'Active' : 'Inactive',
+            lastActive: data.updated_at ? 'Recently active' : 'Unknown',
+            reports: data.reports || 0,
+          };
+        });
+
+        setCitizens(mappedCitizens);
+
+        // Fetch stations
+        const { data: stationsData, error: stationsError } = await supabase
+          .from('station_users')
+          .select('*')
+          .order('station_name', { ascending: true });
+
+        if (stationsError) {
+          console.error('Error fetching stations from Supabase:', stationsError);
+        }
+
+        const mappedStations = (stationsData || []).map((data) => ({
+          id: data.id,
+          name: data.station_name || data.name || 'Unnamed Station',
+          email: data.email || 'No email',
+          phone: data.phone || 'No number',
+          address: data.address || 'Address not specified',
+          status: (data.status || 'active').toLowerCase() === 'active' ? 'Active' : 'Inactive',
+          lastActive: data.updated_at ? 'Recently updated' : 'Unknown',
+          responders: 0, // Could be populated by another query if needed
+        }));
+
+        setStations(mappedStations);
+      } catch (e) {
+        console.error('Error fetching users (mobile admin):', e);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchUsers();
+  }, []);
+
   const handleAddUser = () => {
     if (!newUser.name || !newUser.email || !newUser.phone || !newUser.address) {
       Alert.alert('Error', 'Please fill in all fields');
@@ -102,13 +105,13 @@ const AUserManagement = () => {
 
     Alert.alert(
       'Confirm Registration',
-      `Are you sure you want to register this ${activeTab === 'Citizens' ? 'citizen' : 'station'}?`,
+      'Are you sure you want to register this station?',
       [
         { text: 'Cancel', style: 'cancel' },
         {
           text: 'Register',
           onPress: () => {
-            Alert.alert('Success', `${activeTab === 'Citizens' ? 'Citizen' : 'Station'} registered successfully!`);
+            Alert.alert('Success', 'Station registered successfully!');
             setShowAddModal(false);
             setNewUser({ name: '', email: '', phone: '', address: '' });
           }
@@ -252,16 +255,18 @@ const AUserManagement = () => {
           </View>
         </View>
 
-        {/* Add User Button */}
-        <TouchableOpacity 
-          className="bg-[#ff512f] rounded-lg p-4 mb-4 items-center shadow-sm"
-          onPress={() => setShowAddModal(true)}
-        >
-          <MaterialIcons name="person-add" size={24} color="#ffffff" />
-          <Text className="text-white font-semibold text-base mt-2">
-            Add New {activeTab === 'Citizens' ? 'Citizen' : 'Station'}
-          </Text>
-        </TouchableOpacity>
+        {/* Add Station Button - only for Stations tab */}
+        {activeTab === 'Stations' && (
+          <TouchableOpacity 
+            className="bg-[#ff512f] rounded-lg p-4 mb-4 items-center shadow-sm"
+            onPress={() => setShowAddModal(true)}
+          >
+            <MaterialIcons name="business" size={24} color="#ffffff" />
+            <Text className="text-white font-semibold text-base mt-2">
+              Add New Station
+            </Text>
+          </TouchableOpacity>
+        )}
 
         {/* User List */}
         <View className="bg-white rounded-lg shadow-sm">
@@ -291,10 +296,9 @@ const AUserManagement = () => {
                     <Text className="text-gray-800 font-semibold text-base">{user.name}</Text>
                     <Text className="text-gray-500 text-sm">{user.email}</Text>
                     <Text className="text-gray-400 text-xs">{user.lastActive}</Text>
-                    {activeTab === 'Citizens' && (
+                    {activeTab === 'Citizens' ? (
                       <Text className="text-blue-600 text-xs">Reports: {user.reports}</Text>
-                    )}
-                    {activeTab === 'Stations' && (
+                    ) : (
                       <TouchableOpacity onPress={() => openRespondersModal(user)}>
                         <Text className="text-blue-600 text-xs underline">Responders: {user.responders}</Text>
                       </TouchableOpacity>
@@ -328,12 +332,14 @@ const AUserManagement = () => {
                     >
                       <MaterialIcons name="history" size={16} color="#10b981" />
                     </TouchableOpacity>
-                    <TouchableOpacity
-                      className="w-8 h-8 rounded-full bg-yellow-100 items-center justify-center mr-2"
-                      onPress={() => openEditModal(user)}
-                    >
-                      <MaterialIcons name="edit" size={16} color="#f59e0b" />
-                    </TouchableOpacity>
+                    {activeTab === 'Stations' && (
+                      <TouchableOpacity
+                        className="w-8 h-8 rounded-full bg-yellow-100 items-center justify-center mr-2"
+                        onPress={() => openEditModal(user)}
+                      >
+                        <MaterialIcons name="edit" size={16} color="#f59e0b" />
+                      </TouchableOpacity>
+                    )}
                     <TouchableOpacity
                       className="w-8 h-8 rounded-full bg-red-100 items-center justify-center"
                       onPress={() => handleDisableUser(user)}
@@ -352,7 +358,7 @@ const AUserManagement = () => {
         </View>
       </View>
 
-      {/* Add User Modal */}
+      {/* Add Station Modal */}
       <Modal
         visible={showAddModal}
         animationType="slide"
@@ -361,12 +367,12 @@ const AUserManagement = () => {
         <View className="flex-1 bg-black/50 justify-center items-center">
           <View className="bg-white rounded-lg p-6 w-11/12 max-h-96">
             <Text className="text-xl font-bold text-gray-800 mb-4">
-              Add New {activeTab === 'Citizens' ? 'Citizen' : 'Station'}
+              Add New Station
             </Text>
             
             <TextInput
               className="border border-gray-300 rounded-lg p-3 mb-3"
-              placeholder={activeTab === 'Citizens' ? 'Full Name' : 'Station Name'}
+              placeholder="Station Name"
               value={newUser.name}
               onChangeText={(text) => setNewUser({...newUser, name: text})}
             />
@@ -412,7 +418,7 @@ const AUserManagement = () => {
         </View>
       </Modal>
 
-      {/* Edit User Modal */}
+      {/* Edit Station Modal */}
       <Modal
         visible={showEditModal}
         animationType="slide"
@@ -421,12 +427,12 @@ const AUserManagement = () => {
         <View className="flex-1 bg-black/50 justify-center items-center">
           <View className="bg-white rounded-lg p-6 w-11/12 max-h-96">
             <Text className="text-xl font-bold text-gray-800 mb-4">
-              Edit {activeTab === 'Citizens' ? 'Citizen' : 'Station'}
+              Edit Station
             </Text>
             
             <TextInput
               className="border border-gray-300 rounded-lg p-3 mb-3"
-              placeholder={activeTab === 'Citizens' ? 'Full Name' : 'Station Name'}
+              placeholder="Station Name"
               value={selectedUser?.name || ''}
               onChangeText={(text) => setSelectedUser({...selectedUser, name: text})}
             />
@@ -481,9 +487,7 @@ const AUserManagement = () => {
         <View className="flex-1 bg-black/50 justify-center items-center p-4">
           <View className="bg-white rounded-lg w-11/12">
             <View className="p-6">
-              <Text className="text-xl font-bold text-gray-800 mb-6 text-center">
-                {activeTab === 'Citizens' ? 'Citizen' : 'Station'} Profile
-              </Text>
+              <Text className="text-xl font-bold text-gray-800 mb-6 text-center">{activeTab === 'Citizens' ? 'Citizen Profile' : 'Station Profile'}</Text>
               
               <View className="space-y-4 mb-6">
                 <View className="border-b border-gray-200 pb-3">
@@ -536,40 +540,22 @@ const AUserManagement = () => {
       >
         <View className="flex-1 bg-black/50 justify-center items-center">
           <View className="bg-white rounded-lg p-6 w-11/12 max-h-96">
-            <Text className="text-xl font-bold text-gray-800 mb-4">
-              {activeTab === 'Citizens' ? 'Report' : 'Activity'} History
-            </Text>
+            <Text className="text-xl font-bold text-gray-800 mb-4">{activeTab === 'Citizens' ? 'Report History' : 'Activity History'}</Text>
             
             <ScrollView className="max-h-64">
-              {activeTab === 'Citizens' ? (
-                <View>
-                  <Text className="text-gray-600 mb-2">Recent Reports:</Text>
-                  <View className="bg-gray-50 p-3 rounded-lg mb-2">
-                    <Text className="font-semibold">Fire Emergency</Text>
-                    <Text className="text-sm text-gray-600">Reported 2 hours ago</Text>
-                    <Text className="text-sm text-gray-600">Status: Resolved</Text>
-                  </View>
-                  <View className="bg-gray-50 p-3 rounded-lg mb-2">
-                    <Text className="font-semibold">Medical Emergency</Text>
-                    <Text className="text-sm text-gray-600">Reported 1 day ago</Text>
-                    <Text className="text-sm text-gray-600">Status: In Progress</Text>
-                  </View>
+              <View>
+                <Text className="text-gray-600 mb-2">Recent Activities:</Text>
+                <View className="bg-gray-50 p-3 rounded-lg mb-2">
+                  <Text className="font-semibold">Emergency Response</Text>
+                  <Text className="text-sm text-gray-600">Responded 1 hour ago</Text>
+                  <Text className="text-sm text-gray-600">Type: Fire</Text>
                 </View>
-              ) : (
-                <View>
-                  <Text className="text-gray-600 mb-2">Recent Activities:</Text>
-                  <View className="bg-gray-50 p-3 rounded-lg mb-2">
-                    <Text className="font-semibold">Emergency Response</Text>
-                    <Text className="text-sm text-gray-600">Responded 1 hour ago</Text>
-                    <Text className="text-sm text-gray-600">Type: Fire</Text>
-                  </View>
-                  <View className="bg-gray-50 p-3 rounded-lg mb-2">
-                    <Text className="font-semibold">Training Session</Text>
-                    <Text className="text-sm text-gray-600">Completed 2 days ago</Text>
-                    <Text className="text-sm text-gray-600">Type: Safety Training</Text>
-                  </View>
+                <View className="bg-gray-50 p-3 rounded-lg mb-2">
+                  <Text className="font-semibold">Training Session</Text>
+                  <Text className="text-sm text-gray-600">Completed 2 days ago</Text>
+                  <Text className="text-sm text-gray-600">Type: Safety Training</Text>
                 </View>
-              )}
+              </View>
             </ScrollView>
             
             <TouchableOpacity

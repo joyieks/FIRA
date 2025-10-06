@@ -23,11 +23,7 @@ const Notification = () => {
     resetFireReportMonitoring
   } = useNotifications();
 
-  // Stop alert sound when notification page is viewed
-  React.useEffect(() => {
-    console.log('📄 Notification page mounted - stopping any playing alarms');
-    stopAlert();
-  }, [stopAlert]);
+  // Do NOT stop alarm just by opening the page; only stop on mark-as-read
 
 
   const getNotificationIcon = (type) => {
@@ -223,7 +219,10 @@ const Notification = () => {
                   <div className="flex items-center space-x-2 ml-4">
                     {!notification.is_read && (
                       <button
-                        onClick={() => markAsRead(notification.id)}
+                        onClick={() => {
+                          markAsRead(notification.id);
+                          stopAlert();
+                        }}
                         className="p-1 text-gray-400 hover:text-green-600"
                         title="Mark as read"
                       >

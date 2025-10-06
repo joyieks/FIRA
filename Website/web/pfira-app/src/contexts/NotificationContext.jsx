@@ -42,13 +42,21 @@ export const NotificationProvider = ({ children }) => {
         const enableAudio = async () => {
           if (audioRef.current) {
             try {
-              await audioRef.current.play();
-              audioRef.current.pause();
-              audioRef.current.currentTime = 0;
-              setAudioEnabled(true);
-              setAudioBlocked(false);
-              localStorage.setItem('notificationAudioEnabled', 'true');
-              console.log('🔊 Global audio context enabled successfully');
+              // If alarm is already playing, don't pause/stop it on click
+              if (audioRef.current.paused === false) {
+                setAudioEnabled(true);
+                setAudioBlocked(false);
+                try { localStorage.setItem('notificationAudioEnabled', 'true'); } catch (_) {}
+                console.log('🔊 Global audio already playing; preserved on interaction');
+              } else {
+                await audioRef.current.play();
+                audioRef.current.pause();
+                audioRef.current.currentTime = 0;
+                setAudioEnabled(true);
+                setAudioBlocked(false);
+                try { localStorage.setItem('notificationAudioEnabled', 'true'); } catch (_) {}
+                console.log('🔊 Global audio context enabled successfully');
+              }
             } catch (error) {
               console.log('🔊 Global audio play failed - user interaction required');
             }
@@ -66,6 +74,62 @@ export const NotificationProvider = ({ children }) => {
     loadAudio();
   }, []);
 
+  // Fallback: resolve admin ID from Supabase auth if not found in storage
+  useEffect(() => {
+    (async () => {
+      try {
+        if (currentAdminId) return;
+        console.log('🔍 Global: Trying Supabase auth to resolve admin ID…');
+        const { data: userData, error } = await supabase.auth.getUser();
+        if (error) {
+          console.warn('⚠️ Global: supabase.auth.getUser error:', error.message);
+          return;
+        }
+        const authUser = userData?.user;
+        if (!authUser) {
+          console.log('❌ Global: No authenticated user');
+          return;
+        }
+        const authId = authUser.id;
+        const authEmail = authUser.email || authUser.user_metadata?.email;
+        console.log('🔍 Global: Auth user:', { authId, authEmail });
+
+        // Try primary key match first
+        let adminId = null;
+        if (authId) {
+          const { data: byId } = await supabase
+            .from('admin_users')
+            .select('id')
+            .eq('id', authId)
+            .maybeSingle();
+          if (byId?.id) adminId = byId.id;
+        }
+        // Fallback: match by email
+        if (!adminId && authEmail) {
+          const { data: byEmail } = await supabase
+            .from('admin_users')
+            .select('id')
+            .eq('email', authEmail)
+            .maybeSingle();
+          if (byEmail?.id) adminId = byEmail.id;
+        }
+
+        if (adminId) {
+          setCurrentAdminId(adminId);
+          console.log('✅ Global: Resolved admin ID via Supabase auth:', adminId);
+          try {
+            const cache = JSON.stringify({ id: adminId, email: authEmail });
+            localStorage.setItem('userData', cache);
+          } catch (_) {}
+        } else {
+          console.warn('⚠️ Global: Could not resolve admin ID from auth');
+        }
+      } catch (e) {
+        console.error('❌ Global: Error resolving admin ID from auth:', e);
+      }
+    })();
+  }, [currentAdminId]);
+
   // Stop alert sound
   const stopAlert = () => {
     try {
@@ -74,6 +138,15 @@ export const NotificationProvider = ({ children }) => {
         audioRef.current.currentTime = 0;
         console.log('🔇 Global: Fire alarm sound stopped');
       }
+      // Also try to stop any fallback/new audio instances kept on window for safety
+      try {
+        if (typeof window !== 'undefined') {
+          if (window.__adminFallbackAudio && typeof window.__adminFallbackAudio.pause === 'function') {
+            window.__adminFallbackAudio.pause();
+            window.__adminFallbackAudio.currentTime = 0;
+          }
+        }
+      } catch (_) {}
     } catch (error) {
       console.error('🔇 Global: Error stopping fire alarm sound:', error);
     }
@@ -106,13 +179,14 @@ export const NotificationProvider = ({ children }) => {
               console.log('🔊 Global: Audio blocked by browser - trying alternative approach');
               // Try to create a new audio instance and play it
               try {
-                const newAudio = new Audio('/assets/sounds/fire_alarm_sound.mp3');
+            const newAudio = new Audio('/assets/sounds/fire_alarm_sound.mp3');
                 newAudio.volume = 1.0;
                 newAudio.loop = true;
                 await newAudio.play();
                 console.log('🔊 Global: New audio instance played successfully');
                 setAudioEnabled(true);
                 setAudioBlocked(false);
+            try { if (typeof window !== 'undefined') window.__adminFallbackAudio = newAudio; } catch (_) {}
                 return;
               } catch (newAudioError) {
                 console.log('🔊 Global: New audio instance also blocked');
@@ -137,6 +211,7 @@ export const NotificationProvider = ({ children }) => {
             fallbackAudio.loop = true;
             await fallbackAudio.play();
             console.log('🔊 Global: Fallback audio played successfully');
+            try { if (typeof window !== 'undefined') window.__adminFallbackAudio = fallbackAudio; } catch (_) {}
           } else {
             throw playError;
           }
@@ -150,6 +225,7 @@ export const NotificationProvider = ({ children }) => {
           directAudio.loop = true;
           await directAudio.play();
           console.log('🔊 Global: Direct audio creation played successfully');
+          try { if (typeof window !== 'undefined') window.__adminFallbackAudio = directAudio; } catch (_) {}
         } catch (directError) {
           console.error('🔊 Global: Direct audio creation failed:', directError);
           if (directError.name === 'NotAllowedError') {
@@ -168,19 +244,22 @@ export const NotificationProvider = ({ children }) => {
     }
   };
 
-  // Get current admin user ID from localStorage
+  // Get current admin user ID from storage (try multiple keys/locations)
   useEffect(() => {
-    const userDataStr = localStorage.getItem('userData');
-    console.log('🔍 Global: Raw userData from localStorage:', userDataStr);
-    
-    if (userDataStr) {
+    const getFirst = (...vals) => vals.find(Boolean);
+    const raw = getFirst(
+      localStorage.getItem('userData'),
+      sessionStorage.getItem('userData'),
+      localStorage.getItem('adminUser'),
+      sessionStorage.getItem('adminUser')
+    );
+    console.log('🔍 Global: Raw userData (any storage):', raw);
+    if (raw) {
       try {
-        const userData = JSON.parse(userDataStr);
+        const userData = JSON.parse(raw);
         console.log('🔍 Global: Parsed userData:', userData);
-        
         const adminId = userData?.id || userData?.uid || userData?.user_id;
         console.log('🔍 Global: Extracted admin ID:', adminId);
-        
         if (adminId) {
           setCurrentAdminId(adminId);
           console.log('✅ Global: Admin ID set successfully:', adminId);
@@ -191,7 +270,7 @@ export const NotificationProvider = ({ children }) => {
         console.error('❌ Global: Error parsing userData:', err);
       }
     } else {
-      console.error('❌ Global: No userData found in localStorage');
+      console.error('❌ Global: No userData found in storage');
     }
   }, []);
 
@@ -236,20 +315,28 @@ export const NotificationProvider = ({ children }) => {
           processedNotificationIdsRef.current.add(notification.id);
         });
         
-        // Play sound for new fire alerts (only if not currently alerting)
-        if (!isAlertingRef.current && newFireAlerts.length > 0) {
-          console.log('🔊 Global: Playing alarm for new notification(s)');
-          playAlert();
-          
-          isAlertingRef.current = true;
-          setTimeout(() => {
-            isAlertingRef.current = false;
-          }, 2000);
+        // Play sound for new fire alerts (guarded) – mirror station behavior by attempting regardless,
+        // browser will block until user interacts, after which our click listener enables it.
+        const audioEnabledSetting = localStorage.getItem('notificationAudioEnabled');
+        if (audioEnabledSetting !== 'false') {
+          if (!isAlertingRef.current) {
+            console.log('🔊 Global: Playing alarm for new notification(s)');
+            playAlert();
+            isAlertingRef.current = true;
+            setTimeout(() => { isAlertingRef.current = false; }, 2000);
+          }
         }
       }
       
       setNotifications(data || []);
-      setUnreadCount(data?.filter(n => !n.is_read).length || 0);
+      const unread = data?.filter(n => !n.is_read) || [];
+      setUnreadCount(unread.length);
+
+      // If there are no unread fire alerts, ensure alarm is stopped
+      const hasUnreadFire = (data || []).some(n => n.type === 'fire_alert' && !n.is_read);
+      if (!hasUnreadFire) {
+        stopAlert();
+      }
     } catch (err) {
       console.error('❌ Global: Error loading notifications:', err);
     } finally {
@@ -399,11 +486,11 @@ export const NotificationProvider = ({ children }) => {
         checkForNewFireReports();
       }, 1000); // Check every 1 second for new fire reports (very fast detection)
       
-      // Also poll notifications every 2 seconds to catch any that were created by mobile app
-      console.log('⏱️ Global: Starting 2-second polling interval for notifications');
+      // Also poll notifications every 5 seconds to catch any that were created by mobile app
+      console.log('⏱️ Global: Starting 5-second polling interval for notifications');
       const notificationRefreshInterval = setInterval(() => {
         loadNotifications();
-      }, 2000); // Check every 2 seconds for new notifications
+      }, 5000);
       
       console.log('✅ Global: Polling intervals started successfully');
       
@@ -465,10 +552,14 @@ export const NotificationProvider = ({ children }) => {
           // Update unread count
           setUnreadCount(prev => prev + 1);
           
-          // Don't play sound here - sound is already played by API polling detection
-          // This prevents duplicate/looping sounds
+          // Also play sound immediately on realtime fire_alert (guard against duplicates with cooldown flag)
           if (payload?.new?.type === 'fire_alert') {
-            console.log('🔥 Global: Fire alert notification received via real-time subscription (sound already played by API polling)');
+            console.log('🔥 Global: Fire alert notification received via real-time subscription - attempting to play sound');
+            if (!isAlertingRef.current) {
+              playAlert();
+              isAlertingRef.current = true;
+              setTimeout(() => { isAlertingRef.current = false; }, 2000);
+            }
           } else {
             console.log('📢 Global: Non-fire alert notification:', payload?.new?.type);
           }
@@ -506,6 +597,13 @@ export const NotificationProvider = ({ children }) => {
             }
             return prev; // No change
           });
+
+          // If this update marks a fire alert as read, stop the alarm immediately
+          try {
+            if (payload.new?.is_read && payload.new?.type === 'fire_alert') {
+              stopAlert();
+            }
+          } catch (_) {}
         } else {
           console.log('❌ Global: This notification update is not for the current admin');
         }

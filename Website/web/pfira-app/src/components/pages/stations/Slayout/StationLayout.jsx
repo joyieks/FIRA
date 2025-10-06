@@ -11,6 +11,7 @@ const StationLayout = ({ children }) => {
   const [profileOpen, setProfileOpen] = useState(false);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [notifications, setNotifications] = useState([]);
+  const [unreadCount, setUnreadCount] = useState(0);
   const [stationData, setStationData] = useState({
     station_name: 'Loading...',
     email: 'Loading...',
@@ -136,20 +137,30 @@ const StationLayout = ({ children }) => {
     }
   };
 
-  // Load notifications from localStorage (station-specific)
+  // Load station notifications from Supabase (persistent)
   useEffect(() => {
-    const loadNotifications = () => {
-      const storedNotifications = JSON.parse(sessionStorage.getItem('stationNotifications') || localStorage.getItem('stationNotifications') || '[]');
-      setNotifications(storedNotifications);
-    };
-    loadNotifications();
-    const handleStorageChange = (e) => {
-      if (e.key === 'stationNotifications') {
-        loadNotifications();
+    const load = async () => {
+      try {
+        const userData = JSON.parse(sessionStorage.getItem('userData') || localStorage.getItem('userData') || '{}');
+        const stationId = userData?.id;
+        if (!stationId) return;
+        const { data, error } = await supabase
+          .from('notifications')
+          .select('*')
+          .eq('user_id', stationId)
+          .eq('user_type', 'station')
+          .order('created_at', { ascending: false });
+        if (!error && Array.isArray(data)) {
+          setNotifications(data);
+          setUnreadCount(data.filter(n => !n.is_read).length);
+        }
+      } catch (e) {
+        // noop
       }
     };
-    window.addEventListener('storage', handleStorageChange);
-    return () => window.removeEventListener('storage', handleStorageChange);
+    load();
+    const interval = setInterval(load, 4000);
+    return () => clearInterval(interval);
   }, []);
 
   // Debug function to check station_users table
@@ -194,30 +205,26 @@ const StationLayout = ({ children }) => {
     };
   }, []);
 
-  const unreadCount = notifications.filter(n => !n.read).length;
-
   const markNotificationAsRead = (id) => {
     const updatedNotifications = notifications.map(notification =>
-      notification.id === id ? { ...notification, read: true } : notification
+      notification.id === id ? { ...notification, is_read: true } : notification
     );
     setNotifications(updatedNotifications);
-      sessionStorage.setItem('stationNotifications', JSON.stringify(updatedNotifications));
+    setUnreadCount(prev => Math.max(0, prev - 1));
+    try {
+      supabase.from('notifications').update({ is_read: true }).eq('id', id);
+    } catch (_) {}
   };
 
   const formatDate = (dateString) => {
+    if (!dateString) return 'Just now';
     const date = new Date(dateString);
+    if (isNaN(date.getTime())) return 'Just now';
     const now = new Date();
-    const diffInHours = Math.floor((now - date) / (1000 * 60 * 60));
-    if (diffInHours < 1) {
-      return 'Just now';
-    } else if (diffInHours < 24) {
-      return `${diffInHours} hour${diffInHours > 1 ? 's' : ''} ago`;
-    } else {
-      return date.toLocaleDateString('en-US', {
-        month: 'short',
-        day: 'numeric'
-      });
-    }
+    const diffInHours = Math.floor((now.getTime() - date.getTime()) / (1000 * 60 * 60));
+    if (diffInHours < 1) return 'Just now';
+    if (diffInHours < 24) return `${diffInHours} hour${diffInHours > 1 ? 's' : ''} ago`;
+    return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
   };
 
   return (
@@ -305,9 +312,21 @@ const StationLayout = ({ children }) => {
                           <div
                             key={notification.id}
                             className={`px-4 py-3 hover:bg-gray-50 cursor-pointer ${
-                              !notification.read ? 'bg-blue-50' : ''
+                              !notification.is_read ? 'bg-blue-50' : ''
                             }`}
-                            onClick={() => markNotificationAsRead(notification.id)}
+                            onClick={() => {
+                              markNotificationAsRead(notification.id);
+                              try {
+                                // Stop any active station alarm immediately
+                                if (window.__stationAlarmAudio) {
+                                  window.__stationAlarmAudio.pause();
+                                  window.__stationAlarmAudio.currentTime = 0;
+                                  window.__stationAlarmAudio.loop = false;
+                                }
+                              } catch (_) {}
+                              // Navigate to full notifications page
+                              window.location.href = '/station-dashboard/notification';
+                            }}
                           >
                             <div className="flex items-start space-x-3">
                               <div className="flex-shrink-0">
@@ -321,10 +340,10 @@ const StationLayout = ({ children }) => {
                                   {notification.message}
                                 </p>
                                 <p className="text-xs text-gray-400 mt-1">
-                                  {formatDate(notification.timestamp)}
+                                  {formatDate(notification.created_at)}
                                 </p>
                               </div>
-                              {!notification.read && (
+                              {!notification.is_read && (
                                 <div className="flex-shrink-0">
                                   <div className="h-2 w-2 bg-red-500 rounded-full"></div>
                                 </div>

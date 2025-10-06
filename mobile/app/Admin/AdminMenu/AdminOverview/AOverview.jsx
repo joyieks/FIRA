@@ -367,6 +367,30 @@ export default function AOverview() {
       }
 
       return true;
+    }).sort((a, b) => {
+      // Sort by most recent first (descending order)
+      const timestampA = a.created_at || a.timestamp || a.time;
+      const timestampB = b.created_at || b.timestamp || b.time;
+      
+      if (!timestampA && !timestampB) return 0;
+      if (!timestampA) return 1; // Put items without timestamp at the end
+      if (!timestampB) return -1; // Put items without timestamp at the end
+      
+      try {
+        const dateA = new Date(timestampA);
+        const dateB = new Date(timestampB);
+        
+        // If either date is invalid, put it at the end
+        if (isNaN(dateA.getTime()) && isNaN(dateB.getTime())) return 0;
+        if (isNaN(dateA.getTime())) return 1;
+        if (isNaN(dateB.getTime())) return -1;
+        
+        // Sort by most recent first (newest to oldest)
+        return dateB.getTime() - dateA.getTime();
+      } catch (error) {
+        console.warn('Error sorting reports by date:', error);
+        return 0;
+      }
     });
   }, [reports, searchQuery, statusFilter, timeRangeFilter]);
 

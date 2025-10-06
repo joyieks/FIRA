@@ -44,12 +44,12 @@ export default function AMap({ isSidebarOpen = false }) {
   const [jurisdictionRadius] = useState(2000);
   const [assigneeType, setAssigneeType] = useState('station');
   const [assigneeId, setAssigneeId] = useState('');
+  const [assignmentNote, setAssignmentNote] = useState('');
   const [redirectTarget, setRedirectTarget] = useState('');
   const [redirectNote, setRedirectNote] = useState('');
 
   // Dashboard states
   const [showDashboard, setShowDashboard] = useState(true);
-  const [showLegend, setShowLegend] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
   // Drawer gesture is disabled for this screen via exported options below.
@@ -209,10 +209,13 @@ export default function AMap({ isSidebarOpen = false }) {
         assignee_id: assigneeId,
         assigned_at: new Date().toISOString()
       };
+      console.log('[Assign-Mobile] assignmentNote=', assignmentNote);
       const { error } = await supabase
         .from('report_assignments')
-        .upsert(payload, { onConflict: 'report_id' });
+        .upsert({ ...payload, note: assignmentNote && assignmentNote.trim() ? assignmentNote.trim() : null }, { onConflict: 'report_id' });
       if (error) throw error;
+
+      setAssignmentNote('');
       Alert.alert('Assigned', 'Report assignment saved.');
     } catch (e) {
       console.error('Assign failed (mobile):', e);
@@ -440,31 +443,29 @@ export default function AMap({ isSidebarOpen = false }) {
             </View>
 
             {/* Fire Alarm Levels card */}
-            {showLegend && (
-              <View style={{ backgroundColor: 'white', borderRadius: 12, padding: 14, shadowColor: '#000', shadowOpacity: 0.05, shadowRadius: 6, shadowOffset: { width: 0, height: 2 }, elevation: 2 }}>
-                <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-                  <View>
-                    <Text style={{ fontSize: 16, fontWeight: '800', color: '#0f172a' }}>Fire Alarm Levels</Text>
-                    <Text style={{ color: '#94a3b8' }}>Severity indicators</Text>
-                  </View>
-                </View>
-                <View style={{ flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between' }}>
-                  {[
-                    { label: 'Fire Out', color: '#60a5fa' },
-                    { label: 'First Alarm', color: '#fde68a' },
-                    { label: 'Second Alarm', color: '#fed7aa' },
-                    { label: 'Third Alarm', color: '#fecaca' },
-                    { label: 'Fifth+ Alarm', color: '#ef4444' },
-                    { label: 'General Alarm', color: '#7f1d1d' },
-                  ].map((item) => (
-                    <View key={item.label} style={{ width: '48%', backgroundColor: '#f8fafc', borderRadius: 10, paddingVertical: 10, paddingHorizontal: 12, marginBottom: 10, flexDirection: 'row', alignItems: 'center' }}>
-                      <View style={{ width: 10, height: 10, borderRadius: 5, backgroundColor: item.color, marginRight: 8 }} />
-                      <Text style={{ color: '#0f172a', fontWeight: '600' }}>{item.label}</Text>
-                    </View>
-                  ))}
+            <View style={{ backgroundColor: 'white', borderRadius: 12, padding: 14, shadowColor: '#000', shadowOpacity: 0.05, shadowRadius: 6, shadowOffset: { width: 0, height: 2 }, elevation: 2 }}>
+              <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                <View>
+                  <Text style={{ fontSize: 16, fontWeight: '800', color: '#0f172a' }}>Fire Alarm Levels</Text>
+                  <Text style={{ color: '#94a3b8' }}>Severity indicators</Text>
                 </View>
               </View>
-            )}
+              <View style={{ flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between' }}>
+                {[
+                  { label: 'Fire Out', color: '#60a5fa' },
+                  { label: 'First Alarm', color: '#fde68a' },
+                  { label: 'Second Alarm', color: '#fed7aa' },
+                  { label: 'Third Alarm', color: '#fecaca' },
+                  { label: 'Fifth+ Alarm', color: '#ef4444' },
+                  { label: 'General Alarm', color: '#7f1d1d' },
+                ].map((item) => (
+                  <View key={item.label} style={{ width: '48%', backgroundColor: '#f8fafc', borderRadius: 10, paddingVertical: 10, paddingHorizontal: 12, marginBottom: 10, flexDirection: 'row', alignItems: 'center' }}>
+                    <View style={{ width: 10, height: 10, borderRadius: 5, backgroundColor: item.color, marginRight: 8 }} />
+                    <Text style={{ color: '#0f172a', fontWeight: '600' }}>{item.label}</Text>
+                  </View>
+                ))}
+              </View>
+            </View>
 
             {/* Recent Reports */}
             <View style={styles.reportsContainer}>
@@ -507,16 +508,6 @@ export default function AMap({ isSidebarOpen = false }) {
         >
           <MaterialIcons 
             name={showDashboard ? "dashboard" : "dashboard"} 
-            size={24} 
-            color="white" 
-          />
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={styles.fab}
-          onPress={() => setShowLegend(!showLegend)}
-        >
-          <MaterialIcons 
-            name={showLegend ? "legend-toggle" : "legend-toggle"} 
             size={24} 
             color="white" 
           />
@@ -672,6 +663,17 @@ export default function AMap({ isSidebarOpen = false }) {
                           </TouchableOpacity>
                         ))}
                       </ScrollView>
+                      <Text style={{ fontSize: 12, color: '#6b7280', marginTop: 10, marginBottom: 4 }}>Assignment Note (optional)</Text>
+                      <View style={{ borderWidth: 1, borderColor: '#d1d5db', borderRadius: 8 }}>
+                        <TextInput
+                          placeholder="Add a note for this assignment..."
+                          value={assignmentNote}
+                          onChangeText={setAssignmentNote}
+                          multiline
+                          numberOfLines={3}
+                          style={{ paddingHorizontal: 10, paddingVertical: 8, minHeight: 60, color: '#111827' }}
+                        />
+                      </View>
                       <TouchableOpacity onPress={handleAssign} style={{ marginTop: 8, paddingVertical: 10, backgroundColor: '#2563eb', borderRadius: 8, alignItems: 'center' }}>
                         <Text style={{ color: 'white', fontWeight: 'bold' }}>Assign</Text>
                       </TouchableOpacity>

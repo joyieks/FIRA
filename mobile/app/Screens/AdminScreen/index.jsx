@@ -11,9 +11,10 @@ import AFiraChat from '../../Admin/AdminMenu/AdminChat/AFiraChat';
 import AUserManagement from '../../Admin/AdminMenu/AdminUserManagement/AUserManagement';
 import AProfile from '../../Admin/AdminProfile/AProfile';
 import ASettings from '../../Admin/AdminMenu/AdminSettings/ASettings';
+import AAlertsWorker from '../../Admin/AdminMenu/AdminNotifications/AAlertsWorker';
 
 export default function AdminScreen() {
-  const [activeTab, setActiveTab] = useState(0); // Default to Overview
+  const [activeTab, setActiveTab] = useState(1); // Default to Map
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [selectedContact, setSelectedContact] = useState(null);
   const [unreadCount, setUnreadCount] = useState(0);
@@ -84,6 +85,8 @@ export default function AdminScreen() {
     >
       {/* Main Content */}
       <View style={{ flex: 1 }}>
+        {/* Global alerts worker mounts regardless of active tab */}
+        <AAlertsWorker />
         {activeTab === 1 ? (
           <AMap isSidebarOpen={sidebarOpen} />
         ) : (
