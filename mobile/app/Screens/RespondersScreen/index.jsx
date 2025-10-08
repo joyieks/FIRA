@@ -6,6 +6,7 @@ import RNotifications from '../../Responders/RespondersMenu/RespondersNotificati
 import RMap from '../../Responders/RespondersMenu/RespondersMap/RMap';
 import RFiraChat from '../../Responders/RespondersMenu/RespondersChat/RFiraChat';
 import RProfile from '../../Responders/RespondersProfile/RProfile';
+import RAlertsWorker from '../../Responders/RespondersMenu/RespondersNotifications/RAlertsWorker';
 
 export default function RespondersScreen() {
   const [activeTab, setActiveTab] = useState(2); // Default to Status
@@ -22,6 +23,8 @@ export default function RespondersScreen() {
 
   return (
     <View className="flex-1 bg-gray-100">
+      {/* Global alerts worker mounts regardless of active tab */}
+      <RAlertsWorker />
       {/* Removed items-center and justify-center */}
       <View className="flex-1">
         {TABS[activeTab].component}

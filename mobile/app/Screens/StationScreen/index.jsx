@@ -11,6 +11,7 @@ import SFiraChat from '../../Stations/StationsMenu/StationsChat/SFiraChat';
 import SUserManagement from '../../Stations/StationsMenu/StationsUserManagement/SUserManagement';
 import SProfile from '../../Stations/StationsProfile/SProfile';
 import SSettings from '../../Stations/StationsMenu/StationsSettings/SSettings';
+import SAlertsWorker from '../../Stations/StationsMenu/StationsNotifications/SAlertsWorker';
 
 export default function StationScreen() {
   const [activeTab, setActiveTab] = useState(0); // Default to Overview
@@ -80,6 +81,8 @@ export default function StationScreen() {
         paddingBottom: 90 + insets.bottom, // Add space for navbar
       }}
     >
+      {/* Global alerts worker mounts regardless of active tab */}
+      <SAlertsWorker />
       {/* Main Content */}
       <View style={{ flex: 1 }}>
         {TABS[activeTab].component}

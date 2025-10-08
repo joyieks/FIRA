@@ -1,80 +1,180 @@
-import React, { useState, useEffect } from 'react';
-import { View, Text, ScrollView, TouchableOpacity } from 'react-native';
+import React, { useState, useEffect, useRef } from 'react';
+import { View, Text, ScrollView, TouchableOpacity, RefreshControl, AppState } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { supabase } from '../../../config/supabase';
 
 export default function SNotifications({ onUnreadCountChange }) {
   const insets = useSafeAreaInsets();
-  const [notifications, setNotifications] = useState([
-    {
-      id: 1,
-      type: 'emergency',
-      title: 'Emergency Call Received',
-      message: 'Fire incident reported at 456 Oak Avenue. Dispatch units immediately. Priority 1 response.',
-      time: '2 minutes ago',
-      read: false,
-      priority: 'high'
-    },
-    {
-      id: 2,
-      type: 'equipment',
-      title: 'Equipment Maintenance Due',
-      message: 'Fire truck #3 requires scheduled maintenance. Schedule service within 24 hours.',
-      time: '30 minutes ago',
-      read: false,
-      priority: 'medium'
-    },
-    {
-      id: 3,
-      type: 'personnel',
-      title: 'Staff Schedule Update',
-      message: 'Officer Johnson called in sick. Adjust shift assignments for today.',
-      time: '1 hour ago',
-      read: false,
-      priority: 'medium'
-    },
-    {
-      id: 4,
-      type: 'inventory',
-      title: 'Inventory Alert',
-      message: 'Low stock alert: Fire extinguishers running low. Reorder supplies needed.',
-      time: '3 hours ago',
-      read: true,
-      priority: 'medium'
-    },
-    {
-      id: 5,
-      type: 'training',
-      title: 'Training Session',
-      message: 'Monthly safety training scheduled for tomorrow. All station personnel must attend.',
-      time: '5 hours ago',
-      read: true,
-      priority: 'low'
-    },
-    {
-      id: 6,
-      type: 'coordination',
-      title: 'Inter-Station Coordination',
-      message: 'Meeting with Station 2 tomorrow at 10:00 AM to discuss response protocols.',
-      time: '1 day ago',
-      read: true,
-      priority: 'low'
-    }
-  ]);
+  const [notifications, setNotifications] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [currentStationId, setCurrentStationId] = useState(null);
+  const appState = useRef(AppState.currentState);
 
-  const markAsRead = (id) => {
-    setNotifications(prev => 
-      prev.map(notification => 
-        notification.id === id 
-          ? { ...notification, read: true }
-          : notification
-      )
-    );
+  // NOTE: Sound/alarm management is handled by SAlertsWorker component
+  // which is mounted at the app level for consistent playback across all screens
+
+  // Get current station user ID from AsyncStorage
+  useEffect(() => {
+    const loadUserData = async () => {
+      try {
+        const userDataStr = await AsyncStorage.getItem('userData');
+        console.log('📱 Station: Raw userData from AsyncStorage:', userDataStr);
+        
+        if (userDataStr) {
+          const userData = JSON.parse(userDataStr);
+          console.log('📱 Station: Parsed userData:', userData);
+          
+          const resolvedId = userData?.id || userData?.uid;
+          console.log('📱 Station: Resolved ID:', resolvedId);
+          setCurrentStationId(resolvedId);
+        }
+      } catch (err) {
+        console.error('📱 Station: Error loading user data:', err);
+      }
+    };
+    loadUserData();
+  }, []);
+
+  // Load notifications on mount and setup polling
+  useEffect(() => {
+    if (currentStationId) {
+      console.log('📱 Station ID available, loading notifications');
+      loadNotifications();
+      
+      // Poll notifications every 2 seconds
+      const notificationInterval = setInterval(() => {
+        loadNotifications();
+      }, 2000);
+      
+      return () => {
+        clearInterval(notificationInterval);
+      };
+    }
+  }, [currentStationId]);
+
+  const loadNotifications = async () => {
+    if (!currentStationId) return;
+    
+    try {
+      setLoading(true);
+      const { data, error } = await supabase
+        .from('notifications')
+        .select('*')
+        .eq('user_id', currentStationId)
+        .eq('user_type', 'station')
+        .order('created_at', { ascending: false });
+
+      if (error) {
+        console.error('📱 Station: Error fetching notifications:', error);
+        return;
+      }
+
+      setNotifications(data || []);
+    } catch (err) {
+      console.error('📱 Station: Error loading notifications:', err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Real-time subscription for notification updates
+  useEffect(() => {
+    if (!currentStationId) return;
+
+    console.log('📱 Station: Setting up real-time subscription');
+
+    const channel = supabase
+      .channel(`station-notifications:${currentStationId}`)
+      .on('postgres_changes', {
+        event: 'INSERT',
+        schema: 'public',
+        table: 'notifications',
+        filter: `user_id=eq.${currentStationId}`
+      }, (payload) => {
+        console.log('📱 Station: Real-time notification received:', payload.new);
+        
+        if (payload.new?.user_type === 'station') {
+          setNotifications(prev => {
+            const exists = prev.some(n => n.id === payload.new.id);
+            if (!exists) {
+              return [payload.new, ...prev];
+            }
+            return prev;
+          });
+        }
+      })
+      .on('postgres_changes', {
+        event: 'UPDATE',
+        schema: 'public',
+        table: 'notifications',
+        filter: `user_id=eq.${currentStationId}`
+      }, (payload) => {
+        if (payload.new?.user_type === 'station') {
+          setNotifications(prev => 
+            prev.map(notification => 
+              notification.id === payload.new.id ? payload.new : notification
+            )
+          );
+        }
+      })
+      .subscribe((status) => {
+        console.log('📱 Station: Subscription status:', status);
+      });
+
+    return () => {
+      channel.unsubscribe();
+    };
+  }, [currentStationId]);
+
+  // Handle app state changes (reload notifications when app comes to foreground)
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', nextAppState => {
+      if (appState.current.match(/inactive|background/) && nextAppState === 'active') {
+        console.log('📱 Station: App has come to foreground, reloading notifications...');
+        if (currentStationId) {
+          loadNotifications();
+        }
+      }
+      appState.current = nextAppState;
+    });
+
+    return () => {
+      subscription.remove();
+    };
+  }, [currentStationId]);
+
+  const markAsRead = async (id) => {
+    try {
+      const { error } = await supabase
+        .from('notifications')
+        .update({ is_read: true })
+        .eq('id', id);
+
+      if (error) {
+        console.error('📱 Station: Error marking notification as read:', error);
+        return;
+      }
+
+      setNotifications(prev => 
+        prev.map(notification => 
+          notification.id === id 
+            ? { ...notification, is_read: true }
+            : notification
+        )
+      );
+      
+      // SAlertsWorker will handle stopping the alarm via real-time subscription
+    } catch (err) {
+      console.error('📱 Station: Error marking notification as read:', err);
+    }
   };
 
   const getNotificationIcon = (type) => {
+    // For station notifications, type='assignment' means fire report assigned/forwarded
     switch (type) {
-      case 'emergency':
+      case 'assignment':
         return { name: 'emergency', color: '#ef4444', bg: '#fef2f2' };
       case 'equipment':
         return { name: 'local-fire-department', color: '#dc2626', bg: '#fef2f2' };
@@ -84,27 +184,49 @@ export default function SNotifications({ onUnreadCountChange }) {
         return { name: 'inventory', color: '#3b82f6', bg: '#eff6ff' };
       case 'training':
         return { name: 'school', color: '#10b981', bg: '#f0fdf4' };
-      case 'coordination':
-        return { name: 'sync', color: '#f59e0b', bg: '#fffbeb' };
+      case 'system':
+        return { name: 'info', color: '#6b7280', bg: '#f9fafb' };
       default:
         return { name: 'notifications', color: '#6b7280', bg: '#f9fafb' };
     }
   };
 
-  const getPriorityColor = (priority) => {
-    switch (priority) {
-      case 'high':
-        return '#ef4444';
-      case 'medium':
-        return '#f59e0b';
-      case 'low':
-        return '#10b981';
-      default:
-        return '#6b7280';
-    }
+  const getPriorityColor = (type) => {
+    // Assignment notifications are high priority
+    if (type === 'assignment') return '#ef4444';
+    return '#6b7280';
   };
 
-  const unreadCount = notifications.filter(n => !n.read).length;
+  const formatDate = (dateString) => {
+    if (!dateString) return 'Unknown time';
+
+    let date = new Date(dateString);
+    if (Number.isNaN(date.getTime())) return 'Unknown time';
+
+    const now = new Date();
+    const diffMs = now.getTime() - date.getTime();
+    const diffInMinutes = Math.floor(diffMs / (1000 * 60));
+
+    if (diffInMinutes < 1) return 'Just now';
+    if (diffInMinutes < 60) return `${diffInMinutes} min${diffInMinutes > 1 ? 's' : ''} ago`;
+
+    const diffInHours = Math.floor(diffInMinutes / 60);
+    if (diffInHours < 24) return `${diffInHours} hour${diffInHours > 1 ? 's' : ''} ago`;
+
+    const diffInDays = Math.floor(diffInHours / 24);
+    if (diffInDays < 7) return `${diffInDays} day${diffInDays > 1 ? 's' : ''} ago`;
+
+    return date.toLocaleString('en-US', {
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: true,
+    });
+  };
+
+  const unreadCount = notifications.filter(n => !n.is_read).length;
 
   // Call the callback whenever unread count changes
   useEffect(() => {
@@ -147,16 +269,19 @@ export default function SNotifications({ onUnreadCountChange }) {
       <ScrollView 
         className="flex-1 px-4 pt-4"
         contentContainerStyle={{ paddingBottom: 100 + insets.bottom }}
+        refreshControl={
+          <RefreshControl refreshing={loading} onRefresh={loadNotifications} />
+        }
       >
         {notifications.map((notification) => {
           const icon = getNotificationIcon(notification.type);
-          const priorityColor = getPriorityColor(notification.priority);
+          const priorityColor = getPriorityColor(notification.type);
           
           return (
             <TouchableOpacity
               key={notification.id}
               className={`bg-white rounded-xl p-4 mb-3 shadow-sm border-l-4 ${
-                notification.read ? 'opacity-75' : ''
+                notification.is_read ? 'opacity-75' : ''
               }`}
               style={{ borderLeftColor: priorityColor }}
               onPress={() => markAsRead(notification.id)}
@@ -176,7 +301,7 @@ export default function SNotifications({ onUnreadCountChange }) {
                     <Text className="font-bold text-gray-800 text-base">
                       {notification.title}
                     </Text>
-                    {!notification.read && (
+                    {!notification.is_read && (
                       <View className="w-2 h-2 bg-fire rounded-full" />
                     )}
                   </View>
@@ -187,10 +312,18 @@ export default function SNotifications({ onUnreadCountChange }) {
                   
                   <View className="flex-row items-center justify-between">
                     <Text className="text-gray-400 text-xs">
-                      {notification.time}
+                      {formatDate(notification.created_at)}
                     </Text>
                     <View className="flex-row items-center">
-                      {notification.priority === 'high' && (
+                      {!notification.is_read && (
+                        <TouchableOpacity
+                          onPress={() => markAsRead(notification.id)}
+                          className="mr-2"
+                        >
+                          <MaterialIcons name="check-circle" size={20} color="#10b981" />
+                        </TouchableOpacity>
+                      )}
+                      {notification.type === 'assignment' && (
                         <View className="bg-red-100 px-2 py-1 rounded mr-2">
                           <Text className="text-red-600 text-xs font-medium">URGENT</Text>
                         </View>

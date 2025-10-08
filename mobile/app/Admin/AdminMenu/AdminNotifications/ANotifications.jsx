@@ -1,134 +1,17 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { View, Text, ScrollView, TouchableOpacity, RefreshControl, Vibration, AppState } from 'react-native';
+import { View, Text, ScrollView, TouchableOpacity, RefreshControl, AppState } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { supabase } from '../../../config/supabase';
-import { Audio } from 'expo-av';
 
 export default function ANotifications({ onUnreadCountChange }) {
-  // Static module reference so Metro can bundle the asset reliably
-  const SIREN_MODULE = require('../../../../assets/sounds/fire_alarm_sound.mp3');
   const [notifications, setNotifications] = useState([]);
   const [loading, setLoading] = useState(true);
   const [currentAdminId, setCurrentAdminId] = useState(null);
-  const sirenRef = useRef(null);
-  const hasActiveAlertRef = useRef(false);
-  const [lastFireReportCount, setLastFireReportCount] = useState(0);
-  const isInitializedRef = useRef(false);
-  const isAlertingRef = useRef(false);
-  const processedReportIdsRef = useRef(new Set());
-  const processedNotificationIdsRef = useRef(new Set());
   const appState = useRef(AppState.currentState);
 
-  // Preload siren sound
-  useEffect(() => {
-    let isMounted = true;
-    (async () => {
-      try {
-        console.log('📱 Setting up audio mode for iOS...');
-        await Audio.setAudioModeAsync({
-          playsInSilentModeIOS: true,
-          staysActiveInBackground: false,
-          shouldDuckAndroid: true,
-          playThroughEarpieceAndroid: false,
-          allowsRecordingIOS: false
-        });
-        console.log('📱 Audio mode configured successfully');
-        
-        console.log('📱 Loading fire alarm sound...');
-        const { sound } = await Audio.Sound.createAsync(
-          SIREN_MODULE,
-          { shouldPlay: false, volume: 1.0, isLooping: true }
-        );
-        
-        if (isMounted) {
-          sirenRef.current = sound;
-          console.log('📱 Fire alarm sound loaded successfully');
-        }
-      } catch (e) {
-        console.error('📱 Error loading fire alarm sound:', e);
-      }
-    })();
-    return () => {
-      isMounted = false;
-      if (sirenRef.current) {
-        sirenRef.current.unloadAsync().catch(()=>{});
-        sirenRef.current = null;
-      }
-    };
-  }, []);
-
-  const playAlert = async () => {
-    try {
-      console.log('📱 🔊 Attempting to play fire alarm...');
-      
-      if (!sirenRef.current) {
-        try {
-          const { sound } = await Audio.Sound.createAsync(
-            SIREN_MODULE,
-            { shouldPlay: false, volume: 1.0, isLooping: true }
-          );
-          sirenRef.current = sound;
-          console.log('📱 🔊 Created sound instance in playAlert');
-        } catch (createErr) {
-          console.error('📱 ❌ Failed to create sound in playAlert:', createErr);
-        }
-      }
-      if (sirenRef.current) {
-        const status = await sirenRef.current.getStatusAsync();
-        console.log('📱 Sound status:', status);
-        
-        if (status.isPlaying) {
-          console.log('📱 Sound already playing, stopping first...');
-          await sirenRef.current.stopAsync();
-        }
-        
-        await sirenRef.current.setIsLoopingAsync(true);
-        await sirenRef.current.setVolumeAsync(1.0);
-        await sirenRef.current.playAsync();
-        console.log('📱 🔊 Fire alarm playing!');
-        
-        // Vibrate with alert pattern
-        const pattern = [0, 1000, 500, 1000, 500, 1000];
-        Vibration.vibrate(pattern, true); // true = repeat
-        console.log('📱 📳 Vibration started');
-      } else {
-        console.error('📱 Sound ref is null, attempting to create new sound...');
-        // Fallback: try to create and play sound directly
-        try {
-          const { sound } = await Audio.Sound.createAsync(
-            SIREN_MODULE,
-            { shouldPlay: false, volume: 1.0, isLooping: true }
-          );
-          sirenRef.current = sound;
-          await sound.playAsync();
-          Vibration.vibrate([0, 1000, 500, 1000, 500, 1000], true);
-          console.log('📱 🔊 Fallback sound created and playing');
-        } catch (fallbackErr) {
-          console.error('📱 ❌ Fallback sound creation failed:', fallbackErr);
-        }
-      }
-    } catch (error) {
-      console.error('📱 Error playing alert:', error);
-    }
-  };
-
-  const stopAlert = async () => {
-    try {
-      console.log('📱 🔇 Stopping fire alarm...');
-      if (sirenRef.current) {
-        const status = await sirenRef.current.getStatusAsync();
-        if (status.isPlaying) {
-          await sirenRef.current.stopAsync();
-          console.log('📱 🔇 Fire alarm stopped');
-        }
-      }
-      Vibration.cancel();
-      console.log('📱 Vibration cancelled');
-    } catch (error) {
-      console.error('📱 Error stopping alert:', error);
-    }
-  };
+  // NOTE: Sound/alarm management is now handled by AAlertsWorker component
+  // which is mounted at the app level for consistent playback across all screens
 
   // Get current admin user ID from AsyncStorage
   useEffect(() => {
@@ -152,103 +35,18 @@ export default function ANotifications({ onUnreadCountChange }) {
     loadUserData();
   }, []);
 
-  // Check for new fire reports (same as web version)
-  const checkForNewFireReports = async () => {
-    try {
-      const timestamp = new Date().toLocaleTimeString();
-      console.log(`📱 🔥 [${timestamp}] Checking Fire Detection API...`);
-      
-      if (!currentAdminId) {
-        console.log('📱 No currentAdminId, skipping check');
-        return;
-      }
-      
-      const response = await fetch('https://fire-detection-api-production-f8a3.up.railway.app/get_reports');
-      
-      if (response.ok) {
-        const data = await response.json();
-        console.log('📱 🔥 API returned:', data.length, 'reports');
-        
-        const activeReports = data.filter(report => {
-          const hasCoords = report.latitude && report.longitude && !isNaN(report.latitude) && !isNaN(report.longitude);
-          const statusText = (report.status || '').toString().toLowerCase();
-          const isCancelled = statusText.includes('cancelled') || statusText.includes('canceled');
-          const isFireOut = statusText.includes('fire out');
-          return hasCoords && !isCancelled && !isFireOut;
-        });
-        
-        console.log('📱 🔥 Active reports:', activeReports.length);
-        
-        if (isInitializedRef.current) {
-          const newReports = activeReports.filter(report => 
-            !processedReportIdsRef.current.has(report.id)
-          );
-          
-          if (newReports.length > 0) {
-            console.log('📱 🔥 NEW FIRE REPORTS DETECTED!', newReports.length);
-            console.log('📱 🔥 New report IDs:', newReports.map(r => r.id));
-            
-            setLastFireReportCount(activeReports.length);
-            
-            if (!isAlertingRef.current) {
-              console.log('📱 🔊 Playing alert for new fire reports...');
-              await playAlert();
-              
-              isAlertingRef.current = true;
-              setTimeout(() => {
-                isAlertingRef.current = false;
-                console.log('📱 Alert cooldown finished');
-              }, 2000);
-            }
-            
-            // Mark as processed
-            newReports.forEach(report => {
-              processedReportIdsRef.current.add(report.id);
-            });
-            
-            // Reload notifications
-            setTimeout(() => {
-              loadNotifications();
-            }, 500);
-          }
-        } else {
-          console.log('📱 🔥 Initializing fire report tracking...');
-          isInitializedRef.current = true;
-          setLastFireReportCount(activeReports.length);
-          
-          activeReports.forEach(report => {
-            processedReportIdsRef.current.add(report.id);
-          });
-          console.log('📱 🔥 Initialized with', activeReports.length, 'reports');
-        }
-      }
-    } catch (error) {
-      console.error('📱 Error checking fire reports:', error);
-    }
-  };
-
+  // Load notifications on mount and setup polling
   useEffect(() => {
     if (currentAdminId) {
-      console.log('📱 Admin ID available, starting notification system');
+      console.log('📱 Admin ID available, loading notifications');
       loadNotifications();
-      
-      // Initial fire report check
-      checkForNewFireReports();
-      
-      // Fast polling for fire reports (1 second)
-      const fireReportInterval = setInterval(() => {
-        checkForNewFireReports();
-      }, 1000);
       
       // Poll notifications every 2 seconds
       const notificationInterval = setInterval(() => {
         loadNotifications();
       }, 2000);
       
-      console.log('📱 Polling intervals started');
-      
       return () => {
-        clearInterval(fireReportInterval);
         clearInterval(notificationInterval);
       };
     }
@@ -271,36 +69,7 @@ export default function ANotifications({ onUnreadCountChange }) {
         return;
       }
 
-      const list = data || [];
-      
-      // Check for new unread fire alerts
-      const newFireAlerts = list.filter(notification => 
-        notification.type === 'fire_alert' && 
-        !notification.is_read &&
-        !processedNotificationIdsRef.current.has(notification.id)
-      );
-      
-      if (newFireAlerts.length > 0) {
-        console.log('📱 🔥 Found new unread fire alerts:', newFireAlerts.length);
-        
-        newFireAlerts.forEach(notification => {
-          processedNotificationIdsRef.current.add(notification.id);
-        });
-        
-        if (!isAlertingRef.current) {
-          console.log('📱 🔊 Playing alarm for new notification(s)');
-          await playAlert();
-          
-          isAlertingRef.current = true;
-          setTimeout(() => {
-            isAlertingRef.current = false;
-          }, 2000);
-        }
-      }
-      
-      setNotifications(list);
-      
-      // Do not auto-stop here; stop only on explicit mark-as-read or realtime update
+      setNotifications(data || []);
     } catch (err) {
       console.error('📱 Error loading notifications:', err);
     } finally {
@@ -308,7 +77,7 @@ export default function ANotifications({ onUnreadCountChange }) {
     }
   };
 
-  // Real-time subscription (simplified, no filter)
+  // Real-time subscription for notification updates
   useEffect(() => {
     if (!currentAdminId) return;
 
@@ -333,11 +102,6 @@ export default function ANotifications({ onUnreadCountChange }) {
             }
             return prev;
           });
-          
-          // Don't play sound here - it's already played by API polling
-          if (payload?.new?.type === 'fire_alert') {
-            console.log('📱 Fire alert received (sound played by API polling)');
-          }
         }
       })
       .on('postgres_changes', {
@@ -351,11 +115,6 @@ export default function ANotifications({ onUnreadCountChange }) {
               notification.id === payload.new.id ? payload.new : notification
             )
           );
-          
-          // If fire alert marked as read, stop alarm
-          if (payload.new?.is_read && payload.new?.type === 'fire_alert') {
-            stopAlert();
-          }
         }
       })
       .subscribe((status) => {
@@ -367,14 +126,13 @@ export default function ANotifications({ onUnreadCountChange }) {
     };
   }, [currentAdminId]);
 
-  // Handle app state changes (pause polling when app is in background)
+  // Handle app state changes (reload notifications when app comes to foreground)
   useEffect(() => {
     const subscription = AppState.addEventListener('change', nextAppState => {
       if (appState.current.match(/inactive|background/) && nextAppState === 'active') {
-        console.log('📱 App has come to foreground, reloading...');
+        console.log('📱 App has come to foreground, reloading notifications...');
         if (currentAdminId) {
           loadNotifications();
-          checkForNewFireReports();
         }
       }
       appState.current = nextAppState;
@@ -405,11 +163,7 @@ export default function ANotifications({ onUnreadCountChange }) {
         )
       );
       
-      // Stop alarm when marking fire alert as read
-      const notification = notifications.find(n => n.id === id);
-      if (notification?.type === 'fire_alert') {
-        await stopAlert();
-      }
+      // AAlertsWorker will handle stopping the alarm via real-time subscription
     } catch (err) {
       console.error('📱 Error marking notification as read:', err);
     }

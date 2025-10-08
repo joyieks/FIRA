@@ -4,16 +4,14 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Audio } from 'expo-av';
 import { supabase } from '../../../config/supabase';
 
-// Headless background worker for admin alerts (no UI)
-export default function AAlertsWorker() {
+// Headless background worker for responder alerts (no UI)
+export default function RAlertsWorker() {
   const sirenRef = useRef(null);
   const sirenReadyRef = useRef(false);
-  const [adminId, setAdminId] = useState(null);
+  const [responderId, setResponderId] = useState(null);
   const isAlertingRef = useRef(false);
   const shouldBePlayingRef = useRef(false); // Track if alarm should be playing
   const processedNotificationIdsRef = useRef(new Set());
-  const processedReportIdsRef = useRef(new Set());
-  const isInitializedRef = useRef(false);
   const appState = useRef(AppState.currentState);
   const soundWatchdogRef = useRef(null);
 
@@ -24,7 +22,7 @@ export default function AAlertsWorker() {
     let isMounted = true;
     (async () => {
       try {
-        console.log('🔊 AAlertsWorker: Setting up audio mode...');
+        console.log('🔊 RAlertsWorker: Setting up audio mode...');
         
         // Configure audio mode with maximum priority for alarm sounds
         await Audio.setAudioModeAsync({
@@ -37,8 +35,8 @@ export default function AAlertsWorker() {
           interruptionModeAndroid: 1 // DO_NOT_MIX
         });
         
-        console.log('🔊 AAlertsWorker: Audio mode configured successfully');
-        console.log('🔊 AAlertsWorker: Creating sound instance...');
+        console.log('🔊 RAlertsWorker: Audio mode configured successfully');
+        console.log('🔊 RAlertsWorker: Creating sound instance...');
         
         const { sound } = await Audio.Sound.createAsync(
           SIREN_MODULE,
@@ -55,16 +53,16 @@ export default function AAlertsWorker() {
         if (isMounted) {
           sirenRef.current = sound;
           sirenReadyRef.current = true;
-          console.log('🔊 AAlertsWorker: Sound instance created and ready');
+          console.log('🔊 RAlertsWorker: Sound instance created and ready');
         }
       } catch (e) {
-        console.error('🔊 AAlertsWorker: Error setting up audio:', e);
+        console.error('🔊 RAlertsWorker: Error setting up audio:', e);
       }
     })();
     return () => {
       isMounted = false;
       if (sirenRef.current) {
-        console.log('🔊 AAlertsWorker: Cleaning up sound on unmount');
+        console.log('🔊 RAlertsWorker: Cleaning up sound on unmount');
         sirenRef.current.unloadAsync().catch(()=>{});
         sirenRef.current = null;
       }
@@ -79,7 +77,7 @@ export default function AAlertsWorker() {
           const status = await sirenRef.current.getStatusAsync();
           
           if (!status.isPlaying && status.isLoaded) {
-            console.log('⚠️ AAlertsWorker WATCHDOG: Sound stopped unexpectedly! Restarting...');
+            console.log('⚠️ RAlertsWorker WATCHDOG: Sound stopped unexpectedly! Restarting...');
             console.log('⚠️ Watchdog status:', {
               isLoaded: status.isLoaded,
               isPlaying: status.isPlaying,
@@ -94,10 +92,10 @@ export default function AAlertsWorker() {
             await sirenRef.current.setVolumeAsync(1.0);
             await sirenRef.current.playAsync();
             
-            console.log('⚠️ AAlertsWorker WATCHDOG: Sound restarted');
+            console.log('⚠️ RAlertsWorker WATCHDOG: Sound restarted');
           }
         } catch (error) {
-          console.error('⚠️ AAlertsWorker WATCHDOG: Error:', error);
+          console.error('⚠️ RAlertsWorker WATCHDOG: Error:', error);
         }
       }
     }, 1000); // Check every second
@@ -113,11 +111,11 @@ export default function AAlertsWorker() {
 
   const playAlert = async () => {
     try {
-      console.log('🔊 AAlertsWorker: playAlert called');
+      console.log('🔊 RAlertsWorker: playAlert called');
       
       // Ensure we have a sound instance
       if (!sirenRef.current || !sirenReadyRef.current) {
-        console.log('🔊 AAlertsWorker: No sound instance, creating new one...');
+        console.log('🔊 RAlertsWorker: No sound instance, creating new one...');
         try {
           await Audio.setAudioModeAsync({
             playsInSilentModeIOS: true,
@@ -141,16 +139,16 @@ export default function AAlertsWorker() {
           );
           sirenRef.current = sound;
           sirenReadyRef.current = true;
-          console.log('🔊 AAlertsWorker: New sound instance created');
+          console.log('🔊 RAlertsWorker: New sound instance created');
         } catch (createError) {
-          console.error('🔊 AAlertsWorker: Failed to create sound:', createError);
+          console.error('🔊 RAlertsWorker: Failed to create sound:', createError);
           return;
         }
       }
       
       if (sirenRef.current) {
         const status = await sirenRef.current.getStatusAsync();
-        console.log('🔊 AAlertsWorker: Current sound status:', {
+        console.log('🔊 RAlertsWorker: Current sound status:', {
           isLoaded: status.isLoaded,
           isPlaying: status.isPlaying,
           isLooping: status.isLooping,
@@ -159,7 +157,7 @@ export default function AAlertsWorker() {
         
         // Stop if already playing to restart
         if (status.isPlaying) {
-          console.log('🔊 AAlertsWorker: Stopping current playback to restart');
+          console.log('🔊 RAlertsWorker: Stopping current playback to restart');
           await sirenRef.current.stopAsync();
         }
         
@@ -173,7 +171,7 @@ export default function AAlertsWorker() {
         await sirenRef.current.setVolumeAsync(1.0);
         
         // Play the sound
-        console.log('🔊 AAlertsWorker: Starting playback...');
+        console.log('🔊 RAlertsWorker: Starting playback...');
         await sirenRef.current.playAsync();
         
         // Give audio system a moment to start
@@ -181,7 +179,7 @@ export default function AAlertsWorker() {
         
         // Verify it's playing
         const playingStatus = await sirenRef.current.getStatusAsync();
-        console.log('🔊 AAlertsWorker: After play attempt:', {
+        console.log('🔊 RAlertsWorker: After play attempt:', {
           isPlaying: playingStatus.isPlaying,
           isLooping: playingStatus.isLooping,
           positionMillis: playingStatus.positionMillis,
@@ -189,216 +187,182 @@ export default function AAlertsWorker() {
         });
         
         if (!playingStatus.isPlaying) {
-          console.error('🔊 AAlertsWorker: Sound failed to play! Retrying...');
+          console.error('🔊 RAlertsWorker: Sound failed to play! Retrying...');
           // Retry with fresh start
           await sirenRef.current.setPositionAsync(0);
           await sirenRef.current.playAsync();
           await new Promise(resolve => setTimeout(resolve, 100));
           
           const retryStatus = await sirenRef.current.getStatusAsync();
-          console.log('🔊 AAlertsWorker: After retry:', {
+          console.log('🔊 RAlertsWorker: After retry:', {
             isPlaying: retryStatus.isPlaying
           });
         }
         
         // Start vibration
         Vibration.vibrate([0, 1000, 500, 1000], true);
-        console.log('🔊 AAlertsWorker: Vibration started');
+        console.log('🔊 RAlertsWorker: Vibration started');
         
         // Mark that sound should be playing (for watchdog)
         shouldBePlayingRef.current = true;
-        console.log('🔊 AAlertsWorker: shouldBePlayingRef set to TRUE');
+        console.log('🔊 RAlertsWorker: shouldBePlayingRef set to TRUE');
       }
     } catch (error) {
-      console.error('🔊 AAlertsWorker: Error in playAlert:', error);
+      console.error('🔊 RAlertsWorker: Error in playAlert:', error);
     }
   };
 
   const stopAlert = async () => {
     try {
-      console.log('🔇 AAlertsWorker: stopAlert called');
+      console.log('🔇 RAlertsWorker: stopAlert called');
       
       // Mark that sound should NOT be playing (stops watchdog from restarting it)
       shouldBePlayingRef.current = false;
-      console.log('🔇 AAlertsWorker: shouldBePlayingRef set to FALSE');
+      console.log('🔇 RAlertsWorker: shouldBePlayingRef set to FALSE');
       
       if (sirenRef.current) {
         const status = await sirenRef.current.getStatusAsync();
-        console.log('🔇 AAlertsWorker: Current status:', {
+        console.log('🔇 RAlertsWorker: Current status:', {
           isPlaying: status.isPlaying,
           isLooping: status.isLooping
         });
         
         if (status.isPlaying) {
           await sirenRef.current.stopAsync();
-          console.log('🔇 AAlertsWorker: Sound stopped');
+          console.log('🔇 RAlertsWorker: Sound stopped');
         } else {
-          console.log('🔇 AAlertsWorker: Sound was not playing');
+          console.log('🔇 RAlertsWorker: Sound was not playing');
         }
       } else {
-        console.log('🔇 AAlertsWorker: No sound instance to stop');
+        console.log('🔇 RAlertsWorker: No sound instance to stop');
       }
       
       Vibration.cancel();
-      console.log('🔇 AAlertsWorker: Vibration cancelled');
+      console.log('🔇 RAlertsWorker: Vibration cancelled');
     } catch (error) {
-      console.error('🔇 AAlertsWorker: Error stopping alert:', error);
+      console.error('🔇 RAlertsWorker: Error stopping alert:', error);
     }
   };
 
-  // Resolve admin ID
+  // Resolve responder ID
   useEffect(() => {
     (async () => {
       try {
         const raw = await AsyncStorage.getItem('userData');
         if (raw) {
           const user = JSON.parse(raw);
-          setAdminId(user?.id || user?.uid || null);
+          const id = user?.id || user?.uid || null;
+          console.log('🔊 RAlertsWorker: Responder ID resolved:', id);
+          setResponderId(id);
         }
-      } catch (_) {}
+      } catch (e) {
+        console.error('🔊 RAlertsWorker: Error loading responder ID:', e);
+      }
     })();
   }, []);
 
-  // Check for new fire reports from API
-  const checkForNewFireReports = async () => {
-    if (!adminId) return;
-    try {
-      const response = await fetch('https://fire-detection-api-production-f8a3.up.railway.app/get_reports');
-      
-      if (response.ok) {
-        const data = await response.json();
-        
-        const activeReports = data.filter(report => {
-          const hasCoords = report.latitude && report.longitude && !isNaN(report.latitude) && !isNaN(report.longitude);
-          const statusText = (report.status || '').toString().toLowerCase();
-          const isCancelled = statusText.includes('cancelled') || statusText.includes('canceled');
-          const isFireOut = statusText.includes('fire out');
-          return hasCoords && !isCancelled && !isFireOut;
-        });
-        
-        if (isInitializedRef.current) {
-          const newReports = activeReports.filter(report => 
-            !processedReportIdsRef.current.has(report.id)
-          );
-          
-          if (newReports.length > 0 && !isAlertingRef.current) {
-            console.log('🔥 NEW FIRE REPORTS DETECTED (Worker):', newReports.length);
-            await playAlert();
-            
-            isAlertingRef.current = true;
-            setTimeout(() => {
-              isAlertingRef.current = false;
-            }, 2000);
-            
-            // Mark as processed
-            newReports.forEach(report => {
-              processedReportIdsRef.current.add(report.id);
-            });
-          }
-        } else {
-          isInitializedRef.current = true;
-          activeReports.forEach(report => {
-            processedReportIdsRef.current.add(report.id);
-          });
-        }
-      }
-    } catch (error) {
-      console.error('Error checking fire reports (Worker):', error);
-    }
-  };
-
-  // Load notifications and trigger alert on unread fire alerts
+  // Load responder notifications and trigger alert on unread fire alerts
   const loadNotifications = async () => {
-    if (!adminId) return;
+    if (!responderId) return;
     try {
       const { data, error } = await supabase
-        .from('notifications')
+        .from('responder_notifications')
         .select('*')
-        .eq('user_id', adminId)
-        .eq('user_type', 'admin')
+        .eq('responder_id', responderId)
         .order('created_at', { ascending: false });
-      if (error) return;
+      
+      if (error) {
+        console.error('🔊 RAlertsWorker: Error loading notifications:', error);
+        return;
+      }
 
       const list = data || [];
       
-      // Check if there are any unread fire alerts
-      const hasUnreadFire = list.some(n => n.type === 'fire_alert' && !n.is_read);
+      // Check if there are any unread high priority notifications
+      const hasUnreadAlert = list.some(n => n.priority === 'high' && !n.is_read);
       
-      // If NO unread fire alerts, stop the alarm
-      if (!hasUnreadFire && shouldBePlayingRef.current) {
-        console.log('🔇 No unread fire alerts found, stopping alarm...');
+      // If NO unread alerts, stop the alarm
+      if (!hasUnreadAlert && shouldBePlayingRef.current) {
+        console.log('🔇 No unread alerts found, stopping alarm...');
         await stopAlert();
         return;
       }
       
-      // Check for NEW fire alerts
-      const newFireAlerts = list.filter(n => n.type === 'fire_alert' && !n.is_read && !processedNotificationIdsRef.current.has(n.id));
-      if (newFireAlerts.length > 0 && !isAlertingRef.current) {
-        console.log('🔊 New fire alerts found, playing alarm...');
-        newFireAlerts.forEach(n => processedNotificationIdsRef.current.add(n.id));
+      // Check for NEW high priority alerts
+      const newAlerts = list.filter(n => n.priority === 'high' && !n.is_read && !processedNotificationIdsRef.current.has(n.id));
+      if (newAlerts.length > 0 && !isAlertingRef.current) {
+        console.log('🔊 New fire alerts found for responder, playing alarm...');
+        newAlerts.forEach(n => processedNotificationIdsRef.current.add(n.id));
         await playAlert();
         isAlertingRef.current = true;
         setTimeout(() => { isAlertingRef.current = false; }, 2000);
-      } else if (hasUnreadFire && !shouldBePlayingRef.current && !isAlertingRef.current) {
+      } else if (hasUnreadAlert && !shouldBePlayingRef.current && !isAlertingRef.current) {
         // Ensure alarm is playing when unread exists on first load/login
         console.log('🔊 Unread fire alerts exist, ensuring alarm is playing...');
         await playAlert();
       }
-    } catch (_) {}
+    } catch (error) {
+      console.error('🔊 RAlertsWorker: Error in loadNotifications:', error);
+    }
   };
 
-  // Start polling + realtime when adminId ready
+  // Start polling + realtime when responderId ready
   useEffect(() => {
-    if (!adminId) return;
+    if (!responderId) return;
     
-    // Initial checks
+    console.log('🔊 RAlertsWorker: Starting notification monitoring for responder:', responderId);
+    
+    // Initial check
     loadNotifications();
-    checkForNewFireReports();
 
     // Poll notifications every 2 seconds
     const notifInterval = setInterval(loadNotifications, 2000);
-    
-    // Poll fire reports every 1 second (fast polling for new reports)
-    const fireReportInterval = setInterval(checkForNewFireReports, 1000);
 
     const channel = supabase
-      .channel(`alerts-worker:admin:${adminId}`)
-      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'notifications' }, (payload) => {
-        if (payload.new?.user_id === adminId && payload.new?.user_type === 'admin') {
-          if (payload.new?.type === 'fire_alert') {
-            console.log('🔥 Real-time: New fire alert inserted');
-            playAlert();
-          }
+      .channel(`responder-alerts:${responderId}`)
+      .on('postgres_changes', { 
+        event: 'INSERT', 
+        schema: 'public', 
+        table: 'responder_notifications',
+        filter: `responder_id=eq.${responderId}`
+      }, (payload) => {
+        console.log('🔥 Real-time: New responder notification inserted:', payload.new);
+        if (payload.new?.priority === 'high') {
+          console.log('🔊 High priority alert received, playing alarm...');
+          playAlert();
         }
       })
-      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'notifications' }, (payload) => {
-        if (payload.new?.user_id === adminId && payload.new?.user_type === 'admin') {
-          if (payload.new?.is_read && payload.new?.type === 'fire_alert') {
-            console.log('✅ Real-time: Fire alert marked as read, checking all notifications...');
-            // Check all notifications to see if ANY fire alerts remain unread
-            loadNotifications();
-          }
+      .on('postgres_changes', { 
+        event: 'UPDATE', 
+        schema: 'public', 
+        table: 'responder_notifications',
+        filter: `responder_id=eq.${responderId}`
+      }, (payload) => {
+        if (payload.new?.is_read && payload.new?.priority === 'high') {
+          console.log('✅ Real-time: Alert marked as read, checking all notifications...');
+          // Check all notifications to see if ANY alerts remain unread
+          loadNotifications();
         }
       })
-      .subscribe();
+      .subscribe((status) => {
+        console.log('🔊 RAlertsWorker: Subscription status:', status);
+      });
 
     const appSub = AppState.addEventListener('change', next => {
       if (appState.current.match(/inactive|background/) && next === 'active') {
+        console.log('🔊 RAlertsWorker: App resumed, reloading notifications...');
         loadNotifications();
-        checkForNewFireReports();
       }
       appState.current = next;
     });
 
     return () => {
       clearInterval(notifInterval);
-      clearInterval(fireReportInterval);
       try { channel.unsubscribe(); } catch (_) {}
       appSub.remove();
     };
-  }, [adminId]);
+  }, [responderId]);
 
   return null;
 }
-
 
