@@ -598,10 +598,29 @@ export const NotificationProvider = ({ children }) => {
             return prev; // No change
           });
 
-          // If this update marks a fire alert as read, stop the alarm immediately
+          // If this update marks a fire alert as read, check if we should stop the alarm
           try {
             if (payload.new?.is_read && payload.new?.type === 'fire_alert') {
-              stopAlert();
+              console.log('✅ Global: Fire alert marked as read, checking all notifications...');
+              
+              // Check if there are ANY other unread fire alerts
+              // We need to check the updated notifications list
+              setNotifications(prevNotifications => {
+                const hasOtherUnreadFireAlerts = prevNotifications.some(n => 
+                  n.type === 'fire_alert' && 
+                  !n.is_read && 
+                  n.id !== payload.new.id // Exclude the one just marked as read
+                );
+                
+                if (!hasOtherUnreadFireAlerts) {
+                  console.log('🔇 Global: No more unread fire alerts, stopping alarm...');
+                  stopAlert();
+                } else {
+                  console.log('🔊 Global: Other unread fire alerts exist, keeping alarm active');
+                }
+                
+                return prevNotifications;
+              });
             }
           } catch (_) {}
         } else {
@@ -677,6 +696,10 @@ export const NotificationProvider = ({ children }) => {
       );
       
       setUnreadCount(0);
+      
+      // Stop alarm since all notifications are now read
+      console.log('🔇 Global: All notifications marked as read, stopping alarm...');
+      stopAlert();
     } catch (err) {
       console.error('❌ Global: Error marking all notifications as read:', err);
     }
