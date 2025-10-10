@@ -51,13 +51,16 @@ const AUserManagement = () => {
             ? `${data.first_name} ${data.last_name}`
             : (data.first_name || data.last_name || data.display_name || (data.email ? data.email.split('@')[0] : 'Unknown User'));
 
+          // Determine if user is active based on status field
+          const isActive = (data.status || 'active').toLowerCase() === 'active';
+
           return {
             id: data.id,
             name,
             email: data.email || 'No email',
             phone: data.phone || data.phone_number || 'No phone',
             address: data.address || 'No address',
-            status: (data.status || 'active').toLowerCase() === 'active' ? 'Active' : 'Inactive',
+            status: isActive ? 'Active' : 'Inactive',
             lastActive: data.updated_at ? 'Recently active' : 'Unknown',
             reports: data.reports || 0,
           };
@@ -75,16 +78,21 @@ const AUserManagement = () => {
           console.error('Error fetching stations from Supabase:', stationsError);
         }
 
-        const mappedStations = (stationsData || []).map((data) => ({
-          id: data.id,
-          name: data.station_name || data.name || 'Unnamed Station',
-          email: data.email || 'No email',
-          phone: data.phone || 'No number',
-          address: data.address || 'Address not specified',
-          status: (data.status || 'active').toLowerCase() === 'active' ? 'Active' : 'Inactive',
-          lastActive: data.updated_at ? 'Recently updated' : 'Unknown',
-          responders: 0, // Could be populated by another query if needed
-        }));
+        const mappedStations = (stationsData || []).map((data) => {
+          // Determine if user is active based on status field
+          const isActive = (data.status || 'active').toLowerCase() === 'active';
+          
+          return {
+            id: data.id,
+            name: data.station_name || data.name || 'Unnamed Station',
+            email: data.email || 'No email',
+            phone: data.phone || 'No number',
+            address: data.address || 'Address not specified',
+            status: isActive ? 'Active' : 'Inactive',
+            lastActive: data.updated_at ? 'Recently updated' : 'Unknown',
+            responders: 0, // Could be populated by another query if needed
+          };
+        });
 
         setStations(mappedStations);
       } catch (e) {
@@ -126,17 +134,65 @@ const AUserManagement = () => {
     setSelectedUser(null);
   };
 
-  const handleDisableUser = (user) => {
+  const handleDisableUser = async (user) => {
+    const isActive = user.status === 'Active';
+    const action = isActive ? 'disable' : 'enable';
+    
     Alert.alert(
-      'Disable User',
-      `Are you sure you want to ${user.status === 'Active' ? 'disable' : 'enable'} ${user.name}?`,
+      `${action.charAt(0).toUpperCase() + action.slice(1)} User`,
+      `Are you sure you want to ${action} ${user.name}?`,
       [
         { text: 'Cancel', style: 'cancel' },
         {
-          text: user.status === 'Active' ? 'Disable' : 'Enable',
+          text: action.charAt(0).toUpperCase() + action.slice(1),
           style: 'destructive',
-          onPress: () => {
-            Alert.alert('Success', `User ${user.status === 'Active' ? 'disabled' : 'enabled'} successfully!`);
+          onPress: async () => {
+            try {
+              setLoading(true);
+              
+              // Determine which table to update based on activeTab
+              const tableName = activeTab === 'Citizens' ? 'citizen_users' : 'station_users';
+              
+              const { error } = await supabase
+                .from(tableName)
+                .update({ 
+                  status: !isActive ? 'active' : 'inactive',
+                  updated_at: new Date().toISOString()
+                })
+                .eq('id', user.id);
+              
+              if (error) {
+                console.error(`Error ${action}ing user:`, error);
+                Alert.alert('Error', `Failed to ${action} user`);
+                return;
+              }
+
+              // Update local state
+              if (activeTab === 'Citizens') {
+                setCitizens(prevCitizens => 
+                  prevCitizens.map(c => 
+                    c.id === user.id 
+                      ? { ...c, status: !isActive ? 'Active' : 'Inactive' }
+                      : c
+                  )
+                );
+              } else {
+                setStations(prevStations => 
+                  prevStations.map(s => 
+                    s.id === user.id 
+                      ? { ...s, status: !isActive ? 'Active' : 'Inactive' }
+                      : s
+                  )
+                );
+              }
+
+              Alert.alert('Success', `User ${action}d successfully!`);
+            } catch (error) {
+              console.error(`Error ${action}ing user:`, error);
+              Alert.alert('Error', `Failed to ${action} user`);
+            } finally {
+              setLoading(false);
+            }
           }
         }
       ]

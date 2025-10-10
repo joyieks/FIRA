@@ -81,6 +81,9 @@ const citizens = citizensData.map(data => {
     fullName = emailName.charAt(0).toUpperCase() + emailName.slice(1);
   }
   
+  // Determine if user is active based on status field
+  const isActive = (data.status || 'active').toLowerCase() === 'active';
+
   return {
     id: data.id,
     firstName: data.first_name,
@@ -88,7 +91,7 @@ const citizens = citizensData.map(data => {
     email: data.email,
     phoneNumber: data.phone, // Changed from phone_number to phone
     displayName: data.display_name,
-    status: data.status || 'active',
+    status: isActive ? 'active' : 'inactive',
     reports: data.reports || 0,
     isVerified: data.is_verified || false,
     userType: data.user_type || 'citizen',
@@ -114,6 +117,9 @@ const citizens = citizensData.map(data => {
         const stations = stationsData.map(data => {
           console.log('🔍 Station data from Supabase:', { id: data.id, ...data }); // Debug log
           
+          // Check is_active field first, then fallback to status field
+          const isActive = data.is_active !== false && (data.status || 'active').toLowerCase() === 'active';
+          
           return {
             id: data.id,
             ...data,
@@ -125,7 +131,7 @@ const citizens = citizensData.map(data => {
             location: data.address || 'Address not specified',
             lastUpdate: data.updated_at ? 'Recently updated' : 'Unknown',
             responders: 0, // Will be updated below
-            status: data.status || 'active',
+            status: isActive ? 'active' : 'inactive',
             phone: data.phone || 'No number',
             isOnline: data.is_online || false
           };
@@ -198,80 +204,6 @@ const citizens = citizensData.map(data => {
   }) || [];
 
 
-
-  const handleDelete = async (type, id) => {
-    if (window.confirm('Are you sure you want to delete this user?')) {
-      try {
-        let userId = null;
-
-        if (type === 'citizens') {
-          // Get user_id before deleting
-          const { data: citizenData } = await supabase
-            .from('citizen_users')
-            .select('user_id')
-            .eq('id', id)
-            .single();
-          
-          userId = citizenData?.user_id;
-
-          // Delete citizen from Supabase
-          const { error } = await supabase
-            .from('citizen_users')
-            .delete()
-            .eq('id', id);
-
-          if (error) {
-            console.error('Error deleting citizen:', error);
-            throw new Error(`Failed to delete citizen: ${error.message}`);
-          }
-        } else {
-          // Get user_id before deleting station
-          const { data: stationData } = await supabase
-            .from('station_users')
-            .select('user_id')
-            .eq('id', id)
-            .single();
-          
-          userId = stationData?.user_id;
-
-          // Delete station from Supabase
-          const { error } = await supabase
-            .from('station_users')
-            .delete()
-            .eq('id', id);
-
-          if (error) {
-            console.error('Error deleting station:', error);
-            throw new Error(`Failed to delete station: ${error.message}`);
-          }
-        }
-
-        // Delete the associated auth user if it exists
-        if (userId) {
-          console.log('🗑️ Deleting auth user:', userId);
-          const { error: authError } = await supabase.auth.admin.deleteUser(userId);
-          
-          if (authError) {
-            console.warn('⚠️ Could not delete auth user:', authError.message);
-            // Don't throw error here - the main record is already deleted
-          } else {
-            console.log('✅ Auth user deleted successfully');
-          }
-        }
-
-        // Update local state
-        setUsers(prev => ({
-          ...prev,
-          [type]: prev[type].filter(user => user.id !== id)
-        }));
-
-        alert(`${type === 'citizens' ? 'Citizen' : 'Station'} deleted successfully!`);
-      } catch (error) {
-        console.error('Error deleting user:', error);
-        alert(`Failed to delete ${type === 'citizens' ? 'citizen' : 'station'}: ${error.message}`);
-      }
-    }
-  };
 
   const handleViewCitizenProfile = (citizen) => {
     setSelectedCitizen(citizen);

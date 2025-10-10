@@ -237,33 +237,40 @@ const SUserManagement = () => {
     setShowAddModal(true);
   };
 
-  const handleDelete = async (id, name) => {
+  const handleToggleStatus = async (id, name, currentStatus) => {
+    const isActive = currentStatus === 'active';
+    const action = isActive ? 'disable' : 'enable';
+    const newStatus = isActive ? 'inactive' : 'active';
+
     Alert.alert(
-      'Delete Responder',
-      `Are you sure you want to delete ${name}?`,
+      `${action.charAt(0).toUpperCase() + action.slice(1)} Responder`,
+      `Are you sure you want to ${action} ${name}?`,
       [
         { text: 'Cancel', style: 'cancel' },
         {
-          text: 'Delete',
-          style: 'destructive',
+          text: action.charAt(0).toUpperCase() + action.slice(1),
+          style: isActive ? 'destructive' : 'default',
           onPress: async () => {
             try {
               const { error } = await supabase
                 .from('responders')
-                .delete()
+                .update({ 
+                  status: newStatus,
+                  updated_at: new Date().toISOString()
+                })
                 .eq('id', id);
               
               if (error) {
-                console.error('Error deleting responder:', error);
-                Alert.alert('Error', 'Failed to delete responder');
+                console.error('Error updating responder status:', error);
+                Alert.alert('Error', `Failed to ${action} responder`);
                 return;
               }
 
-              Alert.alert('Success', 'Responder deleted successfully');
+              Alert.alert('Success', `Responder ${action}d successfully`);
               await fetchResponders();
             } catch (error) {
-              console.error('Error deleting responder:', error);
-              Alert.alert('Error', 'Failed to delete responder');
+              console.error('Error updating responder status:', error);
+              Alert.alert('Error', `Failed to ${action} responder`);
             }
           }
         }
@@ -366,6 +373,11 @@ const SUserManagement = () => {
                       </Text>
                       <Text className="text-gray-500 text-sm">{user.email}</Text>
                       <Text className="text-gray-400 text-xs">{user.user_position || 'No position'}</Text>
+                      <View className={`mt-1 px-2 py-1 rounded-full self-start ${user.status === 'inactive' ? 'bg-red-100' : 'bg-green-100'}`}>
+                        <Text className={`text-xs font-medium ${user.status === 'inactive' ? 'text-red-800' : 'text-green-800'}`}>
+                          {user.status === 'inactive' ? 'Disabled' : 'Active'}
+                        </Text>
+                      </View>
                     </View>
                   </View>
                   
@@ -384,10 +396,14 @@ const SUserManagement = () => {
                         <MaterialIcons name="edit" size={16} color="#3b82f6" />
                       </TouchableOpacity>
                       <TouchableOpacity
-                        className="w-8 h-8 rounded-full bg-red-100 items-center justify-center"
-                        onPress={() => handleDelete(user.id, `${user.first_name} ${user.last_name}`)}
+                        className={`w-8 h-8 rounded-full items-center justify-center ${user.status === 'inactive' ? 'bg-green-100' : 'bg-red-100'}`}
+                        onPress={() => handleToggleStatus(user.id, `${user.first_name} ${user.last_name}`, user.status)}
                       >
-                        <MaterialIcons name="delete" size={16} color="#ef4444" />
+                        <MaterialIcons 
+                          name={user.status === 'inactive' ? "check-circle" : "block"} 
+                          size={16} 
+                          color={user.status === 'inactive' ? "#10b981" : "#ef4444"} 
+                        />
                       </TouchableOpacity>
                     </View>
                   </View>
@@ -535,8 +551,10 @@ const SUserManagement = () => {
                           {selectedUser.first_name} {selectedUser.middle_name ? selectedUser.middle_name + ' ' : ''}{selectedUser.last_name}
                         </Text>
                         <Text className="text-gray-600 text-sm">{selectedUser.email}</Text>
-                        <View className="mt-2 bg-green-100 px-3 py-1 rounded-full self-start">
-                          <Text className="text-green-800 text-xs font-medium">Active Responder</Text>
+                        <View className={`mt-2 px-3 py-1 rounded-full self-start ${selectedUser.status === 'inactive' ? 'bg-red-100' : 'bg-green-100'}`}>
+                          <Text className={`text-xs font-medium ${selectedUser.status === 'inactive' ? 'text-red-800' : 'text-green-800'}`}>
+                            {selectedUser.status === 'inactive' ? 'Disabled Account' : 'Active Responder'}
+                          </Text>
                         </View>
                       </View>
                     </View>
@@ -584,6 +602,14 @@ const SUserManagement = () => {
                       <View>
                         <Text className="text-xs font-medium text-gray-500 mb-1">Station ID</Text>
                         <Text className="text-gray-900 font-mono text-xs">{selectedUser.station_id}</Text>
+                      </View>
+                      <View>
+                        <Text className="text-xs font-medium text-gray-500 mb-1">Account Status</Text>
+                        <View className={`px-2 py-1 rounded self-start ${selectedUser.status === 'inactive' ? 'bg-red-100' : 'bg-green-100'}`}>
+                          <Text className={`text-xs font-medium ${selectedUser.status === 'inactive' ? 'text-red-800' : 'text-green-800'}`}>
+                            {selectedUser.status === 'inactive' ? 'Disabled' : 'Active'}
+                          </Text>
+                        </View>
                       </View>
                       {selectedUser.created_at && (
                         <View>
