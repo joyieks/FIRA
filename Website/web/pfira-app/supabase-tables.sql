@@ -118,7 +118,7 @@ CREATE INDEX IF NOT EXISTS idx_responders_user_id ON responders(user_id);
 -- Tracks which station or responder is assigned to each fire report
 CREATE TABLE IF NOT EXISTS report_assignments (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    report_id TEXT UNIQUE NOT NULL,  -- Firebase report ID
+    report_id TEXT NOT NULL,  -- Firebase report ID
     assignee_type TEXT NOT NULL,  -- 'station' or 'responder'
     assignee_id UUID NOT NULL,  -- ID from station_users or responder_users
     assigned_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
@@ -167,6 +167,22 @@ ON assigned_report_snapshots FOR ALL USING (true);
 -- Create indexes for better performance
 CREATE INDEX IF NOT EXISTS idx_report_assignments_report_id ON report_assignments(report_id);
 CREATE INDEX IF NOT EXISTS idx_report_assignments_assignee ON report_assignments(assignee_type, assignee_id);
+-- Ensure a report can have multiple responder assignments but at most one station assignment
+DO $$
+BEGIN
+  -- Composite uniqueness to avoid duplicate identical assignments
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_indexes WHERE schemaname = 'public' AND indexname = 'uniq_report_assignment_composite'
+  ) THEN
+    EXECUTE 'CREATE UNIQUE INDEX uniq_report_assignment_composite ON report_assignments (report_id, assignee_type, assignee_id)';
+  END IF;
+  -- Partial unique index to allow only one station per report
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_indexes WHERE schemaname = 'public' AND indexname = 'uniq_report_station_per_report'
+  ) THEN
+    EXECUTE 'CREATE UNIQUE INDEX uniq_report_station_per_report ON report_assignments (report_id) WHERE assignee_type = ''station''' ;
+  END IF;
+END $$;
 CREATE INDEX IF NOT EXISTS idx_report_routes_report_id ON report_routes(report_id);
 CREATE INDEX IF NOT EXISTS idx_report_routes_target ON report_routes(target);
 CREATE INDEX IF NOT EXISTS idx_assigned_report_snapshots_report_id ON assigned_report_snapshots(report_id);

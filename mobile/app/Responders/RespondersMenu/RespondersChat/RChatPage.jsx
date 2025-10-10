@@ -3,7 +3,7 @@ import { View, Text, TextInput, TouchableOpacity, ScrollView, KeyboardAvoidingVi
 import { Ionicons } from '@expo/vector-icons';
 import { supabase } from '../../../config/supabase';
 import { useAuth } from '../../../config/AuthContext';
-//import { analyzeMessageForFireAlarm, updateMessageWithAIAnalysis } from '../../../services/openaiService';
+import { analyzeMessageForFireAlarm, updateMessageWithAIAnalysis } from '../../../services/aiService';
 
 export default function RChatPage({ contact, onBack }) {
   const { userData } = useAuth();
@@ -157,6 +157,26 @@ export default function RChatPage({ contact, onBack }) {
       const messageText = message.trim();
       setMessage(''); // Clear input immediately for better UX
 
+      // Determine report context: if chatting with a station and responder has an active assignment,
+      // attach the corresponding report_id so downstream systems can route AI suggestions correctly.
+      let reportId = null;
+      try {
+        if (contact.type === 'station') {
+          const { data: assignments, error: assignError } = await supabase
+            .from('report_assignments')
+            .select('report_id, assignee_type, assignee_id, assigned_at')
+            .eq('assignee_type', 'responder')
+            .eq('assignee_id', userData.id)
+            .order('assigned_at', { ascending: false })
+            .limit(1);
+          if (!assignError && assignments && assignments.length > 0) {
+            reportId = assignments[0].report_id || null;
+          }
+        }
+      } catch (_) {
+        // best-effort: if lookup fails, continue without context
+      }
+
       const messageData = {
         sender_id: userData.id,
         receiver_id: contact.id,
@@ -164,7 +184,8 @@ export default function RChatPage({ contact, onBack }) {
         receiver_type: contact.type,
         text: messageText,
         is_emergency: false,
-        is_read: false
+        is_read: false,
+        report_id: reportId
       };
 
       console.log('📤 Sending message:', messageData);
@@ -188,23 +209,15 @@ export default function RChatPage({ contact, onBack }) {
         setMessages(prev => [...prev, data[0]]);
         setTimeout(scrollToBottom, 100);
 
-        // AI Analysis: Analyze the message for fire alarm level
+        // AI Analysis: Only analyze when there is report context (report_id present)
         try {
-          console.log('🤖 Starting AI analysis for responder message:', messageText);
-          const analysis = await analyzeMessageForFireAlarm(messageText);
-          console.log('🤖 AI Analysis result:', analysis);
-          
-          if (analysis.suggested_alarm) {
-            // Update the message with AI analysis
-            await updateMessageWithAIAnalysis(data[0].id, analysis, supabase);
-            console.log('✅ Responder message updated with AI suggested alarm:', analysis.suggested_alarm);
-          } else {
-            console.log('ℹ️ No fire-related content detected in responder message');
+          if (reportId) {
+            const analysis = await analyzeMessageForFireAlarm(messageText);
+            if (analysis) {
+              await updateMessageWithAIAnalysis(data[0].id, analysis, supabase);
+            }
           }
-        } catch (aiError) {
-          console.error('❌ AI analysis failed for responder message:', aiError);
-          // Don't show error to user, just log it
-        }
+        } catch (_) {}
       }
     } catch (error) {
       console.error('Error sending message:', error);

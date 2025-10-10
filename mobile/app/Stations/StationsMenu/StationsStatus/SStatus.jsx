@@ -1,7 +1,7 @@
-import React, { useState, useEffect, useCallback } from 'react';
-import { View, Text, ScrollView, TouchableOpacity, RefreshControl, Modal, Image } from 'react-native';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { View, Text, TextInput, ScrollView, TouchableOpacity, Modal, Image, Alert, RefreshControl } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { supabase } from '../../../config/supabase';
 
@@ -9,7 +9,6 @@ export default function SStatus() {
   const insets = useSafeAreaInsets();
   const [stationId, setStationId] = useState(null);
   const [stationName, setStationName] = useState('');
-  const [assignedReports, setAssignedReports] = useState([]);
   const [loading, setLoading] = useState(true);
   const [selectedReport, setSelectedReport] = useState(null);
   const [showReportModal, setShowReportModal] = useState(false);
@@ -20,26 +19,16 @@ export default function SStatus() {
   const [resolvedReports, setResolvedReports] = useState(0);
   const [forwardedReports, setForwardedReports] = useState(0);
 
-  const API_URL = 'https://fire-detection-api-production-f8a3.up.railway.app';
+  // Search and reports
+  const [searchQuery, setSearchQuery] = useState('');
+  const [reports, setReports] = useState([]);
+  const [assignedRespondersByReport, setAssignedRespondersByReport] = useState({});
+  const [responders, setResponders] = useState([]);
+  const [responderSelection, setResponderSelection] = useState({}); // reportId -> Set(ids)
+  const [responderExisting, setResponderExisting] = useState({});
+  const [isAssigning, setIsAssigning] = useState(false);
 
-  // Get station ID from AsyncStorage
-  useEffect(() => {
-    const loadStationData = async () => {
-      try {
-        const userDataStr = await AsyncStorage.getItem('userData');
-        if (userDataStr) {
-          const userData = JSON.parse(userDataStr);
-          const id = userData?.id || userData?.uid;
-          setStationId(id);
-          setStationName(userData?.station_name || 'Fire Station');
-          console.log('📱 Station Overview: Station ID:', id);
-        }
-      } catch (err) {
-        console.error('📱 Station Overview: Error loading station data:', err);
-      }
-    };
-    loadStationData();
-  }, []);
+  const API_URL = 'https://fire-detection-api-production-f8a3.up.railway.app';
 
   // Format time helper
   const formatTime = (timestamp) => {
@@ -68,7 +57,26 @@ export default function SStatus() {
     }
   };
 
-  // Load assigned reports
+  // Get station ID from AsyncStorage
+  useEffect(() => {
+    const loadStationData = async () => {
+      try {
+        const userDataStr = await AsyncStorage.getItem('userData');
+        if (userDataStr) {
+          const userData = JSON.parse(userDataStr);
+          const id = userData?.id || userData?.uid;
+          setStationId(id);
+          setStationName(userData?.station_name || 'Fire Station');
+          console.log('📱 Station Overview: Station ID:', id);
+        }
+      } catch (err) {
+        console.error('📱 Station Overview: Error loading station data:', err);
+      }
+    };
+    loadStationData();
+  }, []);
+
+  // Unified load function - combines both previous loads
   const loadAssignedReports = useCallback(async () => {
     if (!stationId) return;
     
@@ -76,8 +84,8 @@ export default function SStatus() {
       setLoading(true);
       console.log('📱 Station Overview: Loading reports for station:', stationId);
 
-      // Fetch assignments
-      const { data: assignments, error: assignError } = await supabase
+      // Fetch station assignments
+      const { data: stationAssignments, error: assignError } = await supabase
         .from('report_assignments')
         .select('report_id, assigned_at, note')
         .eq('assignee_type', 'station')
@@ -85,7 +93,24 @@ export default function SStatus() {
 
       if (assignError) {
         console.error('📱 Station Overview: Error fetching assignments:', assignError);
-        return;
+      }
+
+      // Fetch responders of this station
+      const { data: stationResponders } = await supabase
+        .from('responders')
+        .select('id')
+        .eq('station_id', stationId);
+      const responderIds = (stationResponders || []).map(r => r.id);
+
+      // Fetch responder assignments
+      let responderAssignments = [];
+      if (responderIds.length > 0) {
+        const { data: respAssigns } = await supabase
+          .from('report_assignments')
+          .select('report_id')
+          .eq('assignee_type', 'responder')
+          .in('assignee_id', responderIds);
+        responderAssignments = respAssigns || [];
       }
 
       // Fetch forwards
@@ -107,15 +132,17 @@ export default function SStatus() {
         });
       });
 
-      // Combine IDs
-      const assignedIds = new Set((assignments || []).map(a => String(a.report_id)));
-      const forwardedIds = new Set((forwarded || []).map(f => String(f.report_id)));
-      const ids = new Set([...assignedIds, ...forwardedIds]);
+      // Combine all IDs
+      const ids = new Set([
+        ...((stationAssignments || []).map(a => String(a.report_id))),
+        ...((responderAssignments || []).map(a => String(a.report_id))),
+        ...((forwarded || []).map(f => String(f.report_id)))
+      ]);
 
-      console.log(`📱 Station Overview: ${assignedIds.size} assigned, ${forwardedIds.size} forwarded`);
+      console.log(`📱 Station Overview: ${ids.size} total reports`);
 
       if (ids.size === 0) {
-        setAssignedReports([]);
+        setReports([]);
         setTotalReports(0);
         setActiveReports(0);
         setResolvedReports(0);
@@ -145,6 +172,7 @@ export default function SStatus() {
           prediction: r.prediction,
           confidence: r.confidence,
           structure: r.structure_type || r.structure,
+          structure_confidence: r.structure_confidence,
           smokeIntensity: r.smoke_intensity,
           smokeConfidence: r.smoke_confidence,
           numberOfStructures: r.structures_affected || r.number_of_structures_on_fire,
@@ -160,7 +188,7 @@ export default function SStatus() {
 
       // Sort by timestamp
       const sorted = mapped.sort((a, b) => new Date(b.timestamp || 0) - new Date(a.timestamp || 0));
-      setAssignedReports(sorted);
+      setReports(sorted);
 
       // Calculate statistics
       setTotalReports(sorted.length);
@@ -174,8 +202,37 @@ export default function SStatus() {
       }).length);
       setForwardedReports(sorted.filter(r => r.is_forwarded).length);
 
+      // Load assigned responders per report
+      const idArr = [...ids];
+      const { data: ra } = await supabase
+        .from('report_assignments')
+        .select('report_id, assignee_id')
+        .in('report_id', idArr)
+        .eq('assignee_type', 'responder');
+      
+      const byReport = ra?.reduce((acc, row) => {
+        const rid = String(row.report_id);
+        (acc[rid] = acc[rid] || []).push(row.assignee_id);
+        return acc;
+      }, {}) || {};
+
+      // Resolve names
+      const allResponderIds = Array.from(new Set(Object.values(byReport).flat()));
+      if (allResponderIds.length) {
+        const { data: respInfo } = await supabase
+          .from('responders')
+          .select('id, first_name, last_name')
+          .in('id', allResponderIds);
+        const nameMap = new Map((respInfo||[]).map(r => [r.id, `${r.first_name||''} ${r.last_name||''}`.trim() || 'Responder']));
+        const labeled = Object.fromEntries(Object.entries(byReport).map(([rid, arr]) => [rid, arr.map(id => nameMap.get(id) || 'Responder')]));
+        setAssignedRespondersByReport(labeled);
+      } else {
+        setAssignedRespondersByReport({});
+      }
+
     } catch (error) {
       console.error('📱 Station Overview: Error loading reports:', error);
+      setReports([]);
     } finally {
       setLoading(false);
     }
@@ -187,6 +244,31 @@ export default function SStatus() {
       loadAssignedReports();
     }
   }, [stationId, loadAssignedReports]);
+
+  // Load responders for this station for assignment UI
+  useEffect(() => {
+    const loadResponders = async () => {
+      try {
+        if (!stationId) return;
+        const { data, error } = await supabase
+          .from('responders')
+          .select('id, first_name, last_name, email')
+          .eq('station_id', stationId);
+        if (!error) setResponders(data || []);
+      } catch (_) {}
+    };
+    loadResponders();
+  }, [stationId]);
+
+  // Filter reports based on search
+  const filteredReports = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    if (!q) return reports;
+    return reports.filter(r => 
+      (r.location||'').toLowerCase().includes(q) || 
+      (r.description||'').toLowerCase().includes(q)
+    );
+  }, [reports, searchQuery]);
 
   // Get status color
   const getStatusColor = (status) => {
@@ -291,20 +373,36 @@ export default function SStatus() {
           </View>
         </View>
 
+        {/* Search Bar */}
+        <View className="px-4 mb-4">
+          <View className="bg-white rounded-xl p-3">
+            <TextInput
+              value={searchQuery}
+              onChangeText={setSearchQuery}
+              placeholder="Search reports by location or description..."
+              className="text-gray-800"
+            />
+          </View>
+        </View>
+
         {/* Reports List */}
         <View className="px-4">
           <Text className="text-lg font-bold text-gray-800 mb-3">Fire Reports</Text>
           
-          {assignedReports.length === 0 ? (
+          {loading ? (
+            <View className="bg-white rounded-xl p-8 shadow-sm items-center">
+              <Text className="text-gray-500">Loading reports...</Text>
+            </View>
+          ) : filteredReports.length === 0 ? (
             <View className="bg-white rounded-xl p-8 shadow-sm items-center">
               <MaterialIcons name="inbox" size={64} color="#9ca3af" />
               <Text className="text-xl font-bold text-gray-600 mt-4 mb-2">No Reports</Text>
               <Text className="text-gray-500 text-center">
-                No fire reports assigned to your station yet
+                {searchQuery ? 'No reports match your search' : 'No fire reports assigned to your station yet'}
               </Text>
             </View>
           ) : (
-            assignedReports.map((report) => {
+            filteredReports.map((report) => {
               const statusColor = getStatusColor(report.status);
               const alarmColor = getAlarmLevelColor(report.suggestedAlarmLevel);
               
@@ -312,8 +410,20 @@ export default function SStatus() {
                 <TouchableOpacity
                   key={report.id}
                   className="bg-white rounded-xl p-4 mb-3 shadow-sm"
-                  onPress={() => {
+                  onPress={async () => {
                     setSelectedReport(report);
+                    // Preload assigned responders for this report
+                    try {
+                      const rid = String(report.id);
+                      const { data: assigns } = await supabase
+                        .from('report_assignments')
+                        .select('assignee_id')
+                        .eq('report_id', rid)
+                        .eq('assignee_type', 'responder');
+                      const ids = new Set((assigns || []).map(a => a.assignee_id));
+                      setResponderExisting(prev => ({ ...prev, [rid]: new Set(ids) }));
+                      setResponderSelection(prev => ({ ...prev, [rid]: new Set(ids) }));
+                    } catch (_) {}
                     setShowReportModal(true);
                   }}
                 >
@@ -344,7 +454,7 @@ export default function SStatus() {
                     <Text className="text-gray-600 text-sm ml-2">{report.reporter}</Text>
                   </View>
 
-                  <View className="flex-row items-center justify-between">
+                  <View className="flex-row items-center justify-between mb-2">
                     <View className="flex-row items-center">
                       <MaterialIcons name="warning" size={16} color="#6b7280" />
                       <View style={{ backgroundColor: alarmColor.bg, borderColor: alarmColor.border }} className="px-3 py-1 rounded-lg ml-2 border">
@@ -358,6 +468,17 @@ export default function SStatus() {
                       <Text className="text-white text-xs font-bold">View Details</Text>
                     </TouchableOpacity>
                   </View>
+
+                  {/* Assigned Responders */}
+                  {!!assignedRespondersByReport[String(report.id)] && assignedRespondersByReport[String(report.id)].length > 0 && (
+                    <View className="flex-row flex-wrap mt-2">
+                      {assignedRespondersByReport[String(report.id)].map((name, idx) => (
+                        <Text key={`${report.id}-${idx}`} className="text-xs mr-2 mb-2 px-2 py-1 rounded-full bg-green-100 text-green-800">
+                          {name}
+                        </Text>
+                      ))}
+                    </View>
+                  )}
                 </TouchableOpacity>
               );
             })
@@ -368,12 +489,12 @@ export default function SStatus() {
       {/* Report Details Modal */}
       <Modal
         visible={showReportModal}
-        animationType="slide"
+        animationType="fade"
         transparent={true}
         onRequestClose={() => setShowReportModal(false)}
       >
-        <View className="flex-1 bg-black bg-opacity-50 justify-end">
-          <View className="bg-white rounded-t-3xl" style={{ maxHeight: '90%' }}>
+        <View className="flex-1 bg-black bg-opacity-50 justify-center items-center px-4">
+          <View className="bg-white rounded-2xl w-full" style={{ maxWidth: 600, maxHeight: '90%' }}>
             <View className="flex-row justify-between items-center p-4 border-b border-gray-200">
               <Text className="text-xl font-bold text-gray-900">Report Details</Text>
               <TouchableOpacity onPress={() => setShowReportModal(false)}>
@@ -430,28 +551,55 @@ export default function SStatus() {
                     <Text className="text-gray-900 font-semibold">{selectedReport.reporter}</Text>
                   </View>
 
-                  {/* Status & Alarm Level */}
+                  {/* Status Changer */}
+                  <View className="mb-4">
+                    <Text className="text-gray-600 text-sm mb-2">Change Status</Text>
+                    <View className="flex-row flex-wrap">
+                      {['On Going', 'Under Control', 'Fire Out'].map((s) => (
+                        <TouchableOpacity 
+                          key={s} 
+                          onPress={async () => {
+                            try {
+                              setIsAssigning(true);
+                              const res = await fetch(`${API_URL}/update_report_status`, {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ report_id: selectedReport.id, status: s })
+                              });
+                              if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                              setReports(prev => prev.map(r => r.id === selectedReport.id ? { ...r, status: s } : r));
+                              setSelectedReport(prev => prev ? { ...prev, status: s } : prev);
+                              Alert.alert('Success', 'Status updated successfully');
+                            } catch (e) {
+                              Alert.alert('Error', `Failed to update status: ${e.message}`);
+                            } finally { 
+                              setIsAssigning(false); 
+                            }
+                          }} 
+                          disabled={isAssigning}
+                          style={{ 
+                            paddingHorizontal: 12, 
+                            paddingVertical: 8, 
+                            borderRadius: 6, 
+                            borderWidth: 1, 
+                            borderColor: selectedReport.status === s ? '#3b82f6' : '#d1d5db', 
+                            backgroundColor: selectedReport.status === s ? '#3b82f6' : '#f3f4f6', 
+                            marginRight: 8, 
+                            marginBottom: 8 
+                          }}
+                        >
+                          <Text style={{ color: selectedReport.status === s ? 'white' : '#374151', fontWeight: '600' }}>
+                            {s}
+                          </Text>
+                        </TouchableOpacity>
+                      ))}
+                    </View>
+                  </View>
+
+                  {/* Alarm Levels */}
                   <View className="flex-row mb-4">
                     <View className="flex-1 mr-2">
-                      <Text className="text-gray-600 text-sm mb-2">Status</Text>
-                      <View 
-                        style={{ 
-                          backgroundColor: getStatusColor(selectedReport.status).bg,
-                          borderColor: getStatusColor(selectedReport.status).border 
-                        }} 
-                        className="px-3 py-2 rounded-lg border"
-                      >
-                        <Text 
-                          style={{ color: getStatusColor(selectedReport.status).text }} 
-                          className="text-sm font-bold text-center"
-                        >
-                          {selectedReport.status}
-                        </Text>
-                      </View>
-                    </View>
-                    
-                    <View className="flex-1 ml-2">
-                      <Text className="text-gray-600 text-sm mb-2">Alarm Level</Text>
+                      <Text className="text-gray-600 text-sm mb-2">Suggested Alarm</Text>
                       <View 
                         style={{ 
                           backgroundColor: getAlarmLevelColor(selectedReport.suggestedAlarmLevel).bg,
@@ -464,6 +612,24 @@ export default function SStatus() {
                           className="text-sm font-bold text-center"
                         >
                           {selectedReport.suggestedAlarmLevel}
+                        </Text>
+                      </View>
+                    </View>
+                    
+                    <View className="flex-1 ml-2">
+                      <Text className="text-gray-600 text-sm mb-2">Final Alarm</Text>
+                      <View 
+                        style={{ 
+                          backgroundColor: getAlarmLevelColor(selectedReport.finalAlarmLevel).bg,
+                          borderColor: getAlarmLevelColor(selectedReport.finalAlarmLevel).border 
+                        }} 
+                        className="px-3 py-2 rounded-lg border"
+                      >
+                        <Text 
+                          style={{ color: getAlarmLevelColor(selectedReport.finalAlarmLevel).text }} 
+                          className="text-sm font-bold text-center"
+                        >
+                          {selectedReport.finalAlarmLevel}
                         </Text>
                       </View>
                     </View>
@@ -497,16 +663,110 @@ export default function SStatus() {
                     </View>
                   )}
                   {selectedReport.smoke_analysis && (
-                    <View className="mb-2">
+                    <View className="mb-4">
                       <Text className="text-gray-600 text-sm">Smoke Analysis: <Text className="text-gray-900 font-semibold">{selectedReport.smoke_analysis}</Text></Text>
                     </View>
                   )}
+
+                  {/* Assign Responders Section */}
+                  <View className="mb-4">
+                    <Text className="text-gray-600 text-sm mb-2 font-bold">Assign Responders</Text>
+                    <View className="bg-gray-50 border border-gray-200 rounded-lg overflow-hidden">
+                      <ScrollView style={{ maxHeight: 200 }}>
+                        {(responders || []).length === 0 ? (
+                          <View className="p-4">
+                            <Text className="text-gray-500">No responders available for this station.</Text>
+                          </View>
+                        ) : responders.map((r) => {
+                          const rid = String(selectedReport.id);
+                          const setSel = responderSelection[rid] || new Set();
+                          const checked = setSel.has(r.id);
+                          const name = `${r.first_name || ''} ${r.last_name || ''}`.trim() || 'Responder';
+                          return (
+                            <TouchableOpacity 
+                              key={r.id} 
+                              onPress={() => {
+                                setResponderSelection(prev => {
+                                  const next = new Set(prev[rid] || []);
+                                  if (checked) next.delete(r.id); 
+                                  else next.add(r.id);
+                                  return { ...prev, [rid]: next };
+                                });
+                              }} 
+                              className="px-4 py-3 flex-row justify-between items-center border-b border-gray-100"
+                            >
+                              <Text className="text-gray-900">{name}</Text>
+                              <View className={`px-3 py-1 rounded-lg ${checked ? 'bg-green-100' : 'bg-gray-100'}`}>
+                                <Text className={`text-xs font-semibold ${checked ? 'text-green-800' : 'text-gray-600'}`}>
+                                  {checked ? '✓ Assigned' : 'Assign'}
+                                </Text>
+                              </View>
+                            </TouchableOpacity>
+                          );
+                        })}
+                      </ScrollView>
+                      
+                      <View className="p-3 bg-white border-t border-gray-200 items-end">
+                        <TouchableOpacity 
+                          disabled={isAssigning} 
+                          onPress={async () => {
+                            try {
+                              setIsAssigning(true);
+                              const rid = String(selectedReport.id);
+                              const selected = responderSelection[rid] || new Set();
+                              const existing = responderExisting[rid] || new Set();
+                              const toAdd = [...selected].filter(id => !existing.has(id));
+                              const toRemove = [...existing].filter(id => !selected.has(id));
+                              
+                              if (toAdd.length > 0) {
+                                const rows = toAdd.map(id => ({ 
+                                  report_id: rid, 
+                                  assignee_type: 'responder', 
+                                  assignee_id: id 
+                                }));
+                                const { error: addErr } = await supabase
+                                  .from('report_assignments')
+                                  .insert(rows);
+                                if (addErr) throw addErr;
+                              }
+                              
+                              if (toRemove.length > 0) {
+                                const { error: delErr } = await supabase
+                                  .from('report_assignments')
+                                  .delete()
+                                  .eq('report_id', rid)
+                                  .eq('assignee_type', 'responder')
+                                  .in('assignee_id', toRemove);
+                                if (delErr) throw delErr;
+                              }
+                              
+                              setResponderExisting(prev => ({ ...prev, [rid]: new Set(selected) }));
+                              
+                              // Update the assigned responders display
+                              await loadAssignedReports();
+                              
+                              Alert.alert('Success', 'Responder assignments updated successfully');
+                            } catch (e) {
+                              Alert.alert('Error', e.message || 'Failed to update assignments');
+                            } finally { 
+                              setIsAssigning(false); 
+                            }
+                          }} 
+                          className={`px-4 py-2 rounded-lg ${isAssigning ? 'bg-gray-400' : 'bg-blue-600'}`}
+                        >
+                          <Text className="text-white font-bold">
+                            {isAssigning ? 'Saving...' : 'Save Assignments'}
+                          </Text>
+                        </TouchableOpacity>
+                      </View>
+                    </View>
+                  </View>
                 </>
               )}
             </ScrollView>
+          </View>
         </View>
-      </View>
       </Modal>
     </View>
   );
-} 
+}

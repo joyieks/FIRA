@@ -34,23 +34,46 @@ export default function RStatus() {
 
       setNotifications(notificationData || []);
 
-      // Process all notifications to create assignments
-      if (notificationData && notificationData.length > 0) {
-        console.log('📋 Processing', notificationData.length, 'notifications');
-        
-        const processedAssignments = await Promise.all(
-          notificationData.map(async (notification) => {
-            return await processNotificationToAssignment(notification);
-          })
-        );
-        
-        // Filter out any null results and set assignments
-        const validAssignments = processedAssignments.filter(assignment => assignment !== null);
-        setAssignments(validAssignments);
-        console.log('✅ Processed assignments:', validAssignments.length);
-      } else {
-        setAssignments([]);
+      // Also load assignments directly from report_assignments for this responder
+      const { data: directAssignRows, error: assignErr } = await supabase
+        .from('report_assignments')
+        .select('report_id')
+        .eq('assignee_type', 'responder')
+        .eq('assignee_id', userData.id);
+      if (assignErr) {
+        console.error('Error loading direct assignments:', assignErr);
       }
+
+      // Merge report IDs from notifications and direct assignments
+      const idsFromNotifications = (notificationData || [])
+        .map(n => n.fire_report_id)
+        .filter(Boolean)
+        .map(String);
+      const idsFromAssignments = (directAssignRows || [])
+        .map(r => String(r.report_id));
+      const uniqueReportIds = Array.from(new Set([...idsFromNotifications, ...idsFromAssignments]));
+
+      if (uniqueReportIds.length === 0) {
+        setAssignments([]);
+        return;
+      }
+
+      // Fetch reports once and build assignment cards
+      const response = await fetch('https://fire-detection-api-production-f8a3.up.railway.app/get_reports');
+      const allReports = response.ok ? await response.json() : [];
+      const reportsById = new Map((allReports || []).map(r => [String(r.id), r]));
+
+      const processedFromIds = await Promise.all(uniqueReportIds.map(async (rid) => {
+        const report = reportsById.get(String(rid));
+        if (!report) return null;
+        // Try to find a notification for status/accepted flag
+        const notif = (notificationData || []).find(n => String(n.fire_report_id) === String(rid));
+        return buildAssignmentFromReport(report, notif);
+      }));
+
+      const validAssignments = processedFromIds.filter(Boolean);
+      setAssignments(validAssignments);
+      console.log('✅ Loaded assignments for responder:', validAssignments.length);
     } catch (error) {
       console.error('Error in loadNotifications:', error);
     }
@@ -204,6 +227,42 @@ export default function RStatus() {
     }
   };
 
+  // Build assignment object when we have the full report (with optional notification)
+  const buildAssignmentFromReport = (fireReport, notification) => {
+    const reporterFromAPI = fireReport.reporter_name || fireReport.reporter || fireReport.reported_by || fireReport.user_name || 'Unknown Reporter';
+    const location = fireReport.address || fireReport.geotag_location || fireReport.location || 'Unknown location';
+    const alarmLevel = fireReport.final_fire_alarm_level || fireReport.alarm_level || fireReport.recommended_alarm_level || 'Unknown alarm';
+    const aiDetection = (fireReport.prediction ? `${fireReport.prediction}` : 'Not analyzed') + (fireReport.confidence ? ` (${fireReport.confidence})` : '');
+    const smokeIntensity = fireReport.smoke_intensity || fireReport.smoke_level || '';
+    const smokeConfidence = fireReport.smoke_confidence || fireReport.smoke_analysis || '';
+    const smokeAnalysisFromAPI = `${smokeIntensity} ${smokeConfidence}`.trim() || 'Not analyzed';
+    const structureFromAPI = fireReport.structure || fireReport.structure_type || fireReport.building_type || fireReport.property_type || 'Unknown';
+    let structuresAffectedFromAPI = fireReport.number_of_structures_on_fire || fireReport.structures_affected || fireReport.affected_structures || fireReport.building_count || fireReport.property_count || 'Unknown';
+    if (typeof structuresAffectedFromAPI === 'number') {
+      structuresAffectedFromAPI = `${structuresAffectedFromAPI} structure(s)`;
+    }
+    return {
+      id: `${String(fireReport.id)}:${notification?.id || 'direct'}`,
+      title: notification?.title || `Fire Report #${fireReport.id}`,
+      location,
+      description: notification?.message || '',
+      priority: notification?.priority || 'high',
+      createdAt: notification?.created_at || fireReport.created_at || fireReport.timestamp,
+      fireReportId: String(fireReport.id),
+      alarmLevel,
+      aiDetection,
+      reportedTime: fireReport.formatted_timestamp || fireReport.timestamp || fireReport.created_at,
+      cause: fireReport.cause || fireReport.possible_cause || fireReport.cause_of_fire || 'Under investigation',
+      imageUrl: fireReport.image_url || null,
+      status: fireReport.status || 'On Going',
+      isAccepted: notification?.status === 'accepted',
+      reporter: reporterFromAPI,
+      smokeAnalysis: smokeAnalysisFromAPI,
+      structure: structureFromAPI,
+      structuresAffected: structuresAffectedFromAPI
+    };
+  };
+
   useEffect(() => {
 
     loadNotifications();
@@ -221,8 +280,22 @@ export default function RStatus() {
       })
       .subscribe();
 
+    // Also subscribe to direct assignment changes
+    const assignSub = supabase
+      .channel(`report_assignments:responder:${userData?.id}`)
+      .on('postgres_changes', {
+        event: '*',
+        schema: 'public',
+        table: 'report_assignments',
+        filter: `assignee_type=eq.responder,assignee_id=eq.${userData?.id}`
+      }, () => {
+        loadNotifications();
+      })
+      .subscribe();
+
     return () => {
       subscription.unsubscribe();
+      assignSub.unsubscribe();
     };
   }, [userData?.id]);
 
