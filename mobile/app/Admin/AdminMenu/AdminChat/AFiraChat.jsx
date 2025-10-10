@@ -1,88 +1,119 @@
-import React, { useState } from 'react';
-import { View, Text, TouchableOpacity, ScrollView } from 'react-native';
+import React, { useEffect, useMemo, useState } from 'react';
+import { View, Text, TouchableOpacity, ScrollView, TextInput } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { supabase } from '../../../config/supabase';
 import AChatPage from './AChatPage';
 
 export default function AFiraChat({ onContactSelect }) {
-  const [message, setMessage] = useState('');
   const [selectedContact, setSelectedContact] = useState(null);
-  const [contacts] = useState([
-    {
-      id: 1,
-      name: 'Station 1',
-      lastMessage: 'We have 3 units available',
-      timestamp: '2 min ago',
-      unreadCount: 2,
-      status: 'online',
-      type: 'station'
-    },
-    {
-      id: 2,
-      name: 'Responder Team Alpha',
-      lastMessage: 'ETA 5 minutes to scene',
-      timestamp: '5 min ago',
-      unreadCount: 0,
-      status: 'online',
-      type: 'responder'
-    },
-    {
-      id: 3,
-      name: 'Station 2',
-      lastMessage: 'Dispatching backup units',
-      timestamp: '10 min ago',
-      unreadCount: 1,
-      status: 'offline',
-      type: 'station'
-    },
-    {
-      id: 4,
-      name: 'Emergency Dispatch',
-      lastMessage: 'New fire reported at 123 Main St',
-      timestamp: '15 min ago',
-      unreadCount: 0,
-      status: 'online',
-      type: 'system'
-    }
-  ]);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [currentAdminId, setCurrentAdminId] = useState(null);
+  const [contacts, setContacts] = useState([]);
+  const [isLoading, setIsLoading] = useState(true);
 
-  const [messages, setMessages] = useState({
-    1: [
-      { id: 1, text: 'Station 1 reporting for duty', sender: 'station', timestamp: '10:30 AM', isRead: true },
-      { id: 2, text: 'We have 3 units available', sender: 'station', timestamp: '10:32 AM', isRead: true },
-      { id: 3, text: 'Perfect, keep them ready', sender: 'admin', timestamp: '10:33 AM', isRead: true },
-      { id: 4, text: 'Any emergency calls?', sender: 'station', timestamp: '10:35 AM', isRead: false }
-    ],
-    2: [
-      { id: 1, text: 'Responder Team Alpha ready', sender: 'responder', timestamp: '10:30 AM', isRead: true },
-      { id: 2, text: 'ETA 5 minutes to scene', sender: 'responder', timestamp: '10:32 AM', isRead: true },
-      { id: 3, text: 'Good, coordinate with Station 1', sender: 'admin', timestamp: '10:33 AM', isRead: true }
-    ],
-    3: [
-      { id: 1, text: 'Station 2 here', sender: 'station', timestamp: '10:30 AM', isRead: true },
-      { id: 2, text: 'Dispatching backup units', sender: 'station', timestamp: '10:32 AM', isRead: false }
-    ],
-    4: [
-      { id: 1, text: 'New fire reported at 123 Main St', sender: 'system', timestamp: '10:30 AM', isRead: true },
-      { id: 2, text: 'Sending units to location', sender: 'admin', timestamp: '10:31 AM', isRead: true }
-    ]
-  });
-
-  const sendMessage = () => {
-    if (message.trim() && selectedContact) {
-      const newMessage = {
-        id: messages[selectedContact.id].length + 1,
-        text: message.trim(),
-        sender: 'admin',
-        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-        isRead: false
-      };
-      setMessages({
-        ...messages,
-        [selectedContact.id]: [...messages[selectedContact.id], newMessage]
-      });
-      setMessage('');
-    }
+  const sortContacts = (list) => {
+    return [...list].sort((a, b) => {
+      const aUnread = a.unreadCount || 0;
+      const bUnread = b.unreadCount || 0;
+      if (bUnread !== aUnread) return bUnread - aUnread;
+      const at = a.lastMessageTime ? new Date(a.lastMessageTime).getTime() : 0;
+      const bt = b.lastMessageTime ? new Date(b.lastMessageTime).getTime() : 0;
+      return bt - at;
+    });
   };
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const raw = await AsyncStorage.getItem('userData');
+        const userData = raw ? JSON.parse(raw) : {};
+        const resolvedId = userData?.id || userData?.uid;
+        if (resolvedId) setCurrentAdminId(resolvedId);
+      } catch (_) {}
+    })();
+  }, []);
+
+  useEffect(() => {
+    const loadStations = async () => {
+      try {
+        setIsLoading(true);
+        const { data, error } = await supabase
+          .from('station_users')
+          .select('id, station_name, email, active')
+          .eq('active', true)
+          .order('station_name', { ascending: true });
+        if (error) throw error;
+
+        const mapped = (data || []).map((s) => ({
+          id: s.id,
+          name: s.station_name || 'Station',
+          email: s.email,
+          type: 'station',
+          avatar: (s.station_name || 'S').slice(0, 1).toUpperCase(),
+          unreadCount: 0,
+          lastMessage: '',
+          lastMessageTime: null,
+        }));
+        setContacts(sortContacts(mapped));
+      } catch (e) {
+      } finally {
+        setIsLoading(false);
+      }
+    };
+    loadStations();
+  }, []);
+
+  // Load unread counts when admin id available
+  useEffect(() => {
+    if (!currentAdminId) return;
+    (async () => {
+      try {
+        const { data, error } = await supabase
+          .from('messages')
+          .select('*')
+          .eq('receiver_id', currentAdminId)
+          .eq('is_read', false)
+          .order('created_at', { ascending: false });
+        if (error) throw error;
+        const grouped = (data || []).reduce((acc, m) => {
+          acc[m.sender_id] = acc[m.sender_id] || { count: 0, lastMessage: m.text || '', lastMessageTime: m.created_at };
+          acc[m.sender_id].count += 1;
+          return acc;
+        }, {});
+        setContacts((prev) => sortContacts(prev.map((c) => ({
+          ...c,
+          unreadCount: grouped[c.id]?.count || 0,
+          lastMessage: grouped[c.id]?.lastMessage || c.lastMessage,
+          lastMessageTime: grouped[c.id]?.lastMessageTime || c.lastMessageTime,
+        }))));
+      } catch (_) {}
+    })();
+  }, [currentAdminId]);
+
+  // Realtime: increment unread on new messages to admin
+  useEffect(() => {
+    if (!currentAdminId) return;
+    const channel = supabase
+      .channel(`admin-unread:${currentAdminId}`)
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages', filter: `receiver_id=eq.${currentAdminId}` }, (payload) => {
+        const stationId = payload.new.sender_id;
+        setContacts((prev) => sortContacts(prev.map((c) => c.id === stationId ? {
+          ...c,
+          unreadCount: (c.unreadCount || 0) + 1,
+          lastMessage: payload.new.text || c.lastMessage,
+          lastMessageTime: payload.new.created_at,
+        } : c)));
+      })
+      .subscribe();
+    return () => { channel.unsubscribe(); };
+  }, [currentAdminId]);
+
+  const filteredContacts = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    if (!q) return contacts;
+    return contacts.filter((c) => (c.name || '').toLowerCase().includes(q));
+  }, [contacts, searchQuery]);
 
   const getContactIcon = (type) => {
     switch (type) {
@@ -136,9 +167,26 @@ export default function AFiraChat({ onContactSelect }) {
           </View>
         </View>
 
+        {/* Search */}
+        <View className="px-4 pb-2">
+          <View className="flex-row items-center bg-gray-100 rounded-full px-3 py-2">
+            <Ionicons name="search" size={18} color="#6B7280" />
+            <TextInput
+              value={searchQuery}
+              onChangeText={setSearchQuery}
+              placeholder="Search stations..."
+              className="flex-1 ml-2 text-gray-800"
+            />
+          </View>
+        </View>
+
         {/* Contact List */}
         <ScrollView className="flex-1" showsVerticalScrollIndicator={false}>
-          {contacts.map((contact) => (
+          {isLoading ? (
+            <View className="items-center py-10"><Text className="text-gray-500">Loading stations...</Text></View>
+          ) : filteredContacts.length === 0 ? (
+            <View className="items-center py-10"><Text className="text-gray-500">No stations found</Text></View>
+          ) : filteredContacts.map((contact) => (
             <TouchableOpacity
               key={contact.id}
               className="flex-row items-center px-4 py-3 border-b border-gray-100 active:bg-gray-50"
@@ -158,11 +206,15 @@ export default function AFiraChat({ onContactSelect }) {
               <View className="flex-1">
                 <View className="flex-row items-center justify-between">
                   <Text className="font-semibold text-gray-800">{contact.name}</Text>
-                  <Text className="text-xs text-gray-500">{contact.timestamp}</Text>
+                  {contact.lastMessageTime && (
+                    <Text className="text-xs text-gray-500">{new Date(contact.lastMessageTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</Text>
+                  )}
                 </View>
-                <Text className="text-sm text-gray-600 mt-1" numberOfLines={1}>
-                  {contact.lastMessage}
-                </Text>
+                {!!contact.lastMessage && (
+                  <Text className="text-sm text-gray-600 mt-1" numberOfLines={1}>
+                    {contact.lastMessage}
+                  </Text>
+                )}
               </View>
 
               {/* Status Indicators */}
@@ -172,7 +224,7 @@ export default function AFiraChat({ onContactSelect }) {
                     <Text className="text-xs text-white font-bold">{contact.unreadCount}</Text>
                   </View>
                 )}
-                <View className={`w-2 h-2 rounded-full ${contact.status === 'online' ? 'bg-green-500' : 'bg-gray-400'}`} />
+                <View className={`w-2 h-2 rounded-full bg-green-500`} />
               </View>
             </TouchableOpacity>
           ))}
@@ -185,6 +237,7 @@ export default function AFiraChat({ onContactSelect }) {
   return (
     <AChatPage 
       contact={selectedContact}
+      currentAdminId={currentAdminId}
       onBack={() => {
         setSelectedContact(null);
         if (onContactSelect) {

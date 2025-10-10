@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { FiSend, FiPaperclip, FiMic, FiPhone, FiVideo, FiUser, FiMapPin, FiAlertTriangle, FiImage, FiCheck, FiSearch } from 'react-icons/fi';
 import { supabase } from '../../../../config/supabase';
-// /import { analyzeMessageForFireAlarm, updateMessageWithAIAnalysis } from '../../../../services/openaiService';
+import { analyzeMessageForFireAlarm, updateMessageWithAIAnalysis } from '../../../../services/aiService';
 
 const Afira_chat = () => {
   const [messages, setMessages] = useState([]);
@@ -17,6 +17,8 @@ const Afira_chat = () => {
   const messagesEndRef = useRef(null);
   const imageInputRef = useRef(null);
   const [isUploadingImage, setIsUploadingImage] = useState(false);
+  const [activeIncidentId, setActiveIncidentId] = useState(null);
+  const [ongoingIncidents, setOngoingIncidents] = useState([]);
   const [currentAdminName, setCurrentAdminName] = useState('Admin');
   const [currentAdminId, setCurrentAdminId] = useState(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -241,6 +243,22 @@ const Afira_chat = () => {
     fetchMessages();
   }, [selectedStation, currentAdminId]);
 
+  // Load ongoing incidents for dropdown selection
+  useEffect(() => {
+    const fetchIncidents = async () => {
+      try {
+        const { data, error } = await supabase
+          .from('fire_reports')
+          .select('id, address, status, created_at')
+          .eq('status', 'On Going')
+          .order('created_at', { ascending: false })
+          .limit(50);
+        if (!error) setOngoingIncidents(data || []);
+      } catch (_) {}
+    };
+    fetchIncidents();
+  }, []);
+
   // Realtime subscription for unread counters (messages to admin)
   useEffect(() => {
     if (!currentAdminId) return;
@@ -286,8 +304,21 @@ const Afira_chat = () => {
         table: 'messages',
         filter: `or(and(sender_id.eq.${selectedStation.id},receiver_id.eq.${currentAdminId}),and(sender_id.eq.${currentAdminId},receiver_id.eq.${selectedStation.id}))`
       }, (payload) => {
-        setMessages(prev => [...prev, payload.new]);
+        const newMsg = payload.new;
+        setMessages(prev => [...prev, newMsg]);
         setTimeout(scrollToBottom, 100);
+
+        // Auto-analyze messages sent to admin for quick visibility
+        if (newMsg && newMsg.receiver_id === currentAdminId && !newMsg.ai_suggested_alarm && newMsg.text) {
+          (async () => {
+            try {
+              const analysis = await analyzeMessageForFireAlarm(newMsg.text);
+              if (analysis) {
+                await updateMessageWithAIAnalysis(newMsg.id, analysis, supabase);
+              }
+            } catch (_) {}
+          })();
+        }
       })
       .subscribe();
 
@@ -298,6 +329,52 @@ const Afira_chat = () => {
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  };
+
+  // Map AI suggestion keys to human-readable labels and colors
+  const normalizeAiLabel = (aiValue) => {
+    if (!aiValue) return null;
+    // Handle string, object with suggested_alarm, or transformed original_response
+    let suggested = null;
+    if (typeof aiValue === 'string') {
+      const trimmed = aiValue.trim();
+      if ((trimmed.startsWith('{') && trimmed.endsWith('}')) || (trimmed.startsWith('[') && trimmed.endsWith(']'))) {
+        try { return normalizeAiLabel(JSON.parse(trimmed)); } catch (_) {}
+      }
+      suggested = aiValue;
+    } else if (aiValue?.suggested_alarm) {
+      suggested = aiValue.suggested_alarm;
+    } else if (aiValue?.original_response?.alarm_level) {
+      suggested = aiValue.original_response.alarm_level.toLowerCase().replace(/\s+/g, '_');
+    }
+    if (!suggested) return null;
+    const map = {
+      none: 'Under Control',
+      first: '1st Alarm', 'first_alarm': '1st Alarm',
+      second: '2nd Alarm', 'second_alarm': '2nd Alarm',
+      third: '3rd Alarm', 'third_alarm': '3rd Alarm',
+      fourth: '4th Alarm', 'fourth_alarm': '4th Alarm',
+      fifth: '5th Alarm', 'fifth_alarm': '5th Alarm',
+      task_force_alpha: 'TASK FORCE ALPHA',
+      task_force_bravo: 'TASK FORCE BRAVO',
+      task_force_charlie: 'TASK FORCE CHARLIE',
+      task_force_delta_echo_hotel_india: 'TASK FORCE DELTA',
+      general: 'GENERAL ALARM'
+    };
+    return map[suggested] || suggested;
+  };
+
+  const getAlarmLevelColor = (level) => {
+    switch (level) {
+      case '1st Alarm': return 'bg-blue-100 text-blue-800 border-blue-200';
+      case '2nd Alarm': return 'bg-orange-100 text-orange-800 border-orange-200';
+      case '3rd Alarm': return 'bg-red-100 text-red-800 border-red-200';
+      case '4th Alarm': return 'bg-purple-100 text-purple-800 border-purple-200';
+      case '5th Alarm': return 'bg-indigo-100 text-indigo-800 border-indigo-200';
+      case 'GENERAL ALARM': return 'bg-red-600 text-white border-red-700';
+      case 'Under Control': return 'bg-green-100 text-green-800 border-green-200';
+      default: return 'bg-gray-100 text-gray-800 border-gray-200';
+    }
   };
 
   const handleSendMessage = async () => {
@@ -314,7 +391,8 @@ const Afira_chat = () => {
         receiver_type: 'station',
         text: newMessage,
         is_emergency: isEmergencyMode,
-        is_read: false
+        is_read: false,
+        report_id: activeIncidentId || null
       };
 
       console.log('📤 Sending admin message payload:', payload);
@@ -339,19 +417,15 @@ const Afira_chat = () => {
         setTimeout(scrollToBottom, 100);
       }
 
-      // AI Analysis: Analyze the message for fire alarm level
+      // AI Analysis: Only when report context set
       if (data && data[0]) {
         try {
-          console.log('🤖 Starting AI analysis for admin message:', newMessage);
-          const analysis = await analyzeMessageForFireAlarm(newMessage);
-          console.log('🤖 AI Analysis result:', analysis);
-          
-          if (analysis.suggested_alarm) {
-            // Update the message with AI analysis
-            await updateMessageWithAIAnalysis(data[0].id, analysis, supabase);
-            console.log('✅ Admin message updated with AI suggested alarm:', analysis.suggested_alarm);
-          } else {
-            console.log('ℹ️ No fire-related content detected in admin message');
+          if (activeIncidentId) {
+            console.log('🤖 Starting AI analysis for admin message:', newMessage);
+            const analysis = await analyzeMessageForFireAlarm(newMessage);
+            if (analysis) {
+              await updateMessageWithAIAnalysis(data[0].id, analysis, supabase);
+            }
           }
         } catch (aiError) {
           console.error('❌ AI analysis failed for admin message:', aiError);
@@ -563,25 +637,33 @@ const Afira_chat = () => {
                   </p>
                 </div>
               ) : (
-                messages.map((message) => (
-                  <div 
-                    key={message.id} 
-                    className={`mb-4 flex ${message.sender_type === 'admin' ? 'justify-end' : 'justify-start'}`}
-                  >
-                    <div className="max-w-xs md:max-w-md">
-                      <div className={`rounded-lg px-4 py-2 ${
-                        message.sender_type === 'admin' 
-                          ? 'bg-blue-600 text-white' 
-                          : 'bg-white border border-gray-200'
-                      }`}>
-                        {message.text && <p className="whitespace-pre-wrap">{message.text}</p>}
-                        <div className="text-xs mt-2 text-right opacity-70">
-                          {formatTime(message.created_at)}
+                messages.map((message) => {
+                  const aiLabel = normalizeAiLabel(message.ai_suggested_alarm);
+                  return (
+                    <div 
+                      key={message.id} 
+                      className={`mb-4 flex ${message.sender_type === 'admin' ? 'justify-end' : 'justify-start'}`}
+                    >
+                      <div className="max-w-xs md:max-w-md">
+                        <div className={`rounded-lg px-4 py-2 ${
+                          message.sender_type === 'admin' 
+                            ? 'bg-blue-600 text-white' 
+                            : 'bg-white border border-gray-200'
+                        }`}>
+                          {message.text && <p className="whitespace-pre-wrap">{message.text}</p>}
+                          {aiLabel && (
+                            <div className={`mt-2 inline-flex items-center px-2 py-1 border rounded text-[10px] font-medium ${getAlarmLevelColor(aiLabel)}`}>
+                              AI Suggested: {aiLabel}
+                            </div>
+                          )}
+                          <div className="text-xs mt-2 text-right opacity-70">
+                            {formatTime(message.created_at)}
+                          </div>
                         </div>
                       </div>
                     </div>
-                  </div>
-                ))
+                  );
+                })
               )}
               <div ref={messagesEndRef} />
             </div>

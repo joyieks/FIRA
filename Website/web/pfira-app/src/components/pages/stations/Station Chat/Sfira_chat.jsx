@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { FiSend, FiPaperclip, FiUser, FiAlertTriangle, FiImage, FiCheck, FiSearch, FiFilter } from 'react-icons/fi';
 import { supabase } from '../../../../config/supabase';
-//import { analyzeMessageForFireAlarm, updateMessageWithAIAnalysis } from '../../../../services/openaiService';
+import { analyzeMessageForFireAlarm, updateMessageWithAIAnalysis } from '../../../../services/aiService';
 
 const Sfira_chat = () => {
   const [messages, setMessages] = useState([]);
@@ -31,6 +31,8 @@ const Sfira_chat = () => {
   const messagesEndRef = useRef(null);
   const imageInputRef = useRef(null);
   const [isUploadingImage, setIsUploadingImage] = useState(false);
+  const [activeIncidentId, setActiveIncidentId] = useState(null);
+  const [ongoingIncidents, setOngoingIncidents] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
   const [refreshUnreadTick, setRefreshUnreadTick] = useState(0); // bump to refetch unread
 
@@ -296,6 +298,23 @@ const Sfira_chat = () => {
 
     fetchUsers();
   }, [currentStationId]);
+
+  // Fetch ongoing incidents for dropdown selection
+  useEffect(() => {
+    const fetchIncidents = async () => {
+      try {
+        // Expecting an incidents table or reports endpoint mirrored into Supabase as 'fire_reports'
+        const { data, error } = await supabase
+          .from('fire_reports')
+          .select('id, address, status, created_at')
+          .eq('status', 'On Going')
+          .order('created_at', { ascending: false })
+          .limit(50);
+        if (!error) setOngoingIncidents(data || []);
+      } catch (_) {}
+    };
+    fetchIncidents();
+  }, []);
 
   // Fetch unread messages
   useEffect(() => {
@@ -675,6 +694,8 @@ const Sfira_chat = () => {
 
   const handleSendMessage = async () => {
     if (newMessage.trim() === '' || !selectedUser || !currentStationId) return;
+    // Gate AI: require context for non-responder conversations
+    const shouldGate = selectedUser.type !== 'responder' && !activeIncidentId;
 
     try {
       const messageData = {
@@ -684,7 +705,8 @@ const Sfira_chat = () => {
         receiver_type: selectedUser.type,
         text: newMessage,
         is_emergency: isEmergencyMode,
-        is_read: false
+        is_read: false,
+        report_id: activeIncidentId || null
       };
 
       console.log('Sending message:', messageData);
@@ -719,18 +741,15 @@ const Sfira_chat = () => {
         
         setTimeout(scrollToBottom, 100);
 
-        // AI Analysis: Analyze the message for fire alarm level
+        // AI Analysis: Analyze only when report context is present OR chatting with assigned responder
         try {
+          if (shouldGate) return;
           console.log('🤖 Starting AI analysis for message:', newMessage);
           const analysis = await analyzeMessageForFireAlarm(newMessage);
           console.log('🤖 AI Analysis result:', analysis);
           
-          if (analysis.suggested_alarm) {
-            // Update the message with AI analysis
+          if (analysis) {
             await updateMessageWithAIAnalysis(data[0].id, analysis, supabase);
-            console.log('✅ Message updated with AI suggested alarm:', analysis.suggested_alarm);
-          } else {
-            console.log('ℹ️ No fire-related content detected in message');
           }
         } catch (aiError) {
           console.error('❌ AI analysis failed:', aiError);
@@ -1083,8 +1102,26 @@ const Sfira_chat = () => {
               <div ref={messagesEndRef} />
             </div>
 
-            {/* Message Input */}
+            {/* Message Input with Incident Selector */}
             <div className="p-4 border-t border-gray-200 bg-white flex-shrink-0">
+              {/* Incident context selector placed above input; dropdown opens upward via CSS positioning */}
+              <div className="mb-3 flex items-center justify-between">
+                <div className="text-xs text-gray-500">Context: {activeIncidentId ? `Incident #${activeIncidentId}` : 'None selected'}</div>
+                <div className="relative">
+                  <select
+                    value={activeIncidentId || ''}
+                    onChange={(e) => setActiveIncidentId(e.target.value || null)}
+                    className="px-2 py-1 text-xs border border-gray-300 rounded-md focus:ring-2 focus:ring-red-500 focus:border-red-500"
+                  >
+                    <option value="">No incident</option>
+                    {ongoingIncidents.map((inc) => (
+                      <option key={inc.id} value={inc.id}>
+                        {inc.id} — {inc.address || 'Unknown address'}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
               {isEmergencyMode && (
                 <div className="bg-red-50 border-l-4 border-red-400 p-3 mb-3 rounded-r-lg">
                   <div className="flex items-center text-red-800">

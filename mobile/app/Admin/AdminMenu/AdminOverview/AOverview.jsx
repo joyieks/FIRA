@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState, useCallback } from 'react';
 import { View, Text, TouchableOpacity, ScrollView, RefreshControl, TextInput, Modal, Image, Platform, Alert } from 'react-native';
+import { supabase } from '../../../config/supabase';
 
 const API_URL = 'https://fire-detection-api-production-f8a3.up.railway.app';
 
@@ -18,6 +19,8 @@ export default function AOverview() {
   const [cancelReason, setCancelReason] = useState('');
   const [isUpdating, setIsUpdating] = useState(false);
   const [isCancelling, setIsCancelling] = useState(false);
+  const [assignedResponders, setAssignedResponders] = useState([]);
+  const [isLoadingAssigned, setIsLoadingAssigned] = useState(false);
 
   const fetchReports = useCallback(async () => {
     try {
@@ -50,6 +53,59 @@ export default function AOverview() {
   useEffect(() => {
     fetchReports();
   }, []); // Remove fetchReports dependency to prevent infinite re-renders
+
+  // Load assigned responders when a report is selected
+  useEffect(() => {
+    const loadAssignedResponders = async (reportId) => {
+      try {
+        setIsLoadingAssigned(true);
+        setAssignedResponders([]);
+
+        if (!reportId) return;
+
+        const { data: assignments, error } = await supabase
+          .from('report_assignments')
+          .select('assignee_type, assignee_id, assigned_at')
+          .eq('report_id', reportId)
+          .eq('assignee_type', 'responder');
+
+        if (error) {
+          console.error('Error fetching report assignments:', error);
+          return;
+        }
+
+        const responderIds = (assignments || []).map(a => a.assignee_id).filter(Boolean);
+        if (responderIds.length === 0) {
+          setAssignedResponders([]);
+          return;
+        }
+
+        const { data: responders, error: respErr } = await supabase
+          .from('responders')
+          .select('id, first_name, last_name, email, phone')
+          .in('id', responderIds);
+
+        if (respErr) {
+          console.error('Error fetching responder profiles:', respErr);
+          setAssignedResponders([]);
+          return;
+        }
+
+        setAssignedResponders(responders || []);
+      } catch (e) {
+        console.error('Failed loading assigned responders:', e);
+      } finally {
+        setIsLoadingAssigned(false);
+      }
+    };
+
+    if (selectedReport?.id) {
+      loadAssignedResponders(selectedReport.id);
+    } else {
+      setAssignedResponders([]);
+      setIsLoadingAssigned(false);
+    }
+  }, [selectedReport?.id]);
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
@@ -811,6 +867,7 @@ export default function AOverview() {
                     </View>
                   </View>
 
+
                   {/* Full Timestamp */}
                   <View style={{ marginBottom: 20 }}>
                     <Text style={{ fontSize: 16, fontWeight: '600', color: '#374151', marginBottom: 8 }}>Full Timestamp:</Text>
@@ -830,6 +887,32 @@ export default function AOverview() {
                         }
                       })()}
                     </Text>
+                  </View>
+
+                  {/* Assigned Responder(s) */}
+                  <View style={{ marginBottom: 24 }}>
+                    <Text style={{ fontSize: 16, fontWeight: '600', color: '#374151', marginBottom: 8 }}>Assigned Responder(s):</Text>
+                    <View style={{ backgroundColor: '#eff6ff', borderWidth: 1, borderColor: '#bfdbfe', borderRadius: 8, padding: 12 }}>
+                      {isLoadingAssigned ? (
+                        <Text style={{ fontSize: 16, color: '#6b7280' }}>Loading...</Text>
+                      ) : assignedResponders.length > 0 ? (
+                        assignedResponders.map(r => (
+                          <View key={r.id} style={{ paddingVertical: 6 }}>
+                            <Text style={{ fontSize: 16, fontWeight: '700', color: '#1e3a8a' }}>
+                              {(r.first_name || '') + (r.last_name ? ` ${r.last_name}` : '') || 'Responder'}
+                            </Text>
+                            {!!r.email && (
+                              <Text style={{ fontSize: 12, color: '#1e40af' }}>{r.email}</Text>
+                            )}
+                            {!!r.phone && (
+                              <Text style={{ fontSize: 12, color: '#1e40af' }}>{r.phone}</Text>
+                            )}
+                          </View>
+                        ))
+                      ) : (
+                        <Text style={{ fontSize: 14, color: '#1e40af' }}>No responder assigned yet.</Text>
+                      )}
+                    </View>
                   </View>
                 </View>
               )}

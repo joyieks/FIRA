@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { supabase } from '../../../../config/supabase';
 import { FiSearch, FiFilter, FiClock, FiMapPin, FiUser, FiAlertTriangle, FiBell, FiTrendingUp, FiX, FiRefreshCw } from 'react-icons/fi';
 import { useNavigate } from 'react-router-dom';
 
@@ -14,6 +15,10 @@ const Overview = () => {
   const [lastRefresh, setLastRefresh] = useState(new Date());
   const [editingStatus, setEditingStatus] = useState({});
   const [editingFinalAlarm, setEditingFinalAlarm] = useState({});
+  const [aiChatSuggestions, setAiChatSuggestions] = useState([]);
+  const [chatAlarmByReport, setChatAlarmByReport] = useState({});
+  const [assignedResponders, setAssignedResponders] = useState([]);
+  const [isLoadingAssigned, setIsLoadingAssigned] = useState(false);
   
   // Admin cancellation states
   const [showCancelModal, setShowCancelModal] = useState(false);
@@ -50,7 +55,7 @@ const Overview = () => {
           reporter: report.reporter || 'Unknown Reporter',
           location: report.address || report.geotag_location || 'Location unavailable',
           status: report.status || 'On Going',
-          suggestedAlarmLevel: report.recommended_alarm_level || report.alarm_level || 'Unknown',
+          suggestedAlarmLevel: chatAlarmByReport[report.id] || report.recommended_alarm_level || report.alarm_level || 'Unknown',
           finalAlarmLevel: report.final_fire_alarm_level || '1st Alarm',
           description: report.cause_of_fire || 'No cause specified',
           picture: report.image_url,
@@ -177,6 +182,189 @@ const Overview = () => {
     
     return () => clearInterval(interval);
   }, []);
+
+  // Load assigned responders when a report is selected
+  useEffect(() => {
+    const loadAssignedResponders = async (reportId) => {
+      try {
+        setIsLoadingAssigned(true);
+        setAssignedResponders([]);
+        if (!reportId) return;
+
+        const { data: assignments, error } = await supabase
+          .from('report_assignments')
+          .select('assignee_type, assignee_id, assigned_at')
+          .eq('report_id', reportId)
+          .eq('assignee_type', 'responder');
+        if (error) {
+          console.error('Web: error fetching report assignments:', error);
+          return;
+        }
+
+        const responderIds = (assignments || []).map(a => a.assignee_id).filter(Boolean);
+        if (responderIds.length === 0) {
+          setAssignedResponders([]);
+          return;
+        }
+
+        const { data: responders, error: respErr } = await supabase
+          .from('responders')
+          .select('id, first_name, last_name, email, phone')
+          .in('id', responderIds);
+        if (respErr) {
+          console.error('Web: error fetching responder profiles:', respErr);
+          setAssignedResponders([]);
+          return;
+        }
+
+        setAssignedResponders(responders || []);
+      } catch (e) {
+        console.error('Web: failed loading assigned responders:', e);
+      } finally {
+        setIsLoadingAssigned(false);
+      }
+    };
+
+    if (selectedReport?.id) {
+      loadAssignedResponders(selectedReport.id);
+    } else {
+      setAssignedResponders([]);
+      setIsLoadingAssigned(false);
+    }
+  }, [selectedReport?.id]);
+
+  // Load recent AI suggestions from chat messages
+  useEffect(() => {
+    const loadAiSuggestions = async () => {
+      try {
+        const { data, error } = await supabase
+          .from('messages')
+          .select('id, text, ai_suggested_alarm, created_at, sender_type, report_id')
+          .not('ai_suggested_alarm', 'is', null)
+          .order('created_at', { ascending: false })
+          .limit(200);
+        if (!error) setAiChatSuggestions(data || []);
+      } catch (_) {
+        // ignore; UI degrades gracefully
+      }
+    };
+    loadAiSuggestions();
+    const interval = setInterval(loadAiSuggestions, 30000);
+    return () => clearInterval(interval);
+  }, []);
+
+  // Compute strongest chat-based alarm per report_id
+  useEffect(() => {
+    const toStrength = (label) => {
+      const map = {
+        'Under Control': 0,
+        '1st Alarm': 1,
+        '2nd Alarm': 2,
+        '3rd Alarm': 3,
+        '4th Alarm': 4,
+        '5th Alarm': 5,
+        'TASK FORCE ALPHA': 6,
+        'TASK FORCE BRAVO': 7,
+        'TASK FORCE CHARLIE': 8,
+        'TASK FORCE DELTA': 9,
+        'GENERAL ALARM': 10
+      };
+      return map[label] ?? 0;
+    };
+    const normalizeAiLabelLocal = (aiValue) => {
+      if (!aiValue) return null;
+      let suggested = null;
+      if (typeof aiValue === 'string') {
+        const trimmed = aiValue.trim();
+        if ((trimmed.startsWith('{') && trimmed.endsWith('}')) || (trimmed.startsWith('[') && trimmed.endsWith(']'))) {
+          try { return normalizeAiLabelLocal(JSON.parse(trimmed)); } catch (_) {}
+        }
+        suggested = aiValue;
+      } else if (aiValue?.suggested_alarm) {
+        suggested = aiValue.suggested_alarm;
+      } else if (aiValue?.original_response?.alarm_level) {
+        suggested = aiValue.original_response.alarm_level.toLowerCase().replace(/\s+/g, '_');
+      }
+      if (!suggested) return null;
+      const map = {
+        none: 'Under Control',
+        first: '1st Alarm', first_alarm: '1st Alarm',
+        second: '2nd Alarm', second_alarm: '2nd Alarm',
+        third: '3rd Alarm', third_alarm: '3rd Alarm',
+        fourth: '4th Alarm', fourth_alarm: '4th Alarm',
+        fifth: '5th Alarm', fifth_alarm: '5th Alarm',
+        task_force_alpha: 'TASK FORCE ALPHA',
+        task_force_bravo: 'TASK FORCE BRAVO',
+        task_force_charlie: 'TASK FORCE CHARLIE',
+        task_force_delta_echo_hotel_india: 'TASK FORCE DELTA',
+        general: 'GENERAL ALARM'
+      };
+      return map[suggested] || suggested;
+    };
+
+    const bestByReport = {};
+    (aiChatSuggestions || []).forEach((m) => {
+      const reportId = m.report_id;
+      if (!reportId) return;
+      const label = normalizeAiLabelLocal(m.ai_suggested_alarm);
+      if (!label) return;
+      const current = bestByReport[reportId];
+      if (!current || toStrength(label) > toStrength(current)) {
+        bestByReport[reportId] = label;
+      }
+    });
+    setChatAlarmByReport(bestByReport);
+  }, [aiChatSuggestions]);
+
+  // Normalize AI labels across variants
+  const normalizeAiLabel = (aiValue) => {
+    if (!aiValue) return null;
+    let suggested = null;
+    if (typeof aiValue === 'string') {
+      const trimmed = aiValue.trim();
+      if ((trimmed.startsWith('{') && trimmed.endsWith('}')) || (trimmed.startsWith('[') && trimmed.endsWith(']'))) {
+        try { return normalizeAiLabel(JSON.parse(trimmed)); } catch (_) {}
+      }
+      suggested = aiValue;
+    } else if (aiValue?.suggested_alarm) {
+      suggested = aiValue.suggested_alarm;
+    } else if (aiValue?.original_response?.alarm_level) {
+      suggested = aiValue.original_response.alarm_level.toLowerCase().replace(/\s+/g, '_');
+    }
+    if (!suggested) return null;
+    const map = {
+      none: 'Under Control',
+      first: '1st Alarm', 'first_alarm': '1st Alarm',
+      second: '2nd Alarm', 'second_alarm': '2nd Alarm',
+      third: '3rd Alarm', 'third_alarm': '3rd Alarm',
+      fourth: '4th Alarm', 'fourth_alarm': '4th Alarm',
+      fifth: '5th Alarm', 'fifth_alarm': '5th Alarm',
+      task_force_alpha: 'TASK FORCE ALPHA',
+      task_force_bravo: 'TASK FORCE BRAVO',
+      task_force_charlie: 'TASK FORCE CHARLIE',
+      task_force_delta_echo_hotel_india: 'TASK FORCE DELTA',
+      general: 'GENERAL ALARM'
+    };
+    return map[suggested] || suggested;
+  };
+
+  // If no reports, backfill with AI chat suggestions
+  useEffect(() => {
+    if (!isLoading && reports.length === 0 && aiChatSuggestions.length > 0) {
+      const aiDerivedReports = aiChatSuggestions.map((m) => ({
+        id: `chat-${m.id}`,
+        time: formatTime(m.created_at),
+        reporter: 'AI Chat Suggestion',
+        location: '—',
+        status: 'On Going',
+        suggestedAlarmLevel: normalizeAiLabel(m.ai_suggested_alarm) || 'Under Control',
+        finalAlarmLevel: normalizeAiLabel(m.ai_suggested_alarm) || '1st Alarm',
+        timestamp: m.created_at,
+        isChatSuggestion: true
+      }));
+      setReports(aiDerivedReports);
+    }
+  }, [isLoading, reports.length, aiChatSuggestions]);
 
   // Filter reports based on search and filters
   const filteredReports = reports.filter(report => {
@@ -1005,6 +1193,30 @@ const Overview = () => {
                           selectedReport.timestamp) : 
                         'Unknown'}
                     </span>
+                  </div>
+
+                  {/* Assigned Responder(s) */}
+                  <div>
+                    <label className="block text-lg font-medium text-gray-700 mb-2">Assigned Responder(s):</label>
+                    <div className="rounded-lg border border-blue-200 bg-blue-50 p-4">
+                      {isLoadingAssigned ? (
+                        <div className="text-gray-600">Loading...</div>
+                      ) : assignedResponders.length > 0 ? (
+                        <div className="space-y-2">
+                          {assignedResponders.map(r => (
+                            <div key={r.id} className="">
+                              <div className="text-blue-900 font-semibold">
+                                {(r.first_name || '') + (r.last_name ? ` ${r.last_name}` : '') || 'Responder'}
+                              </div>
+                              {r.email && <div className="text-sm text-blue-800">{r.email}</div>}
+                              {r.phone && <div className="text-sm text-blue-800">{r.phone}</div>}
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <div className="text-blue-900">No responder assigned yet.</div>
+                      )}
+                    </div>
                   </div>
                 </div>
 

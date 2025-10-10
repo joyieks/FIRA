@@ -1,17 +1,17 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { View, Text, TextInput, TouchableOpacity, ScrollView, KeyboardAvoidingView, Platform, Alert, Modal } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { supabase } from '../../../config/supabase';
+import { analyzeMessageForFireAlarm, updateMessageWithAIAnalysis } from '../../../services/aiService';
 
-export default function SChatPage({ contact, onBack }) {
+export default function SChatPage({ contact, onBack, currentStationId }) {
   const [message, setMessage] = useState('');
-  const [messages, setMessages] = useState([
-    { id: 1, text: 'Station 1 reporting for duty', sender: 'station', timestamp: '10:30 AM', isRead: true },
-    { id: 2, text: 'We have 3 units available', sender: 'station', timestamp: '10:32 AM', isRead: true },
-    { id: 3, text: 'Perfect, keep them ready', sender: 'station', timestamp: '10:33 AM', isRead: true },
-    { id: 4, text: 'Any emergency calls?', sender: 'station', timestamp: '10:35 AM', isRead: false }
-  ]);
+  const [messages, setMessages] = useState([]);
   const [editingMessage, setEditingMessage] = useState(null);
   const [editText, setEditText] = useState('');
+  const [activeIncidentId, setActiveIncidentId] = useState(null);
+  const [ongoingIncidents, setOngoingIncidents] = useState([]);
+  const messagesRef = useRef(null);
 
   const getContactIcon = (type) => {
     switch (type) {
@@ -54,17 +54,85 @@ export default function SChatPage({ contact, onBack }) {
     }
   };
 
-  const sendMessage = () => {
-    if (message.trim()) {
-      const newMessage = {
-        id: messages.length + 1,
-        text: message.trim(),
-        sender: 'station',
-        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-        isRead: false
-      };
-      setMessages([...messages, newMessage]);
-      setMessage('');
+  const scrollToBottom = () => {
+    messagesRef.current?.scrollToEnd({ animated: true });
+  };
+
+  useEffect(() => {
+    const fetchIncidents = async () => {
+      try {
+        const { data } = await supabase
+          .from('fire_reports')
+          .select('id, address, status, created_at')
+          .eq('status', 'On Going')
+          .order('created_at', { ascending: false })
+          .limit(50);
+        setOngoingIncidents(data || []);
+      } catch (_) {}
+    };
+    fetchIncidents();
+  }, []);
+
+  useEffect(() => {
+    const fetchThread = async () => {
+      if (!contact?.id || !currentStationId) return;
+      const { data, error } = await supabase
+        .from('messages')
+        .select('*')
+        .or(`and(sender_id.eq.${contact.id},receiver_id.eq.${currentStationId}),and(sender_id.eq.${currentStationId},receiver_id.eq.${contact.id})`)
+        .order('created_at', { ascending: true });
+      if (!error) {
+        setMessages(data || []);
+        setTimeout(scrollToBottom, 100);
+        await supabase
+          .from('messages')
+          .update({ is_read: true })
+          .eq('sender_id', contact.id)
+          .eq('receiver_id', currentStationId)
+          .eq('is_read', false);
+      }
+    };
+    fetchThread();
+  }, [contact?.id, currentStationId]);
+
+  useEffect(() => {
+    if (!contact?.id || !currentStationId) return;
+    const channel = supabase
+      .channel(`messages:${contact.id}:${currentStationId}`)
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages', filter: `or(and(sender_id.eq.${contact.id},receiver_id.eq.${currentStationId}),and(sender_id.eq.${currentStationId},receiver_id.eq.${contact.id}))` }, (payload) => {
+        setMessages((prev) => [...prev, payload.new]);
+        setTimeout(scrollToBottom, 100);
+      })
+      .subscribe();
+    return () => { channel.unsubscribe(); };
+  }, [contact?.id, currentStationId]);
+
+  const sendMessage = async () => {
+    if (!message.trim() || !contact?.id || !currentStationId) return;
+    const text = message.trim();
+    setMessage('');
+    const payload = {
+      sender_id: currentStationId,
+      receiver_id: contact.id,
+      sender_type: 'station',
+      receiver_type: contact.type,
+      text,
+      is_emergency: false,
+      is_read: false,
+      report_id: activeIncidentId || null,
+    };
+    const { data, error } = await supabase.from('messages').insert(payload).select();
+    if (!error && data && data[0]) {
+      setMessages((prev) => [...prev, data[0]]);
+      setTimeout(scrollToBottom, 100);
+      // Gate AI like web: allow if responder or incident selected
+      const shouldGate = contact.type !== 'responder' && !activeIncidentId;
+      if (!shouldGate) {
+        try {
+          const analysis = await analyzeMessageForFireAlarm(text);
+          if (analysis) await updateMessageWithAIAnalysis(data[0].id, analysis, supabase);
+        } catch (_) {}
+      }
     }
   };
 
@@ -205,31 +273,34 @@ export default function SChatPage({ contact, onBack }) {
       <ScrollView 
         className="flex-1 px-4 py-2"
         showsVerticalScrollIndicator={false}
+        ref={messagesRef}
       >
         {messages.map((msg) => (
           <TouchableOpacity
             key={msg.id}
             onLongPress={() => handleLongPress(msg)}
             activeOpacity={0.7}
-            className={`mb-4 ${msg.sender === 'station' ? 'items-end' : 'items-start'}`}
+            className={`mb-4 ${(msg.sender_type === 'station' || msg.sender === 'station') ? 'items-end' : 'items-start'}`}
           >
-            <View className={`max-w-[80%] ${msg.sender === 'station' ? 'bg-gray-800' : 'bg-gray-100'} rounded-2xl px-4 py-3`}>
-              {msg.sender !== 'station' && (
+            <View className={`max-w-[80%] ${(msg.sender_type === 'station' || msg.sender === 'station') ? 'bg-gray-800' : 'bg-gray-100'} rounded-2xl px-4 py-3`}>
+              {!(msg.sender_type === 'station' || msg.sender === 'station') && (
                 <Text className="text-xs font-medium text-gray-600 mb-1">
-                  {getSenderName(msg.sender)}
+                  {getSenderName(msg.sender_type || msg.sender)}
                 </Text>
               )}
-              <Text className={`text-base ${msg.sender === 'station' ? 'text-white' : 'text-gray-800'} ${msg.isDeleted ? 'italic text-gray-500' : ''}`}>
+              <Text className={`text-base ${(msg.sender_type === 'station' || msg.sender === 'station') ? 'text-white' : 'text-gray-800'} ${msg.isDeleted ? 'italic text-gray-500' : ''}`}>
                 {msg.text}
-                {msg.isEdited && !msg.isDeleted && (
-                  <Text className="text-xs text-gray-400 ml-2">(edited)</Text>
-                )}
               </Text>
+              {msg.ai_suggested_alarm && (
+                <View className="mt-2 self-start bg-blue-100 border border-blue-200 rounded px-2 py-1">
+                  <Text className="text-[10px] text-blue-800 font-semibold">AI Suggested: {String(msg.ai_suggested_alarm?.suggested_alarm || msg.ai_suggested_alarm)}</Text>
+                </View>
+              )}
                              <View className={`flex-row items-center mt-2 ${msg.sender === 'station' ? 'justify-end' : 'justify-start'}`}>
-                 <Text className={`text-xs ${msg.sender === 'station' ? 'text-gray-300' : 'text-gray-500'}`}>
-                   {msg.isEdited ? `${msg.originalTimestamp} (edited ${msg.editTimestamp})` : msg.timestamp}
+                <Text className={`text-xs ${(msg.sender_type === 'station' || msg.sender === 'station') ? 'text-gray-300' : 'text-gray-500'}`}>
+                  {msg.created_at ? new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : (msg.timestamp || '')}
                  </Text>
-                 {msg.sender === 'station' && (
+                {(msg.sender_type === 'station' || msg.sender === 'station') && (
                    <Ionicons 
                      name={msg.isRead ? "checkmark-done" : "checkmark"} 
                      size={14} 
@@ -245,6 +316,20 @@ export default function SChatPage({ contact, onBack }) {
 
       {/* Input Area */}
       <View className="border-t border-gray-100 px-4 py-3 bg-white">
+        {/* Incident context selector */}
+        <View className="mb-2">
+          <View className="flex-row items-center justify-between">
+            <Text className="text-xs text-gray-500">Context: {activeIncidentId ? `Incident #${activeIncidentId}` : 'None selected'}</Text>
+            <View className="border border-gray-300 rounded px-2 py-1">
+              <TextInput
+                value={activeIncidentId ? String(activeIncidentId) : ''}
+                onChangeText={(v) => setActiveIncidentId(v ? v : null)}
+                placeholder="Incident ID"
+                className="text-xs text-gray-700"
+              />
+            </View>
+          </View>
+        </View>
         <View className="flex-row items-center">
           <TouchableOpacity className="p-2 mr-2">
             <Ionicons name="attach" size={24} color="#6B7280" />
