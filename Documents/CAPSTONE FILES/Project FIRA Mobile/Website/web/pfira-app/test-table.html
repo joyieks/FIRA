@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Test Station Users Table</title>
+    <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
+</head>
+<body>
+    <div style="padding: 20px; font-family: Arial, sans-serif;">
+        <h1>🧪 Test Station Users Table</h1>
+        <p>This will test if the station_users table exists and works properly.</p>
+        
+        <button onclick="testTable()" style="padding: 10px 20px; background: #28a745; color: white; border: none; border-radius: 5px; cursor: pointer; margin-right: 10px;">
+            Test Table
+        </button>
+        
+        <button onclick="testInsert()" style="padding: 10px 20px; background: #007bff; color: white; border: none; border-radius: 5px; cursor: pointer;">
+            Test Insert
+        </button>
+        
+        <div id="output" style="margin-top: 20px; padding: 10px; background: #f8f9fa; border-radius: 5px; white-space: pre-wrap;"></div>
+    </div>
+
+    <script>
+        // Supabase configuration
+        const supabaseUrl = 'https://wedqhgsgrxnvbhklzhnnet.supabase.co';
+        const supabaseAnonKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndlZHFoc2dyeG52YmhrbHpobmV0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTYyNzYzNzcsImV4cCI6MjA3MTg1MjM3N30.MimeT7vfd8M5mLByJqSRBFby_OpyODfegoMouIlf7mU';
+
+        // Initialize Supabase
+        const supabase = window.supabase.createClient(supabaseUrl, supabaseAnonKey);
+
+        function log(message) {
+            const output = document.getElementById('output');
+            output.textContent += message + '\n';
+            console.log(message);
+        }
+
+        async function testTable() {
+            try {
+                log('🔍 Testing station_users table...');
+                
+                const { data, error } = await supabase
+                    .from('station_users')
+                    .select('*')
+                    .limit(1);
+                
+                if (error) {
+                    log('❌ Error accessing station_users table:');
+                    log('Error: ' + JSON.stringify(error, null, 2));
+                    
+                    if (error.code === 'PGRST116') {
+                        log('\n💡 The table "station_users" does not exist!');
+                        log('📋 Please run this SQL in your Supabase dashboard:');
+                        log(`
+CREATE TABLE station_users (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  station_name TEXT NOT NULL,
+  email TEXT UNIQUE NOT NULL,
+  address TEXT,
+  phone TEXT,
+  position TEXT,
+  role TEXT DEFAULT 'stationUser',
+  active BOOLEAN DEFAULT true,
+  status TEXT DEFAULT 'active',
+  is_online BOOLEAN DEFAULT false,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+ALTER TABLE station_users ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Allow all operations" ON station_users FOR ALL USING (true);
+                        `);
+                    }
+                } else {
+                    log('✅ station_users table exists and is accessible!');
+                    log(`📊 Current records: ${data.length}`);
+                    if (data.length > 0) {
+                        log('📋 Sample record: ' + JSON.stringify(data[0], null, 2));
+                    }
+                }
+                
+            } catch (error) {
+                log('❌ Test failed: ' + error.message);
+            }
+        }
+
+        async function testInsert() {
+            try {
+                log('\n🧪 Testing insert operation...');
+                
+                const testData = {
+                    station_name: 'Test Station ' + Date.now(),
+                    email: 'test' + Date.now() + '@example.com',
+                    address: 'Test Address',
+                    phone: '1234567890',
+                    position: 'Test Position',
+                    role: 'stationUser',
+                    active: true,
+                    status: 'active',
+                    is_online: false
+                };
+                
+                const { data, error } = await supabase
+                    .from('station_users')
+                    .insert([testData])
+                    .select();
+                
+                if (error) {
+                    log('❌ Error inserting test data:');
+                    log('Error: ' + JSON.stringify(error, null, 2));
+                } else {
+                    log('✅ Successfully inserted test data:');
+                    log('Data: ' + JSON.stringify(data[0], null, 2));
+                    
+                    // Clean up: Delete the test record
+                    const { error: deleteError } = await supabase
+                        .from('station_users')
+                        .delete()
+                        .eq('id', data[0].id);
+                    
+                    if (deleteError) {
+                        log('⚠️ Could not delete test data: ' + deleteError.message);
+                    } else {
+                        log('🧹 Test data cleaned up successfully');
+                    }
+                }
+                
+            } catch (error) {
+                log('❌ Insert test failed: ' + error.message);
+            }
+        }
+    </script>
+</body>
+</html>
