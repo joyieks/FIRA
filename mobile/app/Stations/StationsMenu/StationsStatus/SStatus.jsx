@@ -280,7 +280,10 @@ export default function SStatus() {
                         const toRemove = [...existing].filter(id => !selected.has(id));
                         if (toAdd.length > 0) {
                           const rows = toAdd.map(id => ({ report_id: rid, assignee_type: 'responder', assignee_id: id }));
-                          const { error: addErr } = await supabase.from('report_assignments').insert(rows);
+                          // Avoid duplicate key violations by upserting on a composite conflict target
+                          const { error: addErr } = await supabase
+                            .from('report_assignments')
+                            .upsert(rows, { onConflict: 'report_id,assignee_type,assignee_id' });
                           if (addErr) throw addErr;
                         }
                         if (toRemove.length > 0) {

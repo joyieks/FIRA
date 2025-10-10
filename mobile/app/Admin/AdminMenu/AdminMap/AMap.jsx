@@ -12,7 +12,8 @@ import {
   Dimensions,
   StatusBar,
   Platform,
-  Image
+  Image,
+  TextInput
 } from 'react-native';
 import MapView, { Marker, Callout, Circle } from 'react-native-maps';
 import * as Location from 'expo-location';
@@ -84,9 +85,36 @@ export default function AMap({ isSidebarOpen = false }) {
         const data = await response.json();
         console.log('📊 Fetched fire reports for mobile admin dashboard:', data.length);
         
+        // Normalize coordinates: prefer latitude/longitude; otherwise parse from geotag_location
+        const tryParseCoords = (s) => {
+          if (!s) return { ok: false };
+          const text = String(s);
+          // Prefer patterns with decimals and a comma/space separator
+          const m = text.match(/(-?\d{1,2}\.\d+)\s*,?\s*(-?\d{1,3}\.\d+)/);
+          if (!m) return { ok: false };
+          const lat = parseFloat(m[1]);
+          const lng = parseFloat(m[2]);
+          if (isNaN(lat) || isNaN(lng)) return { ok: false };
+          if (lat < -90 || lat > 90 || lng < -180 || lng > 180) return { ok: false };
+          return { ok: true, lat, lng };
+        };
+
+        const normalized = (data || []).map((r) => {
+          let lat = r.latitude; let lng = r.longitude;
+          const latOk = lat != null && !isNaN(parseFloat(lat)) && parseFloat(lat) >= -90 && parseFloat(lat) <= 90;
+          const lngOk = lng != null && !isNaN(parseFloat(lng)) && parseFloat(lng) >= -180 && parseFloat(lng) <= 180;
+          if (!(latOk && lngOk)) {
+            const parsed = tryParseCoords(r.geotag_location || r.address || r.location);
+            if (parsed.ok) { lat = parsed.lat; lng = parsed.lng; }
+          }
+          return { ...r, latitude: lat, longitude: lng };
+        });
+
         // Filter reports that have valid coordinates AND are not cancelled or fire out
-        const reportsWithCoords = data.filter(report => {
-          const hasCoords = report.latitude && report.longitude && !isNaN(parseFloat(report.latitude)) && !isNaN(parseFloat(report.longitude));
+        const reportsWithCoords = normalized.filter(report => {
+          const latNum = parseFloat(report.latitude);
+          const lngNum = parseFloat(report.longitude);
+          const hasCoords = report.latitude != null && report.longitude != null && !isNaN(latNum) && !isNaN(lngNum) && latNum >= -90 && latNum <= 90 && lngNum >= -180 && lngNum <= 180;
           const statusText = (report.status || '').toString().toLowerCase();
           const isCancelled = statusText.includes('cancelled') || statusText.includes('canceled');
           const isFireOut = statusText.includes('fire out');
@@ -100,7 +128,16 @@ export default function AMap({ isSidebarOpen = false }) {
           console.log(`Mobile Admin Report ${report.id}: ${parseFloat(report.latitude).toFixed(6)}, ${parseFloat(report.longitude).toFixed(6)} - ${report.address || report.geotag_location || 'No address'} - Status: ${report.status || 'Unknown'}`);
         });
         
+        // If there are valid reports, recenter softly around first one to ensure visibility
         setFireReports(reportsWithCoords);
+        if (reportsWithCoords.length > 0) {
+          const first = reportsWithCoords[0];
+          const latNum = parseFloat(first.latitude);
+          const lngNum = parseFloat(first.longitude);
+          if (!isNaN(latNum) && !isNaN(lngNum)) {
+            setMapRegion(r => ({ ...r, latitude: latNum, longitude: lngNum }));
+          }
+        }
         console.log('✅ Valid fire reports (filtered):', reportsWithCoords.length);
       } else {
         console.error('❌ Failed to fetch fire reports:', response.status);
@@ -117,6 +154,14 @@ export default function AMap({ isSidebarOpen = false }) {
   // Load fire reports on component mount
   useEffect(() => {
     fetchFireReports();
+  }, [fetchFireReports]);
+
+  // Poll periodically so markers appear promptly for new reports
+  useEffect(() => {
+    const id = setInterval(() => {
+      fetchFireReports();
+    }, 5000);
+    return () => clearInterval(id);
   }, [fetchFireReports]);
 
   // Load stations and geocode addresses for markers
@@ -212,7 +257,7 @@ export default function AMap({ isSidebarOpen = false }) {
       console.log('[Assign-Mobile] assignmentNote=', assignmentNote);
       const { error } = await supabase
         .from('report_assignments')
-        .upsert({ ...payload, note: assignmentNote && assignmentNote.trim() ? assignmentNote.trim() : null }, { onConflict: 'report_id' });
+        .upsert({ ...payload, note: assignmentNote && assignmentNote.trim() ? assignmentNote.trim() : null }, { onConflict: 'report_id,assignee_type,assignee_id' });
       if (error) throw error;
 
       setAssignmentNote('');
