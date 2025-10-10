@@ -19,6 +19,9 @@ export default function AOverview() {
   const [cancelReason, setCancelReason] = useState('');
   const [isUpdating, setIsUpdating] = useState(false);
   const [isCancelling, setIsCancelling] = useState(false);
+  const [stations, setStations] = useState([]);
+  const [assignStationId, setAssignStationId] = useState(null);
+  const [isAssigning, setIsAssigning] = useState(false);
   const [assignedResponders, setAssignedResponders] = useState([]);
   const [isLoadingAssigned, setIsLoadingAssigned] = useState(false);
 
@@ -53,6 +56,27 @@ export default function AOverview() {
   useEffect(() => {
     fetchReports();
   }, []); // Remove fetchReports dependency to prevent infinite re-renders
+
+  // Lightweight polling to keep list fresh
+  useEffect(() => {
+    const interval = setInterval(() => {
+      fetchReports();
+    }, 5000);
+    return () => clearInterval(interval);
+  }, [fetchReports]);
+
+  // Load stations for assignment when screen mounts
+  useEffect(() => {
+    (async () => {
+      try {
+        const { data, error } = await supabase
+          .from('station_users')
+          .select('id, station_name, email')
+          .order('station_name', { ascending: true });
+        if (!error) setStations(data || []);
+      } catch (_) {}
+    })();
+  }, []);
 
   // Load assigned responders when a report is selected
   useEffect(() => {
@@ -176,6 +200,17 @@ export default function AOverview() {
         
         console.log(`Status updated for report ${reportId}: ${newStatus}`);
         Alert.alert('Success', 'Report status updated successfully.');
+
+        // If report is finished/cancelled, clear responder assignments so they can be reassigned elsewhere
+        try {
+          if (newStatus === 'Fire Out' || newStatus === 'Cancelled') {
+            await supabase
+              .from('report_assignments')
+              .delete()
+              .eq('report_id', String(reportId))
+              .eq('assignee_type', 'responder');
+          }
+        } catch (_) {}
       } else {
         // If cancelling and primary endpoint failed, try dedicated cancel endpoint
         if (newStatus === 'Cancelled') {
@@ -386,11 +421,10 @@ export default function AOverview() {
 
   const filtered = useMemo(() => {
     return reports.filter((r) => {
-      const hasCoords = r.latitude && r.longitude && !isNaN(parseFloat(r.latitude)) && !isNaN(parseFloat(r.longitude));
       const statusText = (r.status || '').toString().toLowerCase();
       const isCancelled = statusText.includes('cancelled') || statusText.includes('canceled');
       const isFireOut = statusText.includes('fire out');
-      if (!(hasCoords && !isCancelled && !isFireOut)) return false;
+      if (!(/* hasCoords not required for overview */ !isCancelled && !isFireOut)) return false;
 
       const q = searchQuery.trim().toLowerCase();
       if (q) {
@@ -865,6 +899,57 @@ export default function AOverview() {
                         </Text>
                       </View>
                     </View>
+                  </View>
+
+                  {/* Assign to Station */}
+                  <View style={{ marginBottom: 20 }}>
+                    <Text style={{ fontSize: 16, fontWeight: '600', color: '#374151', marginBottom: 8 }}>Assign to Station:</Text>
+                    <View style={{ borderWidth: 1, borderColor: '#d1d5db', borderRadius: 8, overflow: 'hidden' }}>
+                      <ScrollView style={{ maxHeight: 180 }}>
+                        {(stations || []).map((s) => (
+                          <TouchableOpacity
+                            key={s.id}
+                            onPress={() => setAssignStationId(s.id)}
+                            style={{ paddingVertical: 10, paddingHorizontal: 12, backgroundColor: assignStationId === s.id ? '#dbeafe' : 'white', borderBottomWidth: 1, borderBottomColor: '#e5e7eb' }}
+                          >
+                            <Text style={{ color: '#0f172a', fontWeight: assignStationId === s.id ? '700' : '500' }}>
+                              {s.station_name || 'Station'}
+                            </Text>
+                            {s.email ? (
+                              <Text style={{ color: '#6b7280', fontSize: 12 }}>{s.email}</Text>
+                            ) : null}
+                          </TouchableOpacity>
+                        ))}
+                        {(!stations || stations.length === 0) && (
+                          <View style={{ padding: 12 }}>
+                            <Text style={{ color: '#6b7280' }}>No stations found.</Text>
+                          </View>
+                        )}
+                      </ScrollView>
+                    </View>
+                    <TouchableOpacity
+                      onPress={async () => {
+                        if (!assignStationId || !selectedReport?.id) return;
+                        try {
+                          setIsAssigning(true);
+                          const payload = { report_id: String(selectedReport.id), assignee_type: 'station', assignee_id: assignStationId };
+                          // Prefer insert; if schema enforces unique report_id, use upsert on report_id
+                          const { error } = await supabase
+                            .from('report_assignments')
+                            .upsert(payload, { onConflict: 'report_id,assignee_type,assignee_id' });
+                          if (error) throw error;
+                          Alert.alert('Assigned', 'Report assigned to station successfully.');
+                        } catch (e) {
+                          Alert.alert('Error', e.message || 'Failed to assign station');
+                        } finally {
+                          setIsAssigning(false);
+                        }
+                      }}
+                      disabled={!assignStationId || isAssigning}
+                      style={{ marginTop: 10, backgroundColor: !assignStationId || isAssigning ? '#9ca3af' : '#ef4444', paddingVertical: 10, borderRadius: 8, alignItems: 'center' }}
+                    >
+                      <Text style={{ color: 'white', fontWeight: '700' }}>{isAssigning ? 'Assigning...' : 'Assign Station'}</Text>
+                    </TouchableOpacity>
                   </View>
 
 

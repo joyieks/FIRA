@@ -397,7 +397,9 @@ const Station_Overview = () => {
           const uniqueAdds = toAdd.filter(id => !latest.has(id));
           if (uniqueAdds.length > 0) {
             const rows = uniqueAdds.map(id => ({ report_id: rid, assignee_type: 'responder', assignee_id: id }));
-            const { error: addErr } = await supabase.from('report_assignments').insert(rows);
+            const { error: addErr } = await supabase
+              .from('report_assignments')
+              .upsert(rows, { onConflict: 'report_id,assignee_type,assignee_id' });
             if (addErr) {
               // If the backend still has a unique constraint on report_id, inserting multiple will fail
               // Surface a friendly guidance
