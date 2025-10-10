@@ -15,6 +15,8 @@ export default function SStatus() {
   const [responderSelection, setResponderSelection] = useState({}); // reportId -> Set(ids)
   const [responderExisting, setResponderExisting] = useState({});
   const [isAssigning, setIsAssigning] = useState(false);
+  const [aiChatSuggestions, setAiChatSuggestions] = useState([]);
+  const [chatAlarmByReport, setChatAlarmByReport] = useState({});
 
   const API_URL = 'https://fire-detection-api-production-f8a3.up.railway.app';
 
@@ -75,7 +77,7 @@ export default function SStatus() {
 
       const resp = await fetch(`${API_URL}/get_reports`);
       const data = resp.ok ? await resp.json() : [];
-      const mapped = (data || [])
+      let mapped = (data || [])
         .filter(r => ids.has(String(r.id)))
         .map(r => ({
           id: r.id,
@@ -83,13 +85,86 @@ export default function SStatus() {
           reporter: r.reporter || 'Unknown Reporter',
           location: r.address || r.geotag_location || 'Location unavailable',
           status: r.status || 'On Going',
-          suggestedAlarmLevel: r.recommended_alarm_level || r.alarm_level || 'Under Control',
+          suggestedAlarmLevel: chatAlarmByReport[String(r.id)] || r.recommended_alarm_level || r.alarm_level || 'Under Control',
           finalAlarmLevel: r.final_fire_alarm_level || '1st Alarm',
           description: r.cause_of_fire || 'No cause specified',
           timestamp: r.created_at || r.timestamp,
           picture: r.image_url,
         }))
         .sort((a,b) => new Date(b.timestamp||0) - new Date(a.timestamp||0));
+
+      // Immediate AI override for visible reports (avoid waiting for periodic loader)
+      try {
+        const visibleIds = mapped.map(m => String(m.id));
+        if (visibleIds.length > 0) {
+          const { data: msgRows } = await supabase
+            .from('messages')
+            .select('report_id, ai_suggested_alarm, original_response, created_at')
+            .in('report_id', visibleIds)
+            .not('ai_suggested_alarm', 'is', null)
+            .order('created_at', { ascending: false })
+            .limit(500);
+          if (msgRows && msgRows.length > 0) {
+            const normalize = (aiValue) => {
+              if (!aiValue) return null;
+              let suggested = null;
+              if (typeof aiValue === 'string') {
+                const trimmed = aiValue.trim();
+                if ((trimmed.startsWith('{') && trimmed.endsWith('}')) || (trimmed.startsWith('[') && trimmed.endsWith(']'))) {
+                  try { return normalize(JSON.parse(trimmed)); } catch (_) {}
+                }
+                suggested = aiValue;
+              } else if (aiValue?.suggested_alarm) {
+                suggested = aiValue.suggested_alarm;
+              } else if (aiValue?.original_response?.alarm_level) {
+                suggested = aiValue.original_response.alarm_level.toLowerCase().replace(/\s+/g, '_');
+              }
+              if (!suggested) return null;
+              const map = {
+                none: 'Under Control',
+                first: '1st Alarm', first_alarm: '1st Alarm',
+                second: '2nd Alarm', second_alarm: '2nd Alarm',
+                third: '3rd Alarm', third_alarm: '3rd Alarm',
+                fourth: '4th Alarm', fourth_alarm: '4th Alarm',
+                fifth: '5th Alarm', fifth_alarm: '5th Alarm',
+                task_force_alpha: 'TASK FORCE ALPHA',
+                task_force_bravo: 'TASK FORCE BRAVO',
+                task_force_charlie: 'TASK FORCE CHARLIE',
+                task_force_delta_echo_hotel_india: 'TASK FORCE DELTA',
+                general: 'GENERAL ALARM'
+              };
+              return map[suggested] || suggested;
+            };
+            const toStrength = (label) => ({
+              'Under Control': 0,
+              '1st Alarm': 1,
+              '2nd Alarm': 2,
+              '3rd Alarm': 3,
+              '4th Alarm': 4,
+              '5th Alarm': 5,
+              'TASK FORCE ALPHA': 6,
+              'TASK FORCE BRAVO': 7,
+              'TASK FORCE CHARLIE': 8,
+              'TASK FORCE DELTA': 9,
+              'GENERAL ALARM': 10
+            })[label] ?? 0;
+            const best = {};
+            msgRows.forEach(m => {
+              const rid = String(m.report_id || '');
+              const label = normalize(m.ai_suggested_alarm) || normalize(m.original_response);
+              if (!rid || !label) return;
+              const current = best[rid];
+              if (!current || toStrength(label) > toStrength(current)) best[rid] = label;
+            });
+            if (Object.keys(best).length > 0) {
+              mapped = mapped.map(r => ({
+                ...r,
+                suggestedAlarmLevel: best[String(r.id)] || r.suggestedAlarmLevel
+              }));
+            }
+          }
+        }
+      } catch (_) {}
       setReports(mapped);
 
       // Load assigned responders per report (for quick view chips)
@@ -123,6 +198,93 @@ export default function SStatus() {
   }, []);
 
   useEffect(() => { load(); }, [load]);
+
+  // Periodically load AI suggestions from messages and compute strongest per report
+  useEffect(() => {
+    const loadAi = async () => {
+      try {
+        const { data, error } = await supabase
+          .from('messages')
+          .select('id, ai_suggested_alarm, created_at, report_id')
+          .not('ai_suggested_alarm', 'is', null)
+          .order('created_at', { ascending: false })
+          .limit(300);
+        if (!error) setAiChatSuggestions(data || []);
+      } catch (_) {}
+    };
+    loadAi();
+    const t = setInterval(loadAi, 30000);
+    return () => clearInterval(t);
+  }, []);
+
+  useEffect(() => {
+    const toStrength = (label) => {
+      const map = {
+        'Under Control': 0,
+        '1st Alarm': 1,
+        '2nd Alarm': 2,
+        '3rd Alarm': 3,
+        '4th Alarm': 4,
+        '5th Alarm': 5,
+        'TASK FORCE ALPHA': 6,
+        'TASK FORCE BRAVO': 7,
+        'TASK FORCE CHARLIE': 8,
+        'TASK FORCE DELTA': 9,
+        'GENERAL ALARM': 10
+      };
+      return map[label] ?? 0;
+    };
+    const normalize = (aiValue) => {
+      if (!aiValue) return null;
+      let suggested = null;
+      if (typeof aiValue === 'string') {
+        const trimmed = aiValue.trim();
+        if ((trimmed.startsWith('{') && trimmed.endsWith('}')) || (trimmed.startsWith('[') && trimmed.endsWith(']'))) {
+          try { return normalize(JSON.parse(trimmed)); } catch (_) {}
+        }
+        suggested = aiValue;
+      } else if (aiValue?.suggested_alarm) {
+        suggested = aiValue.suggested_alarm;
+      } else if (aiValue?.original_response?.alarm_level) {
+        suggested = aiValue.original_response.alarm_level.toLowerCase().replace(/\s+/g, '_');
+      }
+      if (!suggested) return null;
+      const map = {
+        none: 'Under Control',
+        first: '1st Alarm', first_alarm: '1st Alarm',
+        second: '2nd Alarm', second_alarm: '2nd Alarm',
+        third: '3rd Alarm', third_alarm: '3rd Alarm',
+        fourth: '4th Alarm', fourth_alarm: '4th Alarm',
+        fifth: '5th Alarm', fifth_alarm: '5th Alarm',
+        task_force_alpha: 'TASK FORCE ALPHA',
+        task_force_bravo: 'TASK FORCE BRAVO',
+        task_force_charlie: 'TASK FORCE CHARLIE',
+        task_force_delta_echo_hotel_india: 'TASK FORCE DELTA',
+        general: 'GENERAL ALARM'
+      };
+      return map[suggested] || suggested;
+    };
+
+    const best = {};
+    (aiChatSuggestions || []).forEach(m => {
+      const rid = String(m.report_id || '');
+      if (!rid) return;
+      const label = normalize(m.ai_suggested_alarm);
+      if (!label) return;
+      const current = best[rid];
+      if (!current || toStrength(label) > toStrength(current)) best[rid] = label;
+    });
+    setChatAlarmByReport(best);
+  }, [aiChatSuggestions]);
+
+  // When overrides update, refresh current list labels
+  useEffect(() => {
+    if (!reports || Object.keys(chatAlarmByReport).length === 0) return;
+    setReports(prev => prev.map(r => ({
+      ...r,
+      suggestedAlarmLevel: chatAlarmByReport[String(r.id)] || r.suggestedAlarmLevel
+    })));
+  }, [chatAlarmByReport]);
 
   // Load responders for this station for assignment UI
   useEffect(() => {

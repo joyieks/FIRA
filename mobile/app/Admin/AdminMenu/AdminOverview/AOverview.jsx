@@ -24,6 +24,8 @@ export default function AOverview() {
   const [isAssigning, setIsAssigning] = useState(false);
   const [assignedResponders, setAssignedResponders] = useState([]);
   const [isLoadingAssigned, setIsLoadingAssigned] = useState(false);
+  const [aiChatSuggestions, setAiChatSuggestions] = useState([]);
+  const [chatAlarmByReport, setChatAlarmByReport] = useState({});
 
   const fetchReports = useCallback(async () => {
     try {
@@ -31,7 +33,7 @@ export default function AOverview() {
       
       // Add timeout to prevent hanging
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
+      const timeoutId = setTimeout(() => controller.abort(), 20000); // 20 second timeout
       
       const res = await fetch(`${API_URL}/get_reports`, {
         signal: controller.signal
@@ -41,13 +43,37 @@ export default function AOverview() {
       
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
-      setReports(Array.isArray(data) ? data : []);
+      const arr = Array.isArray(data) ? data : [];
+      const withAi = arr.map(r => ({
+        ...r,
+        aiSuggestedLevel: chatAlarmByReport[String(r.id)] || r.recommended_alarm_level || r.alarm_level || 'Under Control'
+      }));
+      setReports(withAi);
     } catch (e) {
       console.error('Error fetching reports:', e);
       if (e.name === 'AbortError') {
-        console.error('Request timed out');
+        console.error('Request timed out (initial attempt). Retrying once...');
+        try {
+          await new Promise(r => setTimeout(r, 1200));
+          const controller2 = new AbortController();
+          const timeoutId2 = setTimeout(() => controller2.abort(), 20000);
+          const res2 = await fetch(`${API_URL}/get_reports`, { signal: controller2.signal });
+          clearTimeout(timeoutId2);
+          if (res2.ok) {
+            const data2 = await res2.json();
+            const arr2 = Array.isArray(data2) ? data2 : [];
+            const withAi2 = arr2.map(r => ({
+              ...r,
+              aiSuggestedLevel: chatAlarmByReport[String(r.id)] || r.recommended_alarm_level || r.alarm_level || 'Under Control'
+            }));
+            setReports(withAi2);
+            return;
+          }
+        } catch (e2) {
+          console.error('Retry failed:', e2);
+        }
       }
-      setReports([]);
+      // Keep existing list on failure
     } finally {
       setLoading(false);
     }
@@ -61,9 +87,97 @@ export default function AOverview() {
   useEffect(() => {
     const interval = setInterval(() => {
       fetchReports();
-    }, 5000);
+    }, 15000);
     return () => clearInterval(interval);
   }, [fetchReports]);
+
+  // Load AI chat suggestions periodically
+  useEffect(() => {
+    const loadAi = async () => {
+      try {
+        const { data, error } = await supabase
+          .from('messages')
+          .select('id, ai_suggested_alarm, created_at, report_id')
+          .not('ai_suggested_alarm', 'is', null)
+          .order('created_at', { ascending: false })
+          .limit(300);
+        if (!error) setAiChatSuggestions(data || []);
+      } catch (_) {}
+    };
+    loadAi();
+    const t = setInterval(loadAi, 30000);
+    return () => clearInterval(t);
+  }, []);
+
+  // Compute strongest AI suggestion per report
+  useEffect(() => {
+    const toStrength = (label) => {
+      const map = {
+        'Under Control': 0,
+        '1st Alarm': 1,
+        '2nd Alarm': 2,
+        '3rd Alarm': 3,
+        '4th Alarm': 4,
+        '5th Alarm': 5,
+        'TASK FORCE ALPHA': 6,
+        'TASK FORCE BRAVO': 7,
+        'TASK FORCE CHARLIE': 8,
+        'TASK FORCE DELTA': 9,
+        'GENERAL ALARM': 10
+      };
+      return map[label] ?? 0;
+    };
+    const normalize = (aiValue) => {
+      if (!aiValue) return null;
+      let suggested = null;
+      if (typeof aiValue === 'string') {
+        const trimmed = aiValue.trim();
+        if ((trimmed.startsWith('{') && trimmed.endsWith('}')) || (trimmed.startsWith('[') && trimmed.endsWith(']'))) {
+          try { return normalize(JSON.parse(trimmed)); } catch (_) {}
+        }
+        suggested = aiValue;
+      } else if (aiValue?.suggested_alarm) {
+        suggested = aiValue.suggested_alarm;
+      } else if (aiValue?.original_response?.alarm_level) {
+        suggested = aiValue.original_response.alarm_level.toLowerCase().replace(/\s+/g, '_');
+      }
+      if (!suggested) return null;
+      const map = {
+        none: 'Under Control',
+        first: '1st Alarm', first_alarm: '1st Alarm',
+        second: '2nd Alarm', second_alarm: '2nd Alarm',
+        third: '3rd Alarm', third_alarm: '3rd Alarm',
+        fourth: '4th Alarm', fourth_alarm: '4th Alarm',
+        fifth: '5th Alarm', fifth_alarm: '5th Alarm',
+        task_force_alpha: 'TASK FORCE ALPHA',
+        task_force_bravo: 'TASK FORCE BRAVO',
+        task_force_charlie: 'TASK FORCE CHARLIE',
+        task_force_delta_echo_hotel_india: 'TASK FORCE DELTA',
+        general: 'GENERAL ALARM'
+      };
+      return map[suggested] || suggested;
+    };
+
+    const best = {};
+    (aiChatSuggestions || []).forEach(m => {
+      const rid = String(m.report_id || '');
+      if (!rid) return;
+      const label = normalize(m.ai_suggested_alarm);
+      if (!label) return;
+      const current = best[rid];
+      if (!current || toStrength(label) > toStrength(current)) best[rid] = label;
+    });
+    setChatAlarmByReport(best);
+  }, [aiChatSuggestions]);
+
+  // Update current list when overrides change
+  useEffect(() => {
+    if (!reports || Object.keys(chatAlarmByReport).length === 0) return;
+    setReports(prev => prev.map(r => ({
+      ...r,
+      aiSuggestedLevel: chatAlarmByReport[String(r.id)] || r.aiSuggestedLevel || r.recommended_alarm_level || r.alarm_level || 'Under Control'
+    })));
+  }, [chatAlarmByReport]);
 
   // Load stations for assignment when screen mounts
   useEffect(() => {
@@ -134,13 +248,20 @@ export default function AOverview() {
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
     try {
-      const res = await fetch(`${API_URL}/get_reports`);
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 20000);
+      const res = await fetch(`${API_URL}/get_reports`, { signal: controller.signal });
+      clearTimeout(timeoutId);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
-      setReports(Array.isArray(data) ? data : []);
+      const arr = Array.isArray(data) ? data : [];
+      setReports(arr.map(r => ({
+        ...r,
+        aiSuggestedLevel: chatAlarmByReport[String(r.id)] || r.recommended_alarm_level || r.alarm_level || 'Under Control'
+      })));
     } catch (e) {
       console.error('Error refreshing reports:', e);
-      setReports([]);
+      // Keep current list on refresh failure
     } finally {
       setRefreshing(false);
     }
@@ -626,7 +747,7 @@ export default function AOverview() {
                 {/* Alarm Levels Row */}
                 <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
                   <View style={{ flex: 1, marginRight: 8 }}>
-                    <Text style={{ fontSize: 12, color: '#6b7280', marginBottom: 4 }}>Suggested Alarm:</Text>
+                    <Text style={{ fontSize: 12, color: '#6b7280', marginBottom: 4 }}>Suggested Alarm (AI):</Text>
                     <View style={{
                       paddingHorizontal: 8,
                       paddingVertical: 4,
@@ -639,7 +760,7 @@ export default function AOverview() {
                         fontWeight: '500',
                         fontSize: 12
                       }}>
-                        {r.recommended_alarm_level || r.alarm_level || 'N/A'}
+                        {r.aiSuggestedLevel || 'Under Control'}
                       </Text>
                     </View>
                   </View>
