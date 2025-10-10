@@ -69,7 +69,7 @@ const RNavbarMenu = ({ activeTab, setActiveTab, unreadCount = 0 }) => {
             const isActive = activeTab === idx;
             const labelTranslateY = animValue.interpolate({
               inputRange: [idx - 1, idx, idx + 1],
-              outputRange: [0, 8, 0],
+              outputRange: [0, 40, 0],
               extrapolate: 'clamp',
             });
             return (
@@ -93,7 +93,7 @@ const RNavbarMenu = ({ activeTab, setActiveTab, unreadCount = 0 }) => {
                   )}
                 </View>
                 <Animated.Text
-                  className={`text-[11px] mt-0.5 ${isActive ? 'text-[#ff512f] font-bold' : 'text-white'}`}
+                  className={`text-[11px] mt-4 ${isActive ? 'text-[#ff512f] font-bold' : 'text-white'}`}
                   style={{ transform: [{ translateY: labelTranslateY }] }}
                 >
                   {tab.label}
