@@ -28,7 +28,7 @@ const CStatus = () => {
   const [nearbyReports, setNearbyReports] = useState([]);
   const [addressCache, setAddressCache] = useState({});
 
-  // Use Supabase auth context instead of Firebase auth
+  // Use Supabase auth context
   useEffect(() => {
     console.log('CitizenStatus: auth context changed', { isAuthenticated, hasUserData: !!userData });
     if (isAuthenticated && userData?.uid) {
@@ -47,7 +47,7 @@ const CStatus = () => {
   useEffect(() => {
     if (currentUser?.uid) {
       console.log('Current user available, loading reports...');
-      loadReportsFromFirebase();
+      loadReportsFromAPI();
     } else if (currentUser === null) {
       // User is explicitly null (not authenticated)
       console.log('No user authenticated, clearing reports');
@@ -57,7 +57,7 @@ const CStatus = () => {
     }
   }, [currentUser?.uid]);
 
-  const loadReportsFromFirebase = async (retryCount = 0) => {
+  const loadReportsFromAPI = async (retryCount = 0) => {
     if (!currentUser?.uid) {
       console.log('No current user UID, skipping reports load');
       setIsLoading(false);
@@ -166,7 +166,7 @@ const CStatus = () => {
       if (retryCount < 3 && error.name !== 'AbortError') {
         console.log(`Retrying... attempt ${retryCount + 1}`);
         setTimeout(() => {
-          loadReportsFromFirebase(retryCount + 1);
+          loadReportsFromAPI(retryCount + 1);
         }, 2000 * (retryCount + 1));
         return;
       } else {
@@ -574,7 +574,7 @@ const CStatus = () => {
       
       // Refresh reports from API to ensure consistency
       setTimeout(() => {
-        loadReportsFromFirebase();
+        loadReportsFromAPI();
       }, 2000);
       
     } catch (err) {
@@ -878,7 +878,7 @@ const CStatus = () => {
   // Add pull to refresh functionality
   const handleRefresh = () => {
     if (currentUser?.uid) {
-      loadReportsFromFirebase();
+      loadReportsFromAPI();
     }
   };
 
@@ -1403,7 +1403,7 @@ const CStatus = () => {
                       if (!res.ok) throw new Error(typeof data === 'string' ? data : (data?.error || 'Failed to cancel'));
                     }
                     setShowCancelModal(false);
-                    setTimeout(() => loadReportsFromFirebase(), 300);
+                    setTimeout(() => loadReportsFromAPI(), 300);
                   } catch (e) {
                     Alert.alert('Cancel Failed', e?.message || 'Please try again later');
                   }
@@ -1557,7 +1557,7 @@ const CStatus = () => {
                         if (!res.ok) throw new Error(data?.error || 'Failed to update');
                       }
                       setShowEditModal(false);
-                      setTimeout(() => loadReportsFromFirebase(), 300);
+                      setTimeout(() => loadReportsFromAPI(), 300);
                     } catch (e) {
                       Alert.alert('Save Failed', e?.message || 'Please try again later');
                     } finally {

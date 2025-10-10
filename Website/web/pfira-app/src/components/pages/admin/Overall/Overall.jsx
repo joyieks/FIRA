@@ -34,7 +34,7 @@ const Overview = () => {
   // API endpoint for fetching reports
   const API_URL = 'https://fire-detection-api-production-f8a3.up.railway.app';
 
-  // Fetch reports from Firebase via Flask API
+  // Fetch reports from Flask API
   const fetchReports = async () => {
     try {
       setIsLoading(true);

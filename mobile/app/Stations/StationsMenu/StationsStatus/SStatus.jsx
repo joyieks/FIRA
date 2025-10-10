@@ -466,65 +466,6 @@ export default function SStatus() {
                     
                     <TouchableOpacity className="bg-fire px-4 py-2 rounded-lg">
                       <Text className="text-white text-xs font-bold">View Details</Text>
-
-                {/* Assign responders */}
-                <Text style={{ fontSize: 16, color: '#374151', marginBottom: 6 }}>Assign Responders</Text>
-                <View style={{ backgroundColor: '#f9fafb', borderWidth: 1, borderColor: '#e5e7eb', borderRadius: 8, marginBottom: 12 }}>
-                  <ScrollView style={{ maxHeight: 200 }}>
-                    {(responders || []).length === 0 ? (
-                      <View style={{ padding: 12 }}><Text style={{ color: '#6b7280' }}>No responders for this station.</Text></View>
-                    ) : responders.map((r) => {
-                      const rid = String(selectedReport.id);
-                      const setSel = responderSelection[rid] || new Set();
-                      const checked = setSel.has(r.id);
-                      const name = `${r.first_name || ''} ${r.last_name || ''}`.trim() || 'Responder';
-                      return (
-                        <TouchableOpacity key={r.id} onPress={() => {
-                          setResponderSelection(prev => {
-                            const next = new Set(prev[rid] || []);
-                            if (checked) next.delete(r.id); else next.add(r.id);
-                            return { ...prev, [rid]: next };
-                          });
-                        }} style={{ paddingHorizontal: 12, paddingVertical: 10, flexDirection: 'row', justifyContent: 'space-between', borderBottomWidth: 1, borderBottomColor: '#f3f4f6' }}>
-                          <Text style={{ color: '#111827' }}>{name}</Text>
-                          <Text style={{ color: checked ? '#16a34a' : '#9ca3af' }}>{checked ? 'Assigned' : 'Assign'}</Text>
-                        </TouchableOpacity>
-                      );
-                    })}
-                  </ScrollView>
-                  <View style={{ padding: 12, alignItems: 'flex-end' }}>
-                    <TouchableOpacity disabled={isAssigning} onPress={async () => {
-                      try {
-                        setIsAssigning(true);
-                        const rid = String(selectedReport.id);
-                        const selected = responderSelection[rid] || new Set();
-                        const existing = responderExisting[rid] || new Set();
-                        const toAdd = [...selected].filter(id => !existing.has(id));
-                        const toRemove = [...existing].filter(id => !selected.has(id));
-                        if (toAdd.length > 0) {
-                          const rows = toAdd.map(id => ({ report_id: rid, assignee_type: 'responder', assignee_id: id }));
-                          // Avoid duplicate key violations by upserting on a composite conflict target
-                          const { error: addErr } = await supabase
-                            .from('report_assignments')
-                            .upsert(rows, { onConflict: 'report_id,assignee_type,assignee_id' });
-                          if (addErr) throw addErr;
-                        }
-                        if (toRemove.length > 0) {
-                          const { error: delErr } = await supabase
-                            .from('report_assignments')
-                            .delete()
-                            .eq('report_id', rid)
-                            .eq('assignee_type', 'responder')
-                            .in('assignee_id', toRemove);
-                          if (delErr) throw delErr;
-                        }
-                        setResponderExisting(prev => ({ ...prev, [rid]: new Set(selected) }));
-                        Alert.alert('Success', 'Assignments updated.');
-                      } catch (e) {
-                        Alert.alert('Error', e.message || 'Failed to update assignments');
-                      } finally { setIsAssigning(false); }
-                    }} style={{ paddingHorizontal: 14, paddingVertical: 8, backgroundColor: isAssigning ? '#9ca3af' : '#3b82f6', borderRadius: 6 }}>
-                      <Text style={{ color: 'white', fontWeight: '700' }}>{isAssigning ? 'Saving...' : 'Save'}</Text>
                     </TouchableOpacity>
                   </View>
 

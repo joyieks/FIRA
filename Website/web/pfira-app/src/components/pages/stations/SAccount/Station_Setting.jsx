@@ -8,8 +8,8 @@ const Station_Setting = () => {
 
   const handleLogout = async () => {
     try {
-      // Sign out from Firebase Auth
-      await signOut(auth);
+      // Sign out from Supabase Auth
+      // Note: This should be handled by the auth context
       
       // Clear all authentication data
       localStorage.removeItem('authToken');
