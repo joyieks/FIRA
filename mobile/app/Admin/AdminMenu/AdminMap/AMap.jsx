@@ -43,6 +43,7 @@ export default function AMap({ isSidebarOpen = false }) {
   const [showReportModal, setShowReportModal] = useState(false);
   const [stations, setStations] = useState([]);
   const [jurisdictionRadius] = useState(2000);
+  // Force station-only assignments
   const [assigneeType, setAssigneeType] = useState('station');
   const [assigneeId, setAssigneeId] = useState('');
   const [assignmentNote, setAssignmentNote] = useState('');
@@ -278,14 +279,6 @@ export default function AMap({ isSidebarOpen = false }) {
           assigned_at: assignment.assigned_at,
           note: assignment.note || ''
         });
-      } else if (assignment && assignment.assignee_type === 'responder') {
-        setCurrentAssignment({
-          type: assignment.assignee_type,
-          id: assignment.assignee_id,
-          name: 'Responder',
-          assigned_at: assignment.assigned_at,
-          note: assignment.note || ''
-        });
       } else {
         setCurrentAssignment(null);
       }
@@ -363,7 +356,7 @@ export default function AMap({ isSidebarOpen = false }) {
       }
       const payload = {
         report_id: String(selectedReport.id),
-        assignee_type: assigneeType,
+        assignee_type: "station",
         assignee_id: assigneeId,
         assigned_at: new Date().toISOString()
       };
@@ -876,11 +869,8 @@ export default function AMap({ isSidebarOpen = false }) {
                   <View style={[styles.modalSection, { marginTop: 12 }]}> 
                     <Text style={styles.modalLabel}>Assignment</Text>
                     <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 6 }}>
-                      <TouchableOpacity onPress={() => setAssigneeType('station')} style={{ padding: 8, backgroundColor: assigneeType==='station'?'#ef4444':'#e5e7eb', borderRadius: 6, marginRight: 8 }}>
-                        <Text style={{ color: assigneeType==='station'?'white':'#111827' }}>Station</Text>
-                      </TouchableOpacity>
-                      <TouchableOpacity onPress={() => setAssigneeType('responder')} style={{ padding: 8, backgroundColor: assigneeType==='responder'?'#ef4444':'#e5e7eb', borderRadius: 6 }}>
-                        <Text style={{ color: assigneeType==='responder'?'white':'#111827' }}>Responder</Text>
+                      <TouchableOpacity disabled style={{ padding: 8, backgroundColor: '#ef4444', borderRadius: 6, marginRight: 8 }}>
+                        <Text style={{ color: 'white' }}>Station</Text>
                       </TouchableOpacity>
                     </View>
                     <View style={{ marginTop: 8 }}>
