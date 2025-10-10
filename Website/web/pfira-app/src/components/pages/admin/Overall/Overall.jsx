@@ -956,7 +956,10 @@ const Overview = () => {
                       </div>
                       <div>
                         <label className="block text-sm font-medium text-blue-700 mb-2">Structure Type:</label>
-                        <span className="text-lg font-semibold text-blue-900">{selectedReport.structure}</span>
+                        <span className="text-lg font-semibold text-blue-900">
+                          {selectedReport.structure}
+                          {selectedReport.structure_confidence ? ` (${selectedReport.structure_confidence})` : ''}
+                        </span>
                       </div>
                       <div>
                         <label className="block text-sm font-medium text-blue-700 mb-2">Smoke Intensity:</label>

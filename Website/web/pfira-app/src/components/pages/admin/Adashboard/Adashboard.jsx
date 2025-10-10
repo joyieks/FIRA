@@ -762,7 +762,7 @@ const Adashboard = () => {
                     <p><strong>Smoke Analysis:</strong> {selectedReport.smoke_intensity || ''} {selectedReport.smoke_confidence || ''}</p>
                   )}
                   {selectedReport.structure && (
-                    <p><strong>Structure:</strong> {selectedReport.structure}</p>
+                    <p><strong>Structure:</strong> {selectedReport.structure}{selectedReport.structure_confidence ? ` (${selectedReport.structure_confidence})` : ''}</p>
                   )}
                   {selectedReport.number_of_structures_on_fire && (
                     <p><strong>Structures Affected:</strong> {selectedReport.number_of_structures_on_fire} structure(s)</p>

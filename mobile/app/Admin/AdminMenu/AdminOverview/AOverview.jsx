@@ -755,7 +755,7 @@ export default function AOverview() {
                       <View style={{ width: '48%', marginBottom: 12 }}>
                         <Text style={{ fontSize: 14, fontWeight: '600', color: '#1e40af', marginBottom: 4 }}>Structure Type:</Text>
                         <Text style={{ fontSize: 16, fontWeight: '700', color: '#1e40af' }}>
-                          {selectedReport.structure || 'Unknown'}
+                          {selectedReport.structure || 'Unknown'} {selectedReport.structure_confidence ? `(${selectedReport.structure_confidence})` : ''}
                         </Text>
                       </View>
                       <View style={{ width: '48%', marginBottom: 12 }}>

@@ -464,7 +464,7 @@ const CStatus = () => {
         image: data?.image_url ? { uri: data.image_url } : data?.photo_url ? { uri: data.photo_url } : { uri: emergencyData.image },
         location: data?.geotag_location || currentLocation,
         progress: data?.prediction === 'Fire' ? 'On Going' : 'Under Control',
-        description: `Emergency reported: ${emergencyData.cause}\nPrediction: ${data?.prediction} (${data?.confidence})\nStructure: ${data?.structure}\nSmoke: ${data?.smoke_intensity} (${data?.smoke_confidence})\nAlarm: ${data?.alarm_level}`,
+        description: `Emergency reported: ${emergencyData.cause}\nPrediction: ${data?.prediction} (${data?.confidence})\nStructure: ${data?.structure} (${data?.structure_confidence || 'N/A'})\nSmoke: ${data?.smoke_intensity} (${data?.smoke_confidence})\nAlarm: ${data?.alarm_level}`,
         reporter: userName,
         reporterId: currentUser.uid,
         timestamp: 'Just now',
@@ -1263,7 +1263,10 @@ const CStatus = () => {
                 {selectedReport.structure && (
                   <View className="mb-3">
                     <Text className="text-gray-600 text-sm">Structure Type</Text>
-                    <Text className="text-gray-800 font-semibold">{selectedReport.structure}</Text>
+                    <Text className="text-gray-800 font-semibold">
+                      {selectedReport.structure}
+                      {selectedReport.structure_confidence ? ` (${selectedReport.structure_confidence})` : ''}
+                    </Text>
                   </View>
                 )}
 

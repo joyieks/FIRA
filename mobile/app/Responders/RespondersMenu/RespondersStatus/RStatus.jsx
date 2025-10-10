@@ -446,7 +446,10 @@ export default function RStatus() {
                   {/* Structure */}
                   <View className="mb-3">
                     <Text className="text-gray-600 text-sm font-semibold mb-1">Structure</Text>
-                    <Text className="text-gray-800 text-base">{selectedAssignment.structure}</Text>
+                    <Text className="text-gray-800 text-base">
+                      {selectedAssignment.structure}
+                      {selectedAssignment.structure_confidence ? ` (${selectedAssignment.structure_confidence})` : ''}
+                    </Text>
                   </View>
 
                   {/* Structures Affected */}

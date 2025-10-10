@@ -1353,6 +1353,7 @@ export default function RMap() {
                 <Text style={styles.modalFieldLabel}>Structure</Text>
                 <Text style={styles.modalFieldValue}>
                   {toStr(selectedReport?.structure || selectedReport?.structure_type || 'Unknown')}
+                  {selectedReport?.structure_confidence ? ` (${selectedReport.structure_confidence})` : ''}
                 </Text>
               </View>
               

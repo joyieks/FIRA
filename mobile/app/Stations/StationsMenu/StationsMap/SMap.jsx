@@ -536,7 +536,7 @@ Please respond immediately to this assignment.`;
                 <Text style={{ marginBottom: 4 }}>Smoke Analysis: {toStr(`${selectedReport.smoke_intensity}${selectedReport.smoke_confidence ? ` ${selectedReport.smoke_confidence}` : ''}`)}</Text>
               ) : null}
               {/* Structure */}
-              <Text style={{ marginBottom: 4 }}>Structure: {toStr(selectedReport?.structure || selectedReport?.building_type)}</Text>
+              <Text style={{ marginBottom: 4 }}>Structure: {toStr(selectedReport?.structure || selectedReport?.building_type)}{selectedReport?.structure_confidence ? ` (${selectedReport.structure_confidence})` : ''}</Text>
               {/* Structures affected */}
               {selectedReport?.number_of_structures_on_fire != null ? (
                 <Text style={{ marginBottom: 4 }}>Structures Affected: {toStr(selectedReport.number_of_structures_on_fire)}</Text>

@@ -737,19 +737,23 @@ const Sdashboard = () => {
     lng: 120.9842
   };
 
-  // Determine map center - prioritize first assigned report then station
-  const firstAssigned = assignedReports[0];
-  const firstAssignedCenter = firstAssigned ? {
-    lat: parseFloat(firstAssigned.latitude ?? firstAssigned.lat),
-    lng: parseFloat(firstAssigned.longitude ?? firstAssigned.lng)
-  } : null;
-  const mapCenter = (firstAssignedCenter && !isNaN(firstAssignedCenter.lat) && !isNaN(firstAssignedCenter.lng))
-    ? firstAssignedCenter
-    : (stationLocation || userLocation || center);
+  // State to control map center - prevents auto-recentering
+  const [mapCenter, setMapCenter] = useState(center);
+
+  // Only update map center when station location is first loaded
+  useEffect(() => {
+    if (stationLocation) {
+      setMapCenter(stationLocation);
+    }
+  }, [stationLocation]);
 
   // Handle station marker click
   const handleStationMarkerClick = () => {
     setShowStationInfoWindow(true);
+    // Center map on station
+    if (stationLocation) {
+      setMapCenter(stationLocation);
+    }
   };
 
   const onLoad = useCallback((map) => {
@@ -1042,11 +1046,15 @@ const Sdashboard = () => {
                 }}
                 label={{ text: '🔥', fontSize: '32px' }}
                 zIndex={4000}
-                onClick={() => setSelectedAssignedReport({
-                  ...report,
-                  latitude: lat,
-                  longitude: lng
-                })}
+                onClick={() => {
+                  setSelectedAssignedReport({
+                    ...report,
+                    latitude: lat,
+                    longitude: lng
+                  });
+                  // Center map on clicked fire report
+                  setMapCenter({ lat, lng });
+                }}
               />
             );
           })}
@@ -1109,7 +1117,7 @@ const Sdashboard = () => {
                     <p><strong>Smoke Analysis:</strong> {selectedAssignedReport.smoke_intensity || '—'} {selectedAssignedReport.smoke_confidence || ''}</p>
                   )}
                   {selectedAssignedReport.structure && (
-                    <p><strong>Structure:</strong> {selectedAssignedReport.structure}</p>
+                    <p><strong>Structure:</strong> {selectedAssignedReport.structure}{selectedAssignedReport.structure_confidence ? ` (${selectedAssignedReport.structure_confidence})` : ''}</p>
                   )}
                   {selectedAssignedReport.number_of_structures_on_fire != null && (
                     <p><strong>Structures Affected:</strong> {selectedAssignedReport.number_of_structures_on_fire} structure(s)</p>

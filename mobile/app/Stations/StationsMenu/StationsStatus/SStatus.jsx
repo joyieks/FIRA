@@ -488,7 +488,7 @@ export default function SStatus() {
                   {/* Additional Info */}
                   {selectedReport.structure && (
                     <View className="mb-2">
-                      <Text className="text-gray-600 text-sm">Structure Type: <Text className="text-gray-900 font-semibold">{selectedReport.structure}</Text></Text>
+                      <Text className="text-gray-600 text-sm">Structure Type: <Text className="text-gray-900 font-semibold">{selectedReport.structure}{selectedReport.structure_confidence ? ` (${selectedReport.structure_confidence})` : ''}</Text></Text>
                     </View>
                   )}
                   {selectedReport.numberOfStructures && (
