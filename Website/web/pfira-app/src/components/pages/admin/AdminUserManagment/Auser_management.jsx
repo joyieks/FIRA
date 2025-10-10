@@ -51,18 +51,29 @@ const Auser_management = () => {
     const fetchUsers = async () => {
       setLoading(true);
       try {
-        // Fetch citizens from Supabase
-        const { data: citizensData, error: citizensError } = await supabase
-          .from('citizen_users')
-          .select('*');
+        // Fetch in parallel for faster loads
+        const [citizensRes, stationsRes, respondersRes] = await Promise.all([
+          supabase.from('citizen_users').select('*'),
+          supabase.from('station_users').select('*'),
+          supabase.from('responders').select('station_id')
+        ]);
 
-        if (citizensError) {
-          console.error('Error fetching citizens from Supabase:', citizensError);
-          throw new Error(`Supabase error: ${citizensError.message}`);
+        if (citizensRes.error) {
+          console.error('Error fetching citizens from Supabase:', citizensRes.error);
+        }
+        if (stationsRes.error) {
+          console.error('Error fetching stations from Supabase:', stationsRes.error);
+        }
+        if (respondersRes.error) {
+          console.warn('Error fetching responders (counts only):', respondersRes.error);
         }
 
-        // Update the citizen mapping section in your useEffect
-const citizens = citizensData.map(data => {
+        const citizensData = citizensRes.data || [];
+        const stationsData = stationsRes.data || [];
+        const respondersData = respondersRes.data || [];
+
+        // Citizens mapping
+        const citizens = citizensData.map(data => {
   console.log('Citizen data from Supabase:', data); // Debug log
   
   // Construct full name from first_name and last_name
@@ -104,21 +115,12 @@ const citizens = citizensData.map(data => {
   };
 });
 
-        // Fetch stations from Supabase
-        const { data: stationsData, error: stationsError } = await supabase
-          .from('station_users')
-          .select('*');
-
-        if (stationsError) {
-          console.error('Error fetching stations from Supabase:', stationsError);
-          throw new Error(`Supabase error: ${stationsError.message}`);
-        }
-
+        // Stations mapping
         const stations = stationsData.map(data => {
           console.log('🔍 Station data from Supabase:', { id: data.id, ...data }); // Debug log
           
-          // Check is_active field first, then fallback to status field
-          const isActive = data.is_active !== false && (data.status || 'active').toLowerCase() === 'active';
+          // Determine if station is active based on status
+          const isActive = (data.status || 'active').toLowerCase() === 'active';
           
           return {
             id: data.id,
@@ -137,12 +139,9 @@ const citizens = citizensData.map(data => {
           };
         });
 
-        // Fetch responder counts for each station from Supabase
-        const { data: supabaseResponders, error: respondersError } = await supabase
-          .from('responders')
-          .select('station_id');
-
-        if (!respondersError && supabaseResponders) {
+        // Responder counts per station
+        const supabaseResponders = respondersData;
+        if (supabaseResponders && supabaseResponders.length > 0) {
           // Count responders by station_id
           const responderCounts = {};
           
@@ -157,7 +156,7 @@ const citizens = citizensData.map(data => {
             station.responders = responderCounts[station.id] || 0;
           });
         } else {
-          console.error('Error fetching responders:', respondersError);
+          console.log('No responders or failed to fetch responder counts; defaulting to 0');
           // Set default responder count to 0
           stations.forEach(station => {
             station.responders = 0;
@@ -173,8 +172,9 @@ const citizens = citizensData.map(data => {
         setUsers({ citizens, stations });
       } catch (error) {
         console.error("Error fetching users:", error);
+      } finally {
+        setLoading(false);
       }
-      setLoading(false);
     };
 
     fetchUsers();
