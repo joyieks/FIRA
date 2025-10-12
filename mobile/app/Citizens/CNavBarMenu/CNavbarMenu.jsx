@@ -1,6 +1,7 @@
 import React from 'react';
 import { View, TouchableOpacity, Animated, Dimensions, Text } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 const TABS = [
   { id: 'Notifications', icon: 'notifications', label: 'Notifications' },
@@ -17,6 +18,7 @@ const { width: screenWidth } = Dimensions.get('window');
 const CIRCLE_SIZE = 56;
 
 const CNavbarMenu = ({ activeTab, setActiveTab, unreadCount = 0 }) => {
+  const insets = useSafeAreaInsets();
   const [barWidth, setBarWidth] = React.useState(screenWidth);
   const tabWidth = barWidth / TABS.length;
   const getX = (idx) => idx * tabWidth + (tabWidth - CIRCLE_SIZE) / 2;
@@ -39,8 +41,19 @@ const CNavbarMenu = ({ activeTab, setActiveTab, unreadCount = 0 }) => {
   const scale = 1;
 
   return (
-    <View className="absolute left-0 right-0 bottom-0 h-[70px] items-center z-10 bg-black">
-      <View className="w-full h-[60px] rounded-t-2xl bg-[#222] overflow-visible justify-center" onLayout={(e) => setBarWidth(e.nativeEvent.layout.width)}>
+    <View 
+      style={{
+        position: 'absolute',
+        left: 0,
+        right: 0,
+        bottom: 0,
+        height: 60 + insets.bottom,
+        alignItems: 'center',
+        zIndex: 10,
+        backgroundColor: 'black',
+      }}
+    >
+      <View className="w-full h-[50px] rounded-t-2xl bg-[#222] overflow-visible justify-center" onLayout={(e) => setBarWidth(e.nativeEvent.layout.width)}>
         {/* Floating Icon */}
         <Animated.View
           style={{
@@ -79,7 +92,7 @@ const CNavbarMenu = ({ activeTab, setActiveTab, unreadCount = 0 }) => {
                 activeOpacity={0.8}
                 onPress={() => handlePress(idx)}
               >
-                <View className="relative">
+                <View className={`relative ${activeTab !== idx ? 'mt-1' : ''}`}>
                   {activeTab !== idx && (
                     <MaterialIcons name={tab.icon} size={28} color={INACTIVE_COLOR} />
                   )}
@@ -93,7 +106,7 @@ const CNavbarMenu = ({ activeTab, setActiveTab, unreadCount = 0 }) => {
                   )}
                 </View>
                 <Animated.Text
-                  className={`text-[11px] mt-4 ${isActive ? 'text-[#ff512f] font-bold' : 'text-white'}`}
+                  className={`text-[11px] ${isActive ? 'text-[#ff512f] font-bold mt-6' : 'text-white mt-0'}`}
                   style={{ transform: [{ translateY: labelTranslateY }] }}
                 >
                   {tab.label}

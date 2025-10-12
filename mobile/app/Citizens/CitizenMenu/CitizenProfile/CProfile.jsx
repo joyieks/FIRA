@@ -8,6 +8,7 @@ const CProfile = () => {
   const router = useRouter();
   const { logout, userData } = useAuth();
   const [showDeactivate, setShowDeactivate] = useState(false);
+  const [showLogoutModal, setShowLogoutModal] = useState(false);
   
   // Use actual user data from AuthContext if available, otherwise use default
   const profile = {
@@ -36,35 +37,22 @@ const CProfile = () => {
     return '';
   };
 
-  const handleLogout = async () => {
-    Alert.alert(
-      'Logout',
-      'Are you sure you want to logout?',
-      [
-        {
-          text: 'Cancel',
-          style: 'cancel',
-        },
-        {
-          text: 'Logout',
-          style: 'destructive',
-          onPress: async () => {
-            try {
-              await logout();
-              // Navigate to login screen
-              router.replace('/Authentication/login');
-            } catch (error) {
-              console.error('Logout error:', error);
-              Alert.alert('Error', 'Failed to logout. Please try again.');
-            }
-          },
-        },
-      ]
-    );
+  const handleLogout = () => {
+    setShowLogoutModal(true);
+  };
+
+  const confirmLogout = async () => {
+    try {
+      await logout();
+      router.replace('/Authentication/login');
+    } catch (error) {
+      console.error('Logout error:', error);
+      Alert.alert('Error', 'Failed to logout. Please try again.');
+    }
   };
 
   return (
-    <ScrollView className="flex-1 bg-gray-100 pb-6 pt-8">
+    <ScrollView className="flex-1 bg-gray-100 pb-6 pt-12">
       {/* Profile Header */}
       <View className="bg-white py-8 items-center border-b border-gray-200 relative">
         {/* Edit Button */}
@@ -107,7 +95,7 @@ const CProfile = () => {
           <MaterialIcons name="logout" size={20} color="#fff" />
           <Text className="ml-2 text-base font-semibold text-white">Log Out</Text>
         </TouchableOpacity>
-        <View className="mb-8" />
+        <View className="mb-32" />
       </View>
       {/* Deactivate Modal */}
       {showDeactivate && (
@@ -121,6 +109,42 @@ const CProfile = () => {
               </TouchableOpacity>
               <TouchableOpacity className="bg-red-500 px-8 py-2 rounded-xl" onPress={() => setShowDeactivate(false)}>
                 <Text className="text-white font-semibold text-center">Deactivate</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      )}
+
+      {/* Custom Logout Modal */}
+      {showLogoutModal && (
+        <View className="absolute top-0 left-0 right-0 bottom-0 flex-1 justify-center items-center bg-black/50 z-50">
+          <View className="bg-white rounded-3xl p-8 w-80 items-center shadow-2xl">
+            {/* Logout Icon */}
+            <View className="w-16 h-16 rounded-full bg-red-100 items-center justify-center mb-4">
+              <MaterialIcons name="logout" size={32} color="#ef4444" />
+            </View>
+            
+            {/* Title */}
+            <Text className="text-xl font-bold text-gray-800 mb-2 text-center">Logout</Text>
+            
+            {/* Message */}
+            <Text className="text-gray-600 text-center mb-6 leading-5">
+              Are you sure you want to logout? You'll need to sign in again to access your account.
+            </Text>
+            
+            {/* Buttons */}
+            <View className="flex-row w-full">
+              <TouchableOpacity 
+                className="flex-1 bg-gray-200 py-4 rounded-xl mr-4" 
+                onPress={() => setShowLogoutModal(false)}
+              >
+                <Text className="text-gray-700 font-semibold text-center text-base">Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity 
+                className="flex-1 bg-red-500 py-4 rounded-xl ml-4" 
+                onPress={confirmLogout}
+              >
+                <Text className="text-white font-semibold text-center text-base">Logout</Text>
               </TouchableOpacity>
             </View>
           </View>

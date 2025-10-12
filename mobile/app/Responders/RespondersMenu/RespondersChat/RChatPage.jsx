@@ -336,7 +336,7 @@ export default function RChatPage({ contact, onBack }) {
         keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 20}
       >
       {/* Chat Header */}
-      <View className="pt-12 pb-4 px-4 border-b border-gray-100">
+      <View className="pt-16 pb-4 px-4 border-b border-gray-100">
         <View className="flex-row items-center">
           {/* Left side - Back button and Contact info */}
           <View className="flex-row items-center flex-1">

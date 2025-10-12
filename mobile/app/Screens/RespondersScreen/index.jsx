@@ -23,7 +23,7 @@ export default function RespondersScreen() {
   return (
     <View className="flex-1 bg-gray-100">
       {/* Removed items-center and justify-center */}
-      <View className="flex-1">
+      <View className="flex-1" style={{ paddingBottom: 60 }}>
         {TABS[activeTab].component}
       </View>
       <RNavbarMenu activeTab={activeTab} setActiveTab={setActiveTab} unreadCount={unreadCount} />

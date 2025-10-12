@@ -77,7 +77,6 @@ export default function StationScreen() {
       style={{
         flex: 1,
         backgroundColor: '#f3f4f6',
-        paddingBottom: 90 + insets.bottom, // Add space for navbar
       }}
     >
       {/* Main Content */}
@@ -106,14 +105,14 @@ export default function StationScreen() {
               width: 48,
               height: 48,
               borderRadius: 24,
-              backgroundColor: '#ff512f',
+              backgroundColor: 'transparent',
               alignItems: 'center',
               justifyContent: 'center',
             }}
             onPress={toggleSidebar}
             activeOpacity={0.8}
           >
-            <MaterialIcons name="menu" size={24} color="#ffffff" />
+            <MaterialIcons name="menu" size={24} color="#ff512f" />
           </TouchableOpacity>
         )}
         

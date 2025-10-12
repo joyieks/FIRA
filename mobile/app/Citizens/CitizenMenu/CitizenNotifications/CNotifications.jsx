@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, ScrollView, TouchableOpacity, Image } from 'react-native';
+import { View, Text, ScrollView, TouchableOpacity, Image, RefreshControl } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 
 const CNotifications = ({ onUnreadCountChange }) => {
+  const [refreshing, setRefreshing] = useState(false);
   const [notifications, setNotifications] = useState([
     {
       id: 1,
@@ -96,10 +97,19 @@ const CNotifications = ({ onUnreadCountChange }) => {
     }
   }, [unreadCount, onUnreadCountChange]);
 
+  // Pull to refresh handler
+  const onRefresh = () => {
+    setRefreshing(true);
+    // Simulate refresh - in real app, fetch from Supabase
+    setTimeout(() => {
+      setRefreshing(false);
+    }, 1000);
+  };
+
   return (
     <View className="flex-1 bg-gray-50">
       {/* Filter Tabs */}
-      <View className="bg-white border-b border-gray-200 pt-4">
+      <View className="bg-white border-b border-gray-200 pt-12">
         <View className="flex-row px-4 py-2">
           <TouchableOpacity className="bg-fire px-4 py-2 rounded-lg mr-2">
             <Text className="text-white font-medium">All</Text>
@@ -114,7 +124,17 @@ const CNotifications = ({ onUnreadCountChange }) => {
       </View>
 
       {/* Notifications List */}
-      <ScrollView className="flex-1 px-4 pt-4">
+      <ScrollView 
+        className="flex-1 px-4 pt-4"
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            colors={['#ff512f']}
+            tintColor="#ff512f"
+          />
+        }
+      >
         {notifications.map((notification) => {
           const icon = getNotificationIcon(notification.type);
           const priorityColor = getPriorityColor(notification.priority);

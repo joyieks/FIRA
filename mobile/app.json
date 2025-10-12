@@ -23,10 +23,15 @@
         "backgroundColor": "#ffffff"
       },
       "edgeToEdgeEnabled": true,
+      "softwareKeyboardLayoutMode": "pan",
       "config": {
         "googleMaps": {
           "apiKey": "AIzaSyDv-FC2CTEpLuVAlXCHMtu4XqAEPNtOjos"
         }
+      },
+      "statusBar": {
+        "barStyle": "light-content",
+        "backgroundColor": "#000000"
       }
     },
     "web": {

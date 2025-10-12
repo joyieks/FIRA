@@ -1,16 +1,18 @@
 import { Stack } from "expo-router";
 import "./global.css";
 import { MaterialIcons } from '@expo/vector-icons';
-import { TouchableOpacity } from 'react-native';
+import { TouchableOpacity, StatusBar, View } from 'react-native';
 import { AuthProvider } from './config/AuthContext';
 import BackButtonHandler from './components/BackButtonHandler';
 
 export default function RootLayout() {
   return (
     <AuthProvider>
-      <BackButtonHandler />
-      <Stack screenOptions={{ headerShown: false }}>
-      {/* ...existing code for Stack.Screen definitions... */}
+      <View style={{ flex: 1 }}>
+        <StatusBar barStyle="light-content" backgroundColor="#000000" translucent={false} />
+        <BackButtonHandler />
+        <Stack screenOptions={{ headerShown: false, contentStyle: { flex: 1 } }}>
+        {/* ...existing code for Stack.Screen definitions... */}
       <Stack.Screen name="index" />
       <Stack.Screen name="get-started/getstarted" />
       <Stack.Screen name="Authentication/login" />
@@ -26,6 +28,7 @@ export default function RootLayout() {
       <Stack.Screen name="Screens/*" />
       <Stack.Screen name="Citizens/CNavBarMenu/CNavbarMenu" />
       </Stack>
+      </View>
     </AuthProvider>
   );
 }

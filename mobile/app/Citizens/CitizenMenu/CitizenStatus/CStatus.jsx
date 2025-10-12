@@ -914,7 +914,7 @@ const CStatus = () => {
 
   return (
     <View className="flex-1 bg-gray-50">
-      <View className="p-4 pt-8">
+      <View className="p-4 pt-12">
         {/* Report Emergency Button */}
         <TouchableOpacity
           className="bg-red-600 rounded-lg p-4 mb-6 items-center shadow-sm"
@@ -1306,7 +1306,7 @@ const CStatus = () => {
 
                 {/* Action Buttons: Edit and Cancel */}
                 {selectedReport && (
-                  <View className="flex-row space-x-3 mt-3">
+                  <View className="flex-row mt-3 gap-3">
                     <TouchableOpacity
                       className="flex-1 bg-blue-600 rounded-lg p-3"
                       onPress={() => openEditFromReport(selectedReport)}
@@ -1351,7 +1351,7 @@ const CStatus = () => {
               textAlignVertical="top"
               returnKeyType="done"
             />
-            <View className="flex-row space-x-3 mt-4">
+            <View className="flex-row mt-4 gap-3">
               <TouchableOpacity
                 className="flex-1 bg-gray-300 rounded-lg p-3"
                 onPress={() => setShowCancelModal(false)}

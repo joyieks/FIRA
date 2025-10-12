@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { View, TouchableOpacity, Text, Image, Animated, Dimensions, Alert } from 'react-native';
+import { View, TouchableOpacity, Text, Image, Animated, Dimensions, Alert, ScrollView } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { useAuth } from '../../config/AuthContext';
@@ -25,6 +25,7 @@ const SSidebarMenu = ({ activeTab, setActiveTab, isOpen, onToggle }) => {
   const slideAnim = React.useRef(new Animated.Value(isOpen ? 0 : -width * 0.8)).current;
   const overlayOpacity = React.useRef(new Animated.Value(isOpen ? 0.3 : 0)).current;
   const [isAnimating, setIsAnimating] = React.useState(false);
+  const [showLogoutModal, setShowLogoutModal] = useState(false);
 
   React.useEffect(() => {
     setIsAnimating(true);
@@ -50,25 +51,18 @@ const SSidebarMenu = ({ activeTab, setActiveTab, isOpen, onToggle }) => {
   };
 
   const handleLogout = () => {
-    Alert.alert(
-      'Logout',
-      'Are you sure you want to logout?',
-      [
-        {
-          text: 'Cancel',
-          style: 'cancel',
-        },
-        {
-          text: 'Logout',
-          style: 'destructive',
-          onPress: async () => {
-            onToggle(); // Close sidebar
-            await logout(); // Clear authentication data
-            router.replace('/Authentication/login');
-          },
-        },
-      ]
-    );
+    setShowLogoutModal(true);
+  };
+
+  const confirmLogout = async () => {
+    try {
+      onToggle(); // Close sidebar
+      await logout(); // Clear authentication data
+      router.replace('/Authentication/login');
+    } catch (error) {
+      console.error('Logout error:', error);
+      Alert.alert('Error', 'Failed to logout. Please try again.');
+    }
   };
 
   return (
@@ -97,7 +91,7 @@ const SSidebarMenu = ({ activeTab, setActiveTab, isOpen, onToggle }) => {
           top: 0,
           left: 0,
           width: width * 0.8,
-          height: height + insets.top,
+          height: height + insets.top + insets.bottom,
           backgroundColor: '#1a1a1a',
           transform: [{ translateX: slideAnim }],
           zIndex: 1001,
@@ -125,13 +119,17 @@ const SSidebarMenu = ({ activeTab, setActiveTab, isOpen, onToggle }) => {
         </View>
 
         {/* Navigation Menu */}
-        <View className="flex-1 px-4 pt-6">
+        <ScrollView 
+          className="flex-1 px-6 pt-8"
+          showsVerticalScrollIndicator={false}
+          contentContainerStyle={{ paddingBottom: 30 }}
+        >
           {MENU_ITEMS.map((item, index) => {
             const isActive = activeTab === index;
             return (
               <TouchableOpacity
                 key={item.id}
-                className={`flex-row items-center py-4 px-4 rounded-lg mb-2 ${
+                className={`flex-row items-center py-5 px-5 rounded-xl mb-3 ${
                   isActive ? 'bg-[#ff512f]/20' : ''
                 }`}
                 activeOpacity={0.7}
@@ -145,12 +143,12 @@ const SSidebarMenu = ({ activeTab, setActiveTab, isOpen, onToggle }) => {
               >
                 <MaterialIcons
                   name={item.icon}
-                  size={24}
+                  size={26}
                   color={isActive ? '#ff512f' : '#ffffff'}
-                  style={{ marginRight: 16 }}
+                  style={{ marginRight: 18 }}
                 />
                 <Text
-                  className={`text-base font-medium ${
+                  className={`text-lg font-medium ${
                     isActive ? 'text-[#ff512f]' : 'text-white'
                   }`}
                 >
@@ -159,7 +157,7 @@ const SSidebarMenu = ({ activeTab, setActiveTab, isOpen, onToggle }) => {
               </TouchableOpacity>
             );
           })}
-        </View>
+        </ScrollView>
 
         {/* Close Button */}
         <TouchableOpacity
@@ -169,6 +167,42 @@ const SSidebarMenu = ({ activeTab, setActiveTab, isOpen, onToggle }) => {
           <MaterialIcons name="close" size={20} color="#ffffff" />
         </TouchableOpacity>
       </Animated.View>
+
+      {/* Custom Logout Modal */}
+      {showLogoutModal && (
+        <View className="absolute top-0 left-0 right-0 bottom-0 flex-1 justify-center items-center bg-black/50" style={{ zIndex: 3000 }}>
+          <View className="bg-white rounded-3xl p-8 w-80 items-center shadow-2xl">
+            {/* Logout Icon */}
+            <View className="w-16 h-16 rounded-full bg-red-100 items-center justify-center mb-4">
+              <MaterialIcons name="logout" size={32} color="#ef4444" />
+            </View>
+            
+            {/* Title */}
+            <Text className="text-xl font-bold text-gray-800 mb-2 text-center">Logout</Text>
+            
+            {/* Message */}
+            <Text className="text-gray-600 text-center mb-6 leading-5">
+              Are you sure you want to logout? You'll need to sign in again to access your account.
+            </Text>
+            
+            {/* Buttons */}
+            <View className="flex-row w-full">
+              <TouchableOpacity 
+                className="flex-1 bg-gray-200 py-4 rounded-xl mr-4" 
+                onPress={() => setShowLogoutModal(false)}
+              >
+                <Text className="text-gray-700 font-semibold text-center text-base">Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity 
+                className="flex-1 bg-red-500 py-4 rounded-xl ml-4" 
+                onPress={confirmLogout}
+              >
+                <Text className="text-white font-semibold text-center text-base">Logout</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      )}
     </>
   );
 };

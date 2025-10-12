@@ -51,10 +51,9 @@ const CitizenScreen = () => {
       style={{
         flex: 1,
         backgroundColor: '#ffffff',
-        paddingBottom: 80 + insets.bottom, // Add space for navbar
       }}
     >
-      <View style={{ flex: 1, paddingTop: insets.top }}>
+      <View style={{ flex: 1, paddingBottom: 60 }}>
         {renderActiveComponent()}
       </View>
       <CNavbarMenu activeTab={activeTab} setActiveTab={setActiveTab} unreadCount={unreadCount} />

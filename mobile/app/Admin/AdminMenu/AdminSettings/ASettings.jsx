@@ -15,7 +15,7 @@ const ASettings = () => {
 
   return (
     <ScrollView className="flex-1 bg-gray-50">
-      <View className="p-4 pt-32">
+      <View className="p-4 pt-16">
         
         {settingsOptions.map((option, index) => (
           <TouchableOpacity
