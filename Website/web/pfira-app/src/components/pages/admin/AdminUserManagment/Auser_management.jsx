@@ -1011,7 +1011,7 @@ const citizens = citizensData.map(data => {
                     {/* Citizen Profile Modal */}
           {showCitizenProfileModal && selectedCitizen && (
             <div 
-              className="fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center z-50 backdrop-blur-sm"
+              className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 backdrop-blur-lg"
               onClick={() => setShowCitizenProfileModal(false)}
             >
               <div 
@@ -1379,7 +1379,7 @@ const citizens = citizensData.map(data => {
 
           {/* Add Station Modal */}
           {showAddStationModal && (
-            <div className="fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center z-50 backdrop-blur-sm" onClick={() => setShowAddStationModal(false)}>
+            <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 backdrop-blur-lg" onClick={() => setShowAddStationModal(false)}>
               <div className="bg-white rounded-2xl shadow-2xl p-8 max-w-4xl w-full mx-4" onClick={(e) => e.stopPropagation()}>
                 <div className="flex justify-between items-center mb-6">
                   <div>
@@ -1546,7 +1546,7 @@ const citizens = citizensData.map(data => {
           {/* Responders Modal */}
           {showRespondersModal && selectedStation && (
             <div 
-              className="fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center z-50 backdrop-blur-sm"
+              className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 backdrop-blur-lg"
               onClick={() => setShowRespondersModal(false)}
             >
               <div 
@@ -1645,7 +1645,7 @@ const citizens = citizensData.map(data => {
           {/* Responder Profile Modal */}
           {showResponderProfileModal && selectedResponder && (
             <div 
-              className="fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center z-50 backdrop-blur-sm"
+              className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 backdrop-blur-lg"
               onClick={() => setShowResponderProfileModal(false)}
             >
               <div 

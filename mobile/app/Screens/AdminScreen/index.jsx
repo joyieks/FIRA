@@ -80,11 +80,10 @@ export default function AdminScreen() {
       style={{
         flex: 1,
         backgroundColor: '#f3f4f6',
-        paddingBottom: 90 + insets.bottom, // Add space for navbar
       }}
     >
       {/* Main Content */}
-      <View style={{ flex: 1 }}>
+      <View style={{ flex: 1, marginBottom: 0 }}>
         {/* Global alerts worker mounts regardless of active tab */}
         <AAlertsWorker />
         {activeTab === 1 ? (
@@ -116,7 +115,7 @@ export default function AdminScreen() {
               width: 48,
               height: 48,
               borderRadius: 24,
-              backgroundColor: '#ff512f',
+              backgroundColor: 'transparent',
               alignItems: 'center',
               justifyContent: 'center',
               zIndex: 11000,
@@ -126,7 +125,7 @@ export default function AdminScreen() {
             hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
             pointerEvents="auto"
           >
-            <MaterialIcons name="menu" size={24} color="#ffffff" />
+            <MaterialIcons name="menu" size={24} color="#ff512f" />
           </TouchableOpacity>
         )}
       </View>

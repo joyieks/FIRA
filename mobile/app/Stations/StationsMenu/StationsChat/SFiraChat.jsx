@@ -1,72 +1,137 @@
-import React, { useState } from 'react';
-import { View, Text, TouchableOpacity, ScrollView } from 'react-native';
+import React, { useEffect, useMemo, useState } from 'react';
+import { View, Text, TouchableOpacity, ScrollView, TextInput } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { supabase } from '../../../config/supabase';
 import SChatPage from './SChatPage';
 
 export default function SFiraChat({ onContactSelect }) {
-  const [message, setMessage] = useState('');
   const [selectedContact, setSelectedContact] = useState(null);
-  const [contacts] = useState([
-    {
-      id: 1,
-      name: 'Admin Control',
-      lastMessage: 'Emergency call received: Fire at 456 Oak Ave',
-      timestamp: '2 min ago',
-      unreadCount: 1,
-      status: 'online',
-      type: 'admin'
-    },
-    {
-      id: 2,
-      name: 'Responder Team Alpha',
-      lastMessage: 'ETA 8 minutes to scene',
-      timestamp: '5 min ago',
-      unreadCount: 0,
-      status: 'online',
-      type: 'responder'
-    },
-    {
-      id: 3,
-      name: 'Station 2',
-      lastMessage: 'Backup units ready for dispatch',
-      timestamp: '8 min ago',
-      unreadCount: 2,
-      status: 'online',
-      type: 'station'
-    },
-    {
-      id: 4,
-      name: 'Emergency Dispatch',
-      lastMessage: 'New emergency coordinates received',
-      timestamp: '12 min ago',
-      unreadCount: 0,
-      status: 'online',
-      type: 'system'
-    }
-  ]);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [currentStationId, setCurrentStationId] = useState(null);
+  const [contacts, setContacts] = useState([]);
+  const [isLoading, setIsLoading] = useState(true);
 
-  const [messages, setMessages] = useState({
-    1: [
-      { id: 1, text: 'Emergency call received: Fire at 456 Oak Ave', sender: 'admin', timestamp: '10:30 AM', isRead: true },
-      { id: 2, text: 'Sending Engine 1 and Ladder 2', sender: 'station', timestamp: '10:33 AM', isRead: true },
-      { id: 3, text: 'ETA 8 minutes. Need additional units?', sender: 'station', timestamp: '10:34 AM', isRead: true },
-      { id: 4, text: 'Yes, please send backup. Large structure fire', sender: 'admin', timestamp: '10:35 AM', isRead: false }
-    ],
-    2: [
-      { id: 1, text: 'Responder Team Alpha here', sender: 'responder', timestamp: '10:30 AM', isRead: true },
-      { id: 2, text: 'ETA 8 minutes to scene', sender: 'responder', timestamp: '10:32 AM', isRead: true },
-      { id: 3, text: 'We\'ll coordinate on arrival', sender: 'station', timestamp: '10:33 AM', isRead: true }
-    ],
-    3: [
-      { id: 1, text: 'Station 2 reporting', sender: 'station', timestamp: '10:30 AM', isRead: true },
-      { id: 2, text: 'Backup units ready for dispatch', sender: 'station', timestamp: '10:32 AM', isRead: false },
-      { id: 3, text: 'Dispatching Engine 3 and Rescue 1', sender: 'station', timestamp: '10:33 AM', isRead: false }
-    ],
-    4: [
-      { id: 1, text: 'New emergency coordinates received', sender: 'system', timestamp: '10:30 AM', isRead: true },
-      { id: 2, text: 'Coordinates processed, units dispatched', sender: 'station', timestamp: '10:31 AM', isRead: true }
-    ]
-  });
+  const sortContacts = (list) => {
+    return [...list].sort((a, b) => {
+      const aUnread = a.unreadCount || 0;
+      const bUnread = b.unreadCount || 0;
+      if (bUnread !== aUnread) return bUnread - aUnread;
+      const at = a.lastMessageTime ? new Date(a.lastMessageTime).getTime() : 0;
+      const bt = b.lastMessageTime ? new Date(b.lastMessageTime).getTime() : 0;
+      return bt - at;
+    });
+  };
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const raw = await AsyncStorage.getItem('userData');
+        const userData = raw ? JSON.parse(raw) : {};
+        const id = userData?.id || userData?.uid;
+        if (id) setCurrentStationId(id);
+      } catch (_) {}
+    })();
+  }, []);
+
+  useEffect(() => {
+    const loadContacts = async () => {
+      try {
+        setIsLoading(true);
+
+        // Admin users (robust with fallback)
+        let adminContacts = [];
+        try {
+          const { data: admins } = await supabase.from('admin_users').select('id, first_name, last_name, email');
+          adminContacts = (admins || []).map(a => ({
+            id: a.id,
+            name: `${a.first_name || ''} ${a.last_name || ''}`.trim() || 'Admin',
+            email: a.email,
+            type: 'admin',
+            avatar: (a.first_name || a.last_name || 'A').slice(0,1).toUpperCase(),
+            unreadCount: 0,
+          }));
+        } catch (e) {
+          adminContacts = [{ id: 'fallback-admin', name: 'Command Center', email: 'admin@fira.com', type: 'admin', avatar: 'C', unreadCount: 0 }];
+        }
+
+        // Responders for this station (compare as strings to avoid type mismatch)
+        let responderContacts = [];
+        try {
+          const { data: responders } = await supabase.from('responders').select('id, first_name, last_name, email, station_id');
+          responderContacts = (responders || [])
+            .filter(r => !currentStationId || String(r.station_id) === String(currentStationId))
+            .map(r => ({
+              id: r.id,
+              name: `${r.first_name || ''} ${r.last_name || ''}`.trim() || 'Responder',
+              email: r.email,
+              type: 'responder',
+              avatar: (r.first_name || r.last_name || 'R').slice(0,1).toUpperCase(),
+              unreadCount: 0,
+            }));
+        } catch (e) {}
+
+        // Other stations (exclude current)
+        let stationContacts = [];
+        try {
+          const { data: stations } = await supabase.from('station_users').select('id, station_name, email');
+          stationContacts = (stations || [])
+            .filter(s => !currentStationId || String(s.id) !== String(currentStationId))
+            .map(s => ({ id: s.id, name: s.station_name || 'Station', email: s.email, type: 'station', avatar: (s.station_name || 'S').slice(0,1).toUpperCase(), unreadCount: 0 }));
+        } catch (e) {}
+
+        const all = sortContacts([...adminContacts, ...responderContacts, ...stationContacts]);
+        setContacts(all);
+      } catch (_) {
+      } finally {
+        setIsLoading(false);
+      }
+    };
+    loadContacts();
+  }, [currentStationId]);
+
+  useEffect(() => {
+    if (!currentStationId) return;
+    (async () => {
+      try {
+        const { data } = await supabase
+          .from('messages')
+          .select('*')
+          .eq('receiver_id', currentStationId)
+          .eq('is_read', false)
+          .order('created_at', { ascending: false });
+        const grouped = (data || []).reduce((acc, m) => {
+          acc[m.sender_id] = acc[m.sender_id] || { count: 0, lastMessage: m.text || '', lastMessageTime: m.created_at };
+          acc[m.sender_id].count += 1;
+          return acc;
+        }, {});
+        setContacts(prev => sortContacts(prev.map(c => ({
+          ...c,
+          unreadCount: grouped[c.id]?.count || 0,
+          lastMessage: grouped[c.id]?.lastMessage || c.lastMessage,
+          lastMessageTime: grouped[c.id]?.lastMessageTime || c.lastMessageTime,
+        }))));
+      } catch (_) {}
+    })();
+  }, [currentStationId]);
+
+  useEffect(() => {
+    if (!currentStationId) return;
+    const channel = supabase
+      .channel(`station-unread:${currentStationId}`)
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages', filter: `receiver_id=eq.${currentStationId}` }, (payload) => {
+        const senderId = payload.new.sender_id;
+        setContacts(prev => sortContacts(prev.map(c => c.id === senderId ? { ...c, unreadCount: (c.unreadCount || 0) + 1, lastMessage: payload.new.text || c.lastMessage, lastMessageTime: payload.new.created_at } : c)));
+      })
+      .subscribe();
+    return () => { channel.unsubscribe(); };
+  }, [currentStationId]);
+
+  const filteredContacts = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    if (!q) return contacts;
+    return contacts.filter(c => (c.name || '').toLowerCase().includes(q));
+  }, [contacts, searchQuery]);
 
   const sendMessage = () => {
     if (message.trim() && selectedContact) {
@@ -141,9 +206,21 @@ export default function SFiraChat({ onContactSelect }) {
           </View>
         </View>
 
+        {/* Search */}
+        <View className="px-4 pb-2">
+          <View className="flex-row items-center bg-gray-100 rounded-full px-3 py-2">
+            <Ionicons name="search" size={18} color="#6B7280" />
+            <TextInput value={searchQuery} onChangeText={setSearchQuery} placeholder="Search users..." className="flex-1 ml-2 text-gray-800" />
+          </View>
+        </View>
+
         {/* Contact List */}
         <ScrollView className="flex-1" showsVerticalScrollIndicator={false}>
-          {contacts.map((contact) => (
+          {isLoading ? (
+            <View className="items-center py-10"><Text className="text-gray-500">Loading contacts...</Text></View>
+          ) : filteredContacts.length === 0 ? (
+            <View className="items-center py-10"><Text className="text-gray-500">No users found</Text></View>
+          ) : filteredContacts.map((contact) => (
             <TouchableOpacity
               key={contact.id}
               className="flex-row items-center px-4 py-3 border-b border-gray-100 active:bg-gray-50"
@@ -163,11 +240,15 @@ export default function SFiraChat({ onContactSelect }) {
               <View className="flex-1">
                 <View className="flex-row items-center justify-between">
                   <Text className="font-semibold text-gray-800">{contact.name}</Text>
-                  <Text className="text-xs text-gray-500">{contact.timestamp}</Text>
+                  {contact.lastMessageTime && (
+                    <Text className="text-xs text-gray-500">{new Date(contact.lastMessageTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</Text>
+                  )}
                 </View>
-                <Text className="text-sm text-gray-600 mt-1" numberOfLines={1}>
-                  {contact.lastMessage}
-                </Text>
+                {!!contact.lastMessage && (
+                  <Text className="text-sm text-gray-600 mt-1" numberOfLines={1}>
+                    {contact.lastMessage}
+                  </Text>
+                )}
               </View>
 
               {/* Status Indicators */}
@@ -177,7 +258,7 @@ export default function SFiraChat({ onContactSelect }) {
                     <Text className="text-xs text-white font-bold">{contact.unreadCount}</Text>
                   </View>
                 )}
-                <View className={`w-2 h-2 rounded-full ${contact.status === 'online' ? 'bg-green-500' : 'bg-gray-400'}`} />
+                <View className={`w-2 h-2 rounded-full bg-green-500`} />
               </View>
             </TouchableOpacity>
           ))}
@@ -190,6 +271,7 @@ export default function SFiraChat({ onContactSelect }) {
   return (
     <SChatPage 
       contact={selectedContact}
+      currentStationId={currentStationId}
       onBack={() => {
         setSelectedContact(null);
         if (onContactSelect) {

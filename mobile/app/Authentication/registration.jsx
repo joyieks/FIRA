@@ -354,7 +354,11 @@ const RegistrationComponent = () => {
       </TouchableOpacity>
 
       <View className="items-center py-8 mt-8">
-        <Image source={require('../../assets/images/getstart2.png')} className="w-20 h-20 mb-4" />
+        <Image 
+          source={require('../../assets/images/firemen12.png')} 
+          className="w-32 h-32 mb-4" 
+          resizeMode="contain"
+        />
         <Text className="text-2xl font-bold text-fire">Create Account</Text>
       </View>
 

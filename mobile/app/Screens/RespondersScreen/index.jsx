@@ -26,7 +26,7 @@ export default function RespondersScreen() {
       {/* Global alerts worker mounts regardless of active tab */}
       <RAlertsWorker />
       {/* Removed items-center and justify-center */}
-      <View className="flex-1">
+      <View className="flex-1" style={{ paddingBottom: 60 }}>
         {TABS[activeTab].component}
       </View>
       <RNavbarMenu activeTab={activeTab} setActiveTab={setActiveTab} unreadCount={unreadCount} />

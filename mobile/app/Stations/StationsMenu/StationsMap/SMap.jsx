@@ -613,13 +613,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#000',
   },
   mapContainer: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    width,
-    height,
+    ...StyleSheet.absoluteFillObject,
     zIndex: 1,
   },
   map: {

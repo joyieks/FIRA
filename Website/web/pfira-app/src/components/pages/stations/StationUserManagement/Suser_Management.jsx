@@ -510,7 +510,7 @@ const Suser_Management = () => {
 
         {/* Add/Edit Responder Modal */}
         {showAddUser && (
-          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
+          <div className="fixed inset-0 bg-black/40 flex items-center justify-center p-4 z-50 backdrop-blur-lg">
             <div className="bg-white rounded-xl shadow-xl max-w-md w-full p-6">
               <div className="flex justify-between items-center mb-4">
                 <h3 className="text-lg font-semibold text-gray-900">
@@ -636,7 +636,7 @@ const Suser_Management = () => {
 
          {/* Profile Modal */}
          {showProfileModal && selectedResponder && (
-           <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
+           <div className="fixed inset-0 bg-black/40 flex items-center justify-center p-4 z-50 backdrop-blur-lg">
              <div className="bg-white rounded-xl shadow-xl max-w-2xl w-full p-6">
                <div className="flex justify-between items-center mb-6">
                  <h3 className="text-xl font-semibold text-gray-900">Responder Profile</h3>

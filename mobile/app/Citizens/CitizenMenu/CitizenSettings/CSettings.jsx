@@ -26,7 +26,7 @@ const CSettings = () => {
   };
 
   return (
-    <View className="flex-1 bg-gray-100 px-4 py-6 pt-8">
+    <View className="flex-1 bg-gray-100 px-4 py-6 pt-14">
       <View className="space-y-4">
         {settingsOptions.map((item) => (
           <View key={item.key} className="bg-white rounded-xl p-4 shadow flex-row items-center">

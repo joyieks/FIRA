@@ -1,14 +1,73 @@
-import React, { useState, useEffect, useRef } from 'react';
 import { View, Text, ScrollView, TouchableOpacity, RefreshControl, AppState } from 'react-native';
+import React, { useState, useEffect } from 'react';
 import { MaterialIcons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { supabase } from '../../../config/supabase';
 
 export default function RNotifications({ onUnreadCountChange }) {
-  const [notifications, setNotifications] = useState([]);
+
+ 
   const [loading, setLoading] = useState(true);
   const [currentResponderId, setCurrentResponderId] = useState(null);
   const appState = useRef(AppState.currentState);
+
+  const [refreshing, setRefreshing] = useState(false);
+  const [notifications, setNotifications] = useState([
+    {
+      id: 1,
+      type: 'emergency',
+      title: 'Emergency Call - Fire Incident',
+      message: 'Fire reported at 123 Main Street. All available units respond immediately. Code 3 response required.',
+      time: '3 minutes ago',
+      read: false,
+      priority: 'high'
+    },
+    {
+      id: 2,
+      type: 'dispatch',
+      title: 'Dispatch Assignment',
+      message: 'You have been assigned to Station 1, Truck 2. Report to duty within 15 minutes.',
+      time: '10 minutes ago',
+      read: false,
+      priority: 'high'
+    },
+    {
+      id: 3,
+      type: 'equipment',
+      title: 'Equipment Check Required',
+      message: 'SCBA inspection due. Complete equipment check before next shift.',
+      time: '1 hour ago',
+      read: false,
+      priority: 'medium'
+    },
+    {
+      id: 4,
+      type: 'training',
+      title: 'Training Session',
+      message: 'Mandatory safety training scheduled for tomorrow at 9:00 AM. All responders must attend.',
+      time: '2 hours ago',
+      read: true,
+      priority: 'medium'
+    },
+    {
+      id: 5,
+      type: 'team',
+      title: 'Team Update',
+      message: 'New team member John Smith assigned to your shift. Welcome briefing at 7:00 AM.',
+      time: '4 hours ago',
+      read: true,
+      priority: 'low'
+    },
+    {
+      id: 6,
+      type: 'alert',
+      title: 'Weather Alert',
+      message: 'High winds expected today. Exercise caution during emergency responses.',
+      time: '1 day ago',
+      read: true,
+      priority: 'medium'
+    }
+  ]);
 
   // NOTE: Sound/alarm management is handled by RAlertsWorker component
   // which is mounted at the app level for consistent playback across all screens
@@ -229,16 +288,21 @@ export default function RNotifications({ onUnreadCountChange }) {
     }
   }, [unreadCount, onUnreadCountChange]);
 
+  // Pull to refresh handler
+  const onRefresh = () => {
+    setRefreshing(true);
+    // Simulate refresh - in real app, fetch from Supabase
+    setTimeout(() => {
+      setRefreshing(false);
+    }, 1000);
+  };
+
   return (
     <View className="flex-1 bg-gray-50">
       {/* Header */}
-      <View className="bg-white pt-12 pb-4 px-4 border-b border-gray-200">
+      <View className="bg-white pt-16 pb-4 px-4 border-b border-gray-200">
         <View className="flex-row items-center justify-center">
-          {unreadCount > 0 && (
-            <View className="bg-fire rounded-full px-3 py-1 ml-2">
-              <Text className="text-white font-bold text-sm">{unreadCount}</Text>
-            </View>
-          )}
+          <Text className="text-fire font-bold text-lg">Notification</Text>
         </View>
       </View>
 
@@ -267,7 +331,13 @@ export default function RNotifications({ onUnreadCountChange }) {
       <ScrollView 
         className="flex-1 px-4 pt-4"
         refreshControl={
-          <RefreshControl refreshing={loading} onRefresh={loadNotifications} />
+
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            colors={['#ff512f']}
+            tintColor="#ff512f"
+          />
         }
       >
         {notifications.map((notification) => {
@@ -347,7 +417,7 @@ export default function RNotifications({ onUnreadCountChange }) {
             No Notifications
           </Text>
           <Text className="text-gray-500 text-center">
-            Stay alert! We'll notify you when emergency calls come in.
+            Stay alert! We&apos;ll notify you when emergency calls come in.
           </Text>
         </View>
       )}

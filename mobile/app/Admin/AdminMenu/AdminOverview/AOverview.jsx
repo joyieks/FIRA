@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState, useCallback } from 'react';
 import { View, Text, TouchableOpacity, ScrollView, RefreshControl, TextInput, Modal, Image, Platform, Alert } from 'react-native';
+import { supabase } from '../../../config/supabase';
 
 const API_URL = 'https://fire-detection-api-production-f8a3.up.railway.app';
 
@@ -18,6 +19,12 @@ export default function AOverview() {
   const [cancelReason, setCancelReason] = useState('');
   const [isUpdating, setIsUpdating] = useState(false);
   const [isCancelling, setIsCancelling] = useState(false);
+  const [assignedResponders, setAssignedResponders] = useState([]);
+  const [isLoadingAssigned, setIsLoadingAssigned] = useState(false);
+  const [showStatusConfirmModal, setShowStatusConfirmModal] = useState(false);
+  const [showAlarmConfirmModal, setShowAlarmConfirmModal] = useState(false);
+  const [pendingStatusChange, setPendingStatusChange] = useState(null);
+  const [pendingAlarmChange, setPendingAlarmChange] = useState(null);
 
   const fetchReports = useCallback(async () => {
     try {
@@ -50,6 +57,59 @@ export default function AOverview() {
   useEffect(() => {
     fetchReports();
   }, []); // Remove fetchReports dependency to prevent infinite re-renders
+
+  // Load assigned responders when a report is selected
+  useEffect(() => {
+    const loadAssignedResponders = async (reportId) => {
+      try {
+        setIsLoadingAssigned(true);
+        setAssignedResponders([]);
+
+        if (!reportId) return;
+
+        const { data: assignments, error } = await supabase
+          .from('report_assignments')
+          .select('assignee_type, assignee_id, assigned_at')
+          .eq('report_id', reportId)
+          .eq('assignee_type', 'responder');
+
+        if (error) {
+          console.error('Error fetching report assignments:', error);
+          return;
+        }
+
+        const responderIds = (assignments || []).map(a => a.assignee_id).filter(Boolean);
+        if (responderIds.length === 0) {
+          setAssignedResponders([]);
+          return;
+        }
+
+        const { data: responders, error: respErr } = await supabase
+          .from('responders')
+          .select('id, first_name, last_name, email, phone')
+          .in('id', responderIds);
+
+        if (respErr) {
+          console.error('Error fetching responder profiles:', respErr);
+          setAssignedResponders([]);
+          return;
+        }
+
+        setAssignedResponders(responders || []);
+      } catch (e) {
+        console.error('Failed loading assigned responders:', e);
+      } finally {
+        setIsLoadingAssigned(false);
+      }
+    };
+
+    if (selectedReport?.id) {
+      loadAssignedResponders(selectedReport.id);
+    } else {
+      setAssignedResponders([]);
+      setIsLoadingAssigned(false);
+    }
+  }, [selectedReport?.id]);
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
@@ -283,6 +343,38 @@ export default function AOverview() {
     }
   };
 
+  // Handle status change click with custom modal
+  const handleStatusChangeClick = (status) => {
+    const currentStatus = editReport.status || 'Unknown';
+    setPendingStatusChange({ status, currentStatus });
+    setShowStatusConfirmModal(true);
+  };
+
+  // Handle alarm change click with custom modal
+  const handleAlarmChangeClick = (alarm) => {
+    const currentAlarm = editReport.final_alarm_level || editReport.recommended_alarm_level || 'Unknown';
+    setPendingAlarmChange({ alarm, currentAlarm });
+    setShowAlarmConfirmModal(true);
+  };
+
+  // Confirm status change
+  const confirmStatusChange = () => {
+    if (pendingStatusChange) {
+      handleStatusChange(editReport.id, pendingStatusChange.status);
+      setShowStatusConfirmModal(false);
+      setPendingStatusChange(null);
+    }
+  };
+
+  // Confirm alarm change
+  const confirmAlarmChange = () => {
+    if (pendingAlarmChange) {
+      updateFinalAlarmLevel(editReport.id, pendingAlarmChange.alarm);
+      setShowAlarmConfirmModal(false);
+      setPendingAlarmChange(null);
+    }
+  };
+
   // Cancel report with reason
   const handleCancelReport = async () => {
     console.log('[handleCancelReport] cancelReport:', cancelReport);
@@ -413,7 +505,7 @@ export default function AOverview() {
   return (
     <View style={{ flex: 1, backgroundColor: '#f9fafb' }}>
       <ScrollView
-        contentContainerStyle={{ paddingTop: 100, paddingHorizontal: 16, paddingBottom: 24 }}
+        contentContainerStyle={{ paddingTop: 60, paddingHorizontal: 16, paddingBottom: 24 }}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
       >
         <Text style={{ fontSize: 28, fontWeight: '800', color: '#0f172a', marginBottom: 16 }}>Emergency Reports Overview</Text>
@@ -584,7 +676,8 @@ export default function AOverview() {
                 paddingBottom: 16,
                 paddingTop: 8,
                 borderTopWidth: 1,
-                borderTopColor: '#f3f4f6'
+                borderTopColor: '#f3f4f6',
+                gap: 8
               }}>
                 {/* View Details Button */}
                 <TouchableOpacity
@@ -596,8 +689,7 @@ export default function AOverview() {
                     borderRadius: 8,
                     flexDirection: 'row',
                     alignItems: 'center',
-                    flex: 1,
-                    marginRight: 8
+                    flex: 1
                   }}
                 >
                   <Text style={{ color: 'white', fontWeight: '600', fontSize: 12, marginRight: 4 }}>👁️</Text>
@@ -607,11 +699,10 @@ export default function AOverview() {
                   style={{
                     paddingHorizontal: 16,
                     paddingVertical: 8,
-                    backgroundColor: '#3b82f6',
+                    backgroundColor: '#f59e0b',
                     borderRadius: 8,
                     flexDirection: 'row',
-                    alignItems: 'center',
-                    marginRight: 8
+                    alignItems: 'center'
                   }}
                   onPress={() => {
                     console.log('[Edit Button] Setting editReport to:', r);
@@ -811,6 +902,7 @@ export default function AOverview() {
                     </View>
                   </View>
 
+
                   {/* Full Timestamp */}
                   <View style={{ marginBottom: 20 }}>
                     <Text style={{ fontSize: 16, fontWeight: '600', color: '#374151', marginBottom: 8 }}>Full Timestamp:</Text>
@@ -830,6 +922,32 @@ export default function AOverview() {
                         }
                       })()}
                     </Text>
+                  </View>
+
+                  {/* Assigned Responder(s) */}
+                  <View style={{ marginBottom: 24 }}>
+                    <Text style={{ fontSize: 16, fontWeight: '600', color: '#374151', marginBottom: 8 }}>Assigned Responder(s):</Text>
+                    <View style={{ backgroundColor: '#eff6ff', borderWidth: 1, borderColor: '#bfdbfe', borderRadius: 8, padding: 12 }}>
+                      {isLoadingAssigned ? (
+                        <Text style={{ fontSize: 16, color: '#6b7280' }}>Loading...</Text>
+                      ) : assignedResponders.length > 0 ? (
+                        assignedResponders.map(r => (
+                          <View key={r.id} style={{ paddingVertical: 6 }}>
+                            <Text style={{ fontSize: 16, fontWeight: '700', color: '#1e3a8a' }}>
+                              {(r.first_name || '') + (r.last_name ? ` ${r.last_name}` : '') || 'Responder'}
+                            </Text>
+                            {!!r.email && (
+                              <Text style={{ fontSize: 12, color: '#1e40af' }}>{r.email}</Text>
+                            )}
+                            {!!r.phone && (
+                              <Text style={{ fontSize: 12, color: '#1e40af' }}>{r.phone}</Text>
+                            )}
+                          </View>
+                        ))
+                      ) : (
+                        <Text style={{ fontSize: 14, color: '#1e40af' }}>No responder assigned yet.</Text>
+                      )}
+                    </View>
                   </View>
                 </View>
               )}
@@ -873,30 +991,18 @@ export default function AOverview() {
                 {/* Status Selection */}
                 <View style={{ marginBottom: 20 }}>
                   <Text style={{ fontSize: 16, fontWeight: '600', color: '#374151', marginBottom: 8 }}>Status:</Text>
-                  <View style={{ flexDirection: 'row', flexWrap: 'wrap', marginRight: 8, marginBottom: 8 }}>
+                  <View style={{ flexDirection: 'row', flexWrap: 'wrap', marginRight: 8, marginBottom: 8, gap: 8 }}>
                     {['On Going', 'Under Control', 'Fire Out'].map((status) => (
                       <TouchableOpacity
                         key={status}
                         onPress={() => {
                           console.log('[Status Button] Pressed:', status);
-                          const currentStatus = editReport.status || 'Unknown';
                           if (status === 'Cancelled') {
                             // For cancellation, show the cancel modal instead
                             handleStatusChange(editReport.id, status);
                           } else {
-                            // For other status changes, show confirmation
-                            Alert.alert(
-                              'Confirm Status Change',
-                              `Are you sure you want to change the status from "${currentStatus}" to "${status}"?`,
-                              [
-                                { text: 'Cancel', style: 'cancel' },
-                                { 
-                                  text: 'Confirm', 
-                                  style: 'default',
-                                  onPress: () => handleStatusChange(editReport.id, status)
-                                }
-                              ]
-                            );
+                            // For other status changes, show custom confirmation modal
+                            handleStatusChangeClick(status);
                           }
                         }}
                         style={{
@@ -905,7 +1011,9 @@ export default function AOverview() {
                           borderRadius: 6,
                           backgroundColor: editReport.status === status ? '#3b82f6' : '#f3f4f6',
                           borderWidth: 1,
-                          borderColor: editReport.status === status ? '#3b82f6' : '#d1d5db'
+                          borderColor: editReport.status === status ? '#3b82f6' : '#d1d5db',
+                          marginRight: 8,
+                          marginBottom: 8
                         }}
                         disabled={isUpdating}
                       >
@@ -924,25 +1032,13 @@ export default function AOverview() {
                 {/* Final Alarm Level Selection */}
                 <View style={{ marginBottom: 20 }}>
                   <Text style={{ fontSize: 16, fontWeight: '600', color: '#374151', marginBottom: 8 }}>Final Alarm Level:</Text>
-                  <View style={{ flexDirection: 'row', flexWrap: 'wrap', marginRight: 8, marginBottom: 8 }}>
+                  <View style={{ flexDirection: 'row', flexWrap: 'wrap', marginRight: 8, marginBottom: 8, gap: 8 }}>
                     {['1st Alarm', '2nd Alarm', '3rd Alarm', '4th Alarm', '5th Alarm', 'TASK FORCE ALPHA', 'TASK FORCE BRAVO', 'TASK FORCE CHARLIE', 'TASK FORCE DELTA', 'GENERAL ALARM'].map((alarm) => (
                       <TouchableOpacity
                         key={alarm}
                         onPress={() => {
                           console.log('[Alarm Button] Pressed:', alarm);
-                          const currentAlarm = editReport.final_alarm_level || editReport.recommended_alarm_level || 'Unknown';
-                          Alert.alert(
-                            'Confirm Alarm Level Change',
-                            `Are you sure you want to change the final alarm level from "${currentAlarm}" to "${alarm}"?\n\nThis action will update the emergency response level and may trigger additional resource deployment.`,
-                            [
-                              { text: 'Cancel', style: 'cancel' },
-                              { 
-                                text: 'Confirm', 
-                                style: 'default',
-                                onPress: () => updateFinalAlarmLevel(editReport.id, alarm)
-                              }
-                            ]
-                          );
+                          handleAlarmChangeClick(alarm);
                         }}
                         style={{
                           paddingHorizontal: 12,
@@ -950,7 +1046,9 @@ export default function AOverview() {
                           borderRadius: 6,
                           backgroundColor: (editReport.final_alarm_level || editReport.recommended_alarm_level) === alarm ? '#f59e0b' : '#f3f4f6',
                           borderWidth: 1,
-                          borderColor: (editReport.final_alarm_level || editReport.recommended_alarm_level) === alarm ? '#f59e0b' : '#d1d5db'
+                          borderColor: (editReport.final_alarm_level || editReport.recommended_alarm_level) === alarm ? '#f59e0b' : '#d1d5db',
+                          marginRight: 8,
+                          marginBottom: 8
                         }}
                         disabled={isUpdating}
                       >
@@ -1071,6 +1169,114 @@ export default function AOverview() {
                   </Text>
                 </TouchableOpacity>
               </View>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Custom Status Change Confirmation Modal */}
+      <Modal visible={showStatusConfirmModal} transparent animationType="fade" onRequestClose={() => setShowStatusConfirmModal(false)}>
+        <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center' }}>
+          <View style={{ backgroundColor: 'white', borderRadius: 20, padding: 24, width: '85%', maxWidth: 400 }}>
+            {/* Icon */}
+            <View style={{ alignItems: 'center', marginBottom: 16 }}>
+              <View style={{ width: 60, height: 60, borderRadius: 30, backgroundColor: '#3b82f6', alignItems: 'center', justifyContent: 'center' }}>
+                <Text style={{ fontSize: 24, color: 'white' }}>⚠️</Text>
+              </View>
+            </View>
+            
+            {/* Title */}
+            <Text style={{ fontSize: 20, fontWeight: 'bold', color: '#1f2937', textAlign: 'center', marginBottom: 8 }}>
+              Confirm Status Change
+            </Text>
+            
+            {/* Message */}
+            <Text style={{ fontSize: 16, color: '#6b7280', textAlign: 'center', lineHeight: 22, marginBottom: 24 }}>
+              Are you sure you want to change the status from{' '}
+              <Text style={{ fontWeight: '600', color: '#374151' }}>"{pendingStatusChange?.currentStatus}"</Text> to{' '}
+              <Text style={{ fontWeight: '600', color: '#3b82f6' }}>"{pendingStatusChange?.status}"</Text>?
+            </Text>
+            
+            {/* Buttons */}
+            <View style={{ flexDirection: 'row', gap: 12 }}>
+              <TouchableOpacity
+                style={{
+                  flex: 1,
+                  backgroundColor: '#f3f4f6',
+                  paddingVertical: 12,
+                  borderRadius: 10,
+                  alignItems: 'center'
+                }}
+                onPress={() => setShowStatusConfirmModal(false)}
+              >
+                <Text style={{ color: '#374151', fontWeight: '600', fontSize: 16 }}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={{
+                  flex: 1,
+                  backgroundColor: '#3b82f6',
+                  paddingVertical: 12,
+                  borderRadius: 10,
+                  alignItems: 'center'
+                }}
+                onPress={confirmStatusChange}
+              >
+                <Text style={{ color: 'white', fontWeight: '600', fontSize: 16 }}>Confirm</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Custom Alarm Level Change Confirmation Modal */}
+      <Modal visible={showAlarmConfirmModal} transparent animationType="fade" onRequestClose={() => setShowAlarmConfirmModal(false)}>
+        <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center' }}>
+          <View style={{ backgroundColor: 'white', borderRadius: 20, padding: 24, width: '85%', maxWidth: 400 }}>
+            {/* Icon */}
+            <View style={{ alignItems: 'center', marginBottom: 16 }}>
+              <View style={{ width: 60, height: 60, borderRadius: 30, backgroundColor: '#f59e0b', alignItems: 'center', justifyContent: 'center' }}>
+                <Text style={{ fontSize: 24, color: 'white' }}>🚨</Text>
+              </View>
+            </View>
+            
+            {/* Title */}
+            <Text style={{ fontSize: 20, fontWeight: 'bold', color: '#1f2937', textAlign: 'center', marginBottom: 8 }}>
+              Confirm Alarm Level Change
+            </Text>
+            
+            {/* Message */}
+            <Text style={{ fontSize: 16, color: '#6b7280', textAlign: 'center', lineHeight: 22, marginBottom: 24 }}>
+              Are you sure you want to change the final alarm level from{' '}
+              <Text style={{ fontWeight: '600', color: '#374151' }}>"{pendingAlarmChange?.currentAlarm}"</Text> to{' '}
+              <Text style={{ fontWeight: '600', color: '#f59e0b' }}>"{pendingAlarmChange?.alarm}"</Text>?
+            </Text>
+            
+            {/* Buttons */}
+            <View style={{ flexDirection: 'row', gap: 12 }}>
+              <TouchableOpacity
+                style={{
+                  flex: 1,
+                  backgroundColor: '#f3f4f6',
+                  paddingVertical: 12,
+                  borderRadius: 10,
+                  alignItems: 'center'
+                }}
+                onPress={() => setShowAlarmConfirmModal(false)}
+              >
+                <Text style={{ color: '#374151', fontWeight: '600', fontSize: 16 }}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={{
+                  flex: 1,
+                  backgroundColor: '#f59e0b',
+                  paddingVertical: 12,
+                  borderRadius: 10,
+                  alignItems: 'center'
+                }}
+                onPress={confirmAlarmChange}
+              >
+                <Text style={{ color: 'white', fontWeight: '600', fontSize: 16 }}>Confirm</Text>
+              </TouchableOpacity>
             </View>
           </View>
         </View>

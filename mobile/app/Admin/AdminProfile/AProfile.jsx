@@ -1,12 +1,13 @@
 import React, { useState } from 'react';
-import { View, Text, Image, ScrollView, TouchableOpacity } from 'react-native';
+import { View, Text, Image, ScrollView, TouchableOpacity, Alert } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
-import ASettings from './ASettings';
+import { useAuth } from '../../config/AuthContext';
 
 const AProfile = () => {
   const router = useRouter();
-  const [showSettings, setShowSettings] = useState(false);
+  const { logout } = useAuth();
+  const [showLogoutModal, setShowLogoutModal] = useState(false);
   const profile = {
     name: 'Admin User',
     email: 'admin@gmail.com',
@@ -34,27 +35,27 @@ const AProfile = () => {
     return '';
   };
 
-  if (showSettings) {
-    return (
-      <View className="flex-1 bg-gray-100">
-        {/* Back Button */}
-        <View className="flex-row items-center pt-12 px-4 pb-2 bg-gray-100">
-          <TouchableOpacity onPress={() => setShowSettings(false)} className="p-2 rounded-full bg-white shadow">
-            <MaterialIcons name="arrow-back" size={24} color="#374151" />
-          </TouchableOpacity>
-          <Text className="text-lg font-semibold text-gray-800 ml-4">Settings</Text>
-        </View>
-        <ASettings />
-      </View>
-    );
-  }
+  const handleLogout = () => {
+    setShowLogoutModal(true);
+  };
+
+  const confirmLogout = async () => {
+    try {
+      await logout();
+      router.replace('/Authentication/login');
+    } catch (error) {
+      console.error('Logout error:', error);
+      Alert.alert('Error', 'Failed to logout. Please try again.');
+    }
+  };
+
 
   return (
     <View className="flex-1 bg-gray-100">
       <ScrollView className="flex-1 pb-45" contentContainerStyle={{ flexGrow: 1 }}>
         {/* Profile Header */}
         <View className="bg-white py-8 items-center border-b border-gray-200 relative" pointerEvents="box-none">
-          <View className="w-24 h-24 rounded-full mb-4 items-center justify-center bg-fire mt-16">
+          <View className="w-24 h-24 rounded-full mb-4 items-center justify-center bg-fire mt-28">
             <Text className="text-4xl font-bold text-white">
               {profile.name.split(' ').map(n => n[0]).join('')}
             </Text>
@@ -62,13 +63,10 @@ const AProfile = () => {
           <Text className="text-2xl font-bold text-gray-800 mb-1">{profile.name}</Text>
           <Text className="text-base text-gray-500 mb-1">{profile.position}</Text>
         </View>
-        {/* Edit and Settings Buttons - moved outside header for stacking */}
-        <View className="absolute right-6 top-6 z-50 flex-row" style={{ pointerEvents: 'auto', alignSelf: 'flex-end' }}>
+        {/* Edit Button - moved outside header for stacking */}
+        <View className="absolute right-6 top-16 z-50" style={{ pointerEvents: 'auto', alignSelf: 'flex-end' }}>
           <TouchableOpacity className="p-2 rounded-full bg-gray-100 active:bg-gray-200" onPress={() => {}}>
             <MaterialIcons name="edit" size={24} color="#ff512f" />
-          </TouchableOpacity>
-          <TouchableOpacity className="p-2 rounded-full bg-gray-100 active:bg-gray-200 ml-2" onPress={() => setShowSettings(true)}>
-            <MaterialIcons name="settings" size={24} color="#ff512f" />
           </TouchableOpacity>
         </View>
 
@@ -91,7 +89,7 @@ const AProfile = () => {
           <MaterialIcons name="lock" size={20} color="#ff512f" />
           <Text className="ml-2 text-base font-semibold text-fire">Update Password</Text>
         </TouchableOpacity>
-        <TouchableOpacity className="flex-row items-center justify-center bg-fire rounded-xl py-3 mb-3" onPress={() => {}}>
+        <TouchableOpacity className="flex-row items-center justify-center bg-fire rounded-xl py-3 mb-3" onPress={handleLogout}>
           <MaterialIcons name="logout" size={24} color="#fff" />
           <Text className="ml-2 text-lg font-semibold text-white">Log Out</Text>
         </TouchableOpacity>
@@ -99,6 +97,42 @@ const AProfile = () => {
         {/* Extra space at the bottom for safe area */}
         <View style={{ height: 50 }} />
       </ScrollView>
+
+      {/* Custom Logout Modal */}
+      {showLogoutModal && (
+        <View className="absolute top-0 left-0 right-0 bottom-0 flex-1 justify-center items-center bg-black/50 z-50">
+          <View className="bg-white rounded-3xl p-8 w-80 items-center shadow-2xl">
+            {/* Logout Icon */}
+            <View className="w-16 h-16 rounded-full bg-red-100 items-center justify-center mb-4">
+              <MaterialIcons name="logout" size={32} color="#ef4444" />
+            </View>
+            
+            {/* Title */}
+            <Text className="text-xl font-bold text-gray-800 mb-2 text-center">Logout</Text>
+            
+            {/* Message */}
+            <Text className="text-gray-600 text-center mb-6 leading-5">
+              Are you sure you want to logout? You'll need to sign in again to access your account.
+            </Text>
+            
+            {/* Buttons */}
+            <View className="flex-row w-full">
+              <TouchableOpacity 
+                className="flex-1 bg-gray-200 py-4 rounded-xl mr-4" 
+                onPress={() => setShowLogoutModal(false)}
+              >
+                <Text className="text-gray-700 font-semibold text-center text-base">Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity 
+                className="flex-1 bg-red-500 py-4 rounded-xl ml-4" 
+                onPress={confirmLogout}
+              >
+                <Text className="text-white font-semibold text-center text-base">Logout</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      )}
     </View>
   );
 };

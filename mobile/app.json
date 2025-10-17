@@ -1,15 +1,16 @@
 {
   "expo": {
-    "name": "PROJECT FIRA",
+    "name": "Project FIRA",
     "slug": "fira-mobile",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./assets/images/logoonly.png",
+    "icon": "./assets/images/mobilelogo.png",
     "scheme": "firamobile",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "ios": {
       "supportsTablet": true,
+      "bundleIdentifier": "com.fira.mobile",
       "config": {
         "googleMapsApiKey": "AIzaSyDv-FC2CTEpLuVAlXCHMtu4XqAEPNtOjos"
       }
@@ -18,36 +19,47 @@
       "package": "com.fira.mobile",
       "googleServicesFile": "./firebase/google-services.json",
       "adaptiveIcon": {
-        "foregroundImage": "./assets/images/logoonly.png",
-        "backgroundColor": "transparent"
+        "foregroundImage": "./assets/images/mobilelogo.png",
+        "backgroundColor": "#ffffff"
       },
       "edgeToEdgeEnabled": true,
+      "softwareKeyboardLayoutMode": "pan",
       "config": {
         "googleMaps": {
           "apiKey": "AIzaSyDv-FC2CTEpLuVAlXCHMtu4XqAEPNtOjos"
         }
+      },
+      "statusBar": {
+        "barStyle": "light-content",
+        "backgroundColor": "#000000"
       }
     },
     "web": {
       "bundler": "metro",
       "output": "static",
-      "favicon": "./assets/images/logoonly.png"
+      "favicon": "./assets/images/mobilelogo.png"
     },
     "plugins": [
       "expo-router",
       [
         "expo-splash-screen",
         {
-          "image": "./assets/images/logoonly.png",
+          "image": "./assets/images/mobilelogo.png",
           "imageWidth": 200,
           "resizeMode": "contain",
-          "backgroundColor": "transparent"
+          "backgroundColor": "#ffffff"
         }
       ],
       "expo-web-browser"
     ],
     "experiments": {
       "typedRoutes": true
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "bb453922-7a7d-4a77-b26a-3ed3b0591dfc"
+      }
     }
   }
 }
