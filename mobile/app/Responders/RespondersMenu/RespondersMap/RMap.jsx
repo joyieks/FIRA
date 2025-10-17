@@ -566,13 +566,14 @@ export default function RMap() {
   const fetchStationInfo = async () => {
     const stationId = userData?.stationId || userData?.station_id;
     if (!stationId) {
-      console.log('❌ No stationId found in userData:', userData);
+      console.log('⚠️ No stationId found in userData');
+      console.log('ℹ️ This responder has not been assigned to a station yet');
+      console.log('💡 A station admin needs to assign this responder to a station');
       return;
     }
 
     try {
       console.log('🏢 Fetching station info for stationId:', stationId);
-      console.log('👤 Current user data:', userData);
       
       // Fetch station details using the station ID from responder's station_id field
       const { data: stationData, error: stationError } = await supabase
@@ -582,29 +583,12 @@ export default function RMap() {
         .single();
 
       if (stationError) {
-        console.error('❌ Error fetching station data:', stationError);
-        
-        // Try alternative query in case the ID format is different
-        console.log('🔄 Trying alternative station lookup...');
-        const { data: altStationData, error: altError } = await supabase
-          .from('station_users')
-          .select('*')
-          .eq('station_id', stationId)
-          .single();
-          
-        if (altError) {
-          console.error('❌ Alternative station lookup also failed:', altError);
-          return;
-        } else if (altStationData) {
-          console.log('✅ Station found with alternative lookup:', altStationData);
-          setStationInfo(altStationData);
-          const altJurisdiction = altStationData.jurisdiction || 
-                                altStationData.area_of_coverage || 
-                                altStationData.coverage_area ||
-                                altStationData.address ||
-                                'Station Jurisdiction';
-          setJurisdiction(altJurisdiction);
-          return;
+        // If the query returns no rows, it means the stationId doesn't match any station
+        if (stationError.code === 'PGRST116') {
+          console.log('⚠️ No station found with ID:', stationId);
+          console.log('ℹ️ This responder may not be assigned to a station yet');
+        } else {
+          console.error('❌ Station lookup failed:', stationError);
         }
         return;
       }

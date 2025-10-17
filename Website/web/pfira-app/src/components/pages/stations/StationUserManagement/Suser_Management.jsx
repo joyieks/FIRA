@@ -269,30 +269,33 @@ const Suser_Management = () => {
 
 
 
-  const handleDelete = async (id) => {
-    if (window.confirm('Are you sure you want to delete this responder?')) {
+  const handleToggleStatus = async (id, name, currentStatus) => {
+    const isActive = currentStatus === 'active';
+    const action = isActive ? 'disable' : 'enable';
+    const newStatus = isActive ? 'inactive' : 'active';
+
+    if (window.confirm(`Are you sure you want to ${action} ${name}?`)) {
       try {
-        // Delete from responders table
-        const { error: deleteError } = await supabase
+        const { error } = await supabase
           .from('responders')
-          .delete()
+          .update({ 
+            status: newStatus,
+            updated_at: new Date().toISOString()
+          })
           .eq('id', id);
         
-        if (deleteError) {
-          console.error('Error deleting responder:', deleteError);
-          alert('Error deleting responder');
+        if (error) {
+          console.error('Error updating responder status:', error);
+          alert(`Error ${action}ing responder`);
           return;
         }
 
-        // Note: Auth user will remain in auth.users table
-        // You may want to delete it as well if needed:
-        // const { error: authError } = await supabase.auth.admin.deleteUser(id);
-        
-        setResponders(responders.filter(r => r.id !== id));
-        alert('Responder deleted successfully');
+        // Refresh the list
+        await fetchResponders();
+        alert(`Responder ${action}d successfully`);
       } catch (error) {
-        console.error('Error deleting responder:', error);
-        alert('Error deleting responder');
+        console.error('Error updating responder status:', error);
+        alert(`Error ${action}ing responder`);
       }
     }
   };
@@ -472,6 +475,13 @@ const Suser_Management = () => {
                           <div className="font-medium text-gray-900">
                             {responder.first_name} {responder.middle_name ? responder.middle_name + ' ' : ''}{responder.last_name}
                           </div>
+                          <div className="mt-1">
+                            <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${
+                              responder.status === 'inactive' ? 'bg-red-100 text-red-800' : 'bg-green-100 text-green-800'
+                            }`}>
+                              {responder.status === 'inactive' ? 'Disabled' : 'Active'}
+                            </span>
+                          </div>
                         </td>
                         <td className="px-6 py-4 whitespace-nowrap text-gray-500">{responder.email}</td>
                         <td className="px-6 py-4 whitespace-nowrap text-gray-500">{responder.phone}</td>
@@ -492,11 +502,11 @@ const Suser_Management = () => {
                              <FiEdit2 />
                            </button>
                            <button
-                             onClick={() => handleDelete(responder.id)}
-                             className="text-red-600 hover:text-red-900"
-                             title="Delete"
+                             onClick={() => handleToggleStatus(responder.id, `${responder.first_name} ${responder.last_name}`, responder.status)}
+                             className={responder.status === 'inactive' ? "text-green-600 hover:text-green-900" : "text-red-600 hover:text-red-900"}
+                             title={responder.status === 'inactive' ? "Enable" : "Disable"}
                            >
-                             <FiUserX />
+                             {responder.status === 'inactive' ? <FiUsers /> : <FiUserX />}
                            </button>
                          </td>
                       </tr>
@@ -660,8 +670,12 @@ const Suser_Management = () => {
                          {selectedResponder.first_name} {selectedResponder.middle_name ? selectedResponder.middle_name + ' ' : ''}{selectedResponder.last_name}
                        </h3>
                        <p className="text-gray-600 mb-1">{selectedResponder.email}</p>
-                       <span className="inline-flex items-center px-3 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800 border border-green-200">
-                         Active Responder
+                       <span className={`inline-flex items-center px-3 py-1 rounded-full text-xs font-medium border ${
+                         selectedResponder.status === 'inactive' 
+                           ? 'bg-red-100 text-red-800 border-red-200' 
+                           : 'bg-green-100 text-green-800 border-green-200'
+                       }`}>
+                         {selectedResponder.status === 'inactive' ? 'Disabled Account' : 'Active Responder'}
                        </span>
                      </div>
                    </div>
@@ -709,6 +723,14 @@ const Suser_Management = () => {
                        <div>
                          <span className="text-sm font-medium text-gray-500 block mb-1">Station ID</span>
                          <p className="text-gray-900 font-mono text-sm">{selectedResponder.station_id}</p>
+                       </div>
+                       <div>
+                         <span className="text-sm font-medium text-gray-500 block mb-1">Account Status</span>
+                         <span className={`inline-flex items-center px-2 py-1 rounded text-xs font-medium ${
+                           selectedResponder.status === 'inactive' ? 'bg-red-100 text-red-800' : 'bg-green-100 text-green-800'
+                         }`}>
+                           {selectedResponder.status === 'inactive' ? 'Disabled' : 'Active'}
+                         </span>
                        </div>
                        <div>
                          <span className="text-sm font-medium text-gray-500 block mb-1">Created Date</span>

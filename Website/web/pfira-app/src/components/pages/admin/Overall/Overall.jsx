@@ -34,7 +34,7 @@ const Overview = () => {
   // API endpoint for fetching reports
   const API_URL = 'https://fire-detection-api-production-f8a3.up.railway.app';
 
-  // Fetch reports from Firebase via Flask API
+  // Fetch reports from Flask API
   const fetchReports = async () => {
     try {
       setIsLoading(true);
@@ -492,6 +492,17 @@ const Overview = () => {
           report.id === reportId ? { ...report, status: newStatus } : report
         ));
         console.log(`Status updated for report ${reportId}: ${newStatus}`);
+
+        // If report is completed/cancelled, release responder assignments for reuse
+        try {
+          if (newStatus === 'Fire Out' || newStatus === 'Cancelled') {
+            await supabase
+              .from('report_assignments')
+              .delete()
+              .eq('report_id', String(reportId))
+              .eq('assignee_type', 'responder');
+          }
+        } catch (_) {}
       } else {
         // If cancelling and primary endpoint failed, try dedicated cancel endpoint
         if (newStatus === 'Cancelled') {
