@@ -223,8 +223,11 @@ const Sdashboard = () => {
   }, []);
 
   // Poll unread notifications and control alarm loop
+  // NOTE: Alarm control is now handled globally in StationLayout
+  // This effect only updates the local unreadCount for the alert badge
   useEffect(() => {
     let isMounted = true;
+    
     const fetchUnread = async () => {
       try {
         const userData = JSON.parse(sessionStorage.getItem('userData') || localStorage.getItem('userData') || '{}');
@@ -232,18 +235,14 @@ const Sdashboard = () => {
         if (!stationId) return;
         const { data, error } = await supabase
           .from('notifications')
-          .select('id, is_read')
+          .select('id, is_read, type')
           .eq('user_id', stationId)
           .eq('user_type', 'station')
           .eq('is_read', false);
         if (!error && Array.isArray(data) && isMounted) {
           const newCount = data.length;
           setUnreadCount(newCount);
-          if (newCount > 0) {
-            startAlarmLoop();
-          } else {
-            stopAlarmLoop();
-          }
+          console.log(`🔔 Sdashboard: Unread count: ${newCount}`);
         }
       } catch (_) {}
     };
@@ -253,7 +252,7 @@ const Sdashboard = () => {
       isMounted = false;
       clearInterval(interval);
     };
-  }, [startAlarmLoop, stopAlarmLoop]);
+  }, []);
 
   // Optionally get browser's current location (disabled by default)
   useEffect(() => {
@@ -626,17 +625,10 @@ const Sdashboard = () => {
     return () => clearInterval(interval);
   }, [mapLoaded]);
 
-  // On mount, proactively stop any lingering audio; polling will restart if needed
+  // On mount, don't stop the alarm - it's now managed globally by StationLayout
   useEffect(() => {
-    stopAlarmLoop();
-    try {
-      if (window.__stationAlarmAudio) {
-        window.__stationAlarmAudio.pause();
-        window.__stationAlarmAudio.currentTime = 0;
-        window.__stationAlarmAudio.loop = false;
-      }
-    } catch (_) {}
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    console.log('📍 Sdashboard: Component mounted');
+    // Alarm is managed globally by StationLayout, so we don't touch it here
   }, []);
 
   // (Bell dropdown logic moved to StationLayout; no local dropdown here)
@@ -881,6 +873,35 @@ const Sdashboard = () => {
 
   return (
     <div className="relative">
+      {/* Alert Indicator - Shows when there are unread assignment notifications */}
+      {unreadCount > 0 && (
+        <div 
+          onClick={stopAlarmLoop}
+          className="fixed top-24 right-6 z-50 bg-red-600 text-white rounded-full shadow-2xl cursor-pointer hover:bg-red-700 transition-all duration-300 animate-pulse"
+          style={{ width: '80px', height: '80px' }}
+        >
+          <div className="flex flex-col items-center justify-center h-full">
+            <svg 
+              xmlns="http://www.w3.org/2000/svg" 
+              className="h-10 w-10 mb-1" 
+              fill="none" 
+              viewBox="0 0 24 24" 
+              stroke="currentColor"
+            >
+              <path 
+                strokeLinecap="round" 
+                strokeLinejoin="round" 
+                strokeWidth={2} 
+                d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" 
+              />
+            </svg>
+            <span className="text-xs font-bold">{unreadCount} ALERT{unreadCount > 1 ? 'S' : ''}</span>
+          </div>
+          {/* Pulsing ring effect */}
+          <div className="absolute inset-0 rounded-full border-4 border-red-400 animate-ping opacity-75"></div>
+        </div>
+      )}
+      
       <LoadScript 
         googleMapsApiKey={GOOGLE_MAPS_API_KEY}
         onLoad={() => console.log('✅ Google Maps API loaded')}

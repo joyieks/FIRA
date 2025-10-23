@@ -282,15 +282,9 @@ export default function SAlertsWorker() {
       // Check if there are any unread assignment notifications (new fire reports assigned/forwarded)
       const hasUnreadAssignment = list.some(n => n.type === 'assignment' && !n.is_read);
       
-      // If NO unread assignments, stop the alarm
-      if (!hasUnreadAssignment && shouldBePlayingRef.current) {
-        console.log('🔇 No unread assignments found, stopping alarm...');
-        await stopAlert();
-        return;
-      }
-      
-      // Check for NEW assignment notifications
+      // Check for NEW assignment notifications (not yet processed)
       const newAssignments = list.filter(n => n.type === 'assignment' && !n.is_read && !processedNotificationIdsRef.current.has(n.id));
+      
       if (newAssignments.length > 0 && !isAlertingRef.current) {
         console.log('🔊 New assignment notifications found for station, playing alarm...');
         newAssignments.forEach(n => processedNotificationIdsRef.current.add(n.id));
@@ -301,6 +295,10 @@ export default function SAlertsWorker() {
         // Ensure alarm is playing when unread exists on first load/login
         console.log('🔊 Unread assignment notifications exist, ensuring alarm is playing...');
         await playAlert();
+      } else if (!hasUnreadAssignment && shouldBePlayingRef.current) {
+        // ONLY stop the alarm when ALL assignment notifications have been marked as read
+        console.log('🔇 No unread assignments found (all marked as read), stopping alarm...');
+        await stopAlert();
       }
     } catch (error) {
       console.error('🔊 SAlertsWorker: Error in loadNotifications:', error);

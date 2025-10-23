@@ -243,7 +243,8 @@ export default function RStatus() {
       structuresAffectedFromAPI = `${structuresAffectedFromAPI} structure(s)`;
     }
     return {
-      id: `${String(fireReport.id)}:${notification?.id || 'direct'}`,
+      id: `report-${String(fireReport.id)}`, // Use simple ID without concatenation
+      notificationId: notification?.id || null, // Store actual notification ID separately
       title: notification?.title || `Fire Report #${fireReport.id}`,
       location,
       description: notification?.message || '',
@@ -346,8 +347,9 @@ export default function RStatus() {
       case 'accept':
         Alert.alert('Assignment Accepted', 'You have accepted the current assignment.');
         // Mark the current notification as accepted (but keep it visible)
-        if (selectedAssignment?.id) {
-          markNotificationAsAccepted(selectedAssignment.id);
+        if (selectedAssignment?.notificationId) {
+          // Use the actual notification ID, not the concatenated ID
+          markNotificationAsAccepted(selectedAssignment.notificationId);
           // Update the assignment status in the state
           setAssignments(prevAssignments => 
             prevAssignments.map(assignment => 
@@ -356,6 +358,8 @@ export default function RStatus() {
                 : assignment
             )
           );
+        } else {
+          console.log('⚠️ No notification ID found for this assignment (might be a direct assignment)');
         }
         break;
       case 'decline':

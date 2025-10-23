@@ -16,6 +16,7 @@ export default function AAlertsWorker() {
   const isInitializedRef = useRef(false);
   const appState = useRef(AppState.currentState);
   const soundWatchdogRef = useRef(null);
+  const previousUnreadCountRef = useRef(0); // Track previous unread count for smart alarm control
 
   const SIREN_MODULE = require('../../../../assets/sounds/fire_alarm_sound.mp3');
 
@@ -321,28 +322,30 @@ export default function AAlertsWorker() {
 
       const list = data || [];
       
-      // Check if there are any unread fire alerts
-      const hasUnreadFire = list.some(n => n.type === 'fire_alert' && !n.is_read);
+      // Count unread fire alerts
+      const unreadFireCount = list.filter(n => n.type === 'fire_alert' && !n.is_read).length;
+      const previousCount = previousUnreadCountRef.current;
+      previousUnreadCountRef.current = unreadFireCount;
       
-      // If NO unread fire alerts, stop the alarm
-      if (!hasUnreadFire && shouldBePlayingRef.current) {
-        console.log('🔇 No unread fire alerts found, stopping alarm...');
-        await stopAlert();
-        return;
-      }
+      console.log(`� AAlertsWorker: Unread fire alerts changed from ${previousCount} to ${unreadFireCount}`);
       
-      // Check for NEW fire alerts
+      // Check for NEW fire alerts (not yet processed)
       const newFireAlerts = list.filter(n => n.type === 'fire_alert' && !n.is_read && !processedNotificationIdsRef.current.has(n.id));
+      
       if (newFireAlerts.length > 0 && !isAlertingRef.current) {
-        console.log('🔊 New fire alerts found, playing alarm...');
+        console.log('🔊 AAlertsWorker: New fire alerts found, playing alarm...');
         newFireAlerts.forEach(n => processedNotificationIdsRef.current.add(n.id));
         await playAlert();
         isAlertingRef.current = true;
         setTimeout(() => { isAlertingRef.current = false; }, 2000);
-      } else if (hasUnreadFire && !shouldBePlayingRef.current && !isAlertingRef.current) {
+      } else if (unreadFireCount > 0 && !shouldBePlayingRef.current && !isAlertingRef.current) {
         // Ensure alarm is playing when unread exists on first load/login
-        console.log('🔊 Unread fire alerts exist, ensuring alarm is playing...');
+        console.log('🔊 AAlertsWorker: Unread fire alerts exist, ensuring alarm is playing...');
         await playAlert();
+      } else if (unreadFireCount === 0 && previousCount > 0) {
+        // ONLY stop alarm when count transitions from >0 to 0 (all fire alerts marked as read)
+        console.log('🔇 AAlertsWorker: All fire alerts marked as read, stopping alarm...');
+        await stopAlert();
       }
     } catch (_) {}
   };

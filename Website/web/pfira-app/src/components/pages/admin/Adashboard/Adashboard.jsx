@@ -372,7 +372,7 @@ const Adashboard = () => {
       console.log('[Assign] upsert payload=', { ...payload, note: assignmentNote && assignmentNote.trim() ? assignmentNote.trim() : null });
       const { error } = await supabase
         .from('report_assignments')
-        .upsert({ ...payload, note: assignmentNote && assignmentNote.trim() ? assignmentNote.trim() : null }, { onConflict: 'report_id' });
+        .upsert({ ...payload, note: assignmentNote && assignmentNote.trim() ? assignmentNote.trim() : null }, { onConflict: 'report_id,assignee_id' });
       if (error) throw error;
       // Snapshot report coordinates so station dashboards can render reliably
       try {

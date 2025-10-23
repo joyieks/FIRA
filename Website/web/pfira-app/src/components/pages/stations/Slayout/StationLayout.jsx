@@ -20,6 +20,8 @@ const StationLayout = ({ children }) => {
   const location = useLocation();
   const profileRef = useRef(null);
   const notificationsRef = useRef(null);
+  const audioRef = useRef(null);
+  const previousUnreadCountRef = useRef(0);
 
   const toggleSidebar = () => setSidebarOpen(!sidebarOpen);
   const toggleProfile = () => setProfileOpen(!profileOpen);
@@ -137,8 +139,10 @@ const StationLayout = ({ children }) => {
     }
   };
 
-  // Load station notifications from Supabase (persistent)
+  // Load station notifications from Supabase (persistent) with real-time sync
   useEffect(() => {
+    let channel = null;
+    
     const load = async () => {
       try {
         const userData = JSON.parse(sessionStorage.getItem('userData') || localStorage.getItem('userData') || '{}');
@@ -152,16 +156,141 @@ const StationLayout = ({ children }) => {
           .order('created_at', { ascending: false });
         if (!error && Array.isArray(data)) {
           setNotifications(data);
-          setUnreadCount(data.filter(n => !n.is_read).length);
+          // Only count unread ASSIGNMENT notifications for alarm (same as mobile)
+          const newUnreadCount = data.filter(n => !n.is_read && n.type === 'assignment').length;
+          setUnreadCount(newUnreadCount);
+          console.log('🔔 StationLayout: Loaded notifications, unread assignment count:', newUnreadCount);
         }
       } catch (e) {
         // noop
       }
     };
+    
+    // Initial load
     load();
+    
+    // Poll every 4 seconds as backup
     const interval = setInterval(load, 4000);
-    return () => clearInterval(interval);
+    
+    // Set up real-time subscription for instant updates
+    const setupRealtimeSubscription = async () => {
+      try {
+        const userData = JSON.parse(sessionStorage.getItem('userData') || localStorage.getItem('userData') || '{}');
+        const stationId = userData?.id;
+        if (!stationId) return;
+        
+        console.log('🔔 StationLayout: Setting up real-time subscription for station:', stationId);
+        
+        channel = supabase
+          .channel(`station-notifications-layout:${stationId}`)
+          .on('postgres_changes', {
+            event: 'INSERT',
+            schema: 'public',
+            table: 'notifications',
+            filter: `user_id=eq.${stationId}`
+          }, (payload) => {
+            console.log('🔔 StationLayout: Real-time INSERT detected:', payload.new);
+            if (payload.new?.user_type === 'station') {
+              load(); // Reload all notifications
+              // If it's an assignment notification, log it
+              if (payload.new?.type === 'assignment') {
+                console.log('🔥 StationLayout: New assignment notification received');
+              }
+            }
+          })
+          .on('postgres_changes', {
+            event: 'UPDATE',
+            schema: 'public',
+            table: 'notifications',
+            filter: `user_id=eq.${stationId}`
+          }, (payload) => {
+            console.log('🔔 StationLayout: Real-time UPDATE detected:', payload.new);
+            if (payload.new?.user_type === 'station') {
+              // Immediately update the notification in state and recalculate unread count
+              setNotifications(prev => {
+                const updated = prev.map(n => n.id === payload.new.id ? payload.new : n);
+                // Only count unread ASSIGNMENT notifications for alarm (same as mobile)
+                const newUnreadCount = updated.filter(n => !n.is_read && n.type === 'assignment').length;
+                setUnreadCount(newUnreadCount);
+                console.log('🔔 StationLayout: Real-time update - new unread assignment count:', newUnreadCount);
+                return updated;
+              });
+            }
+          })
+          .subscribe((status) => {
+            console.log('🔔 StationLayout: Subscription status:', status);
+          });
+      } catch (error) {
+        console.error('🔔 StationLayout: Error setting up real-time subscription:', error);
+      }
+    };
+    
+    setupRealtimeSubscription();
+    
+    return () => {
+      clearInterval(interval);
+      if (channel) {
+        console.log('🔔 StationLayout: Unsubscribing from real-time channel');
+        channel.unsubscribe();
+      }
+    };
   }, []);
+
+  // Global alarm control - manages fire alarm sound based on unread notifications
+  useEffect(() => {
+    const startAlarm = async () => {
+      try {
+        if (!audioRef.current) {
+          const audio = new Audio('/assets/sounds/fire_alarm_sound.mp3');
+          audio.preload = 'auto';
+          audio.volume = 1.0;
+          audio.loop = true;
+          audioRef.current = audio;
+          window.__stationAlarmAudio = audio;
+        }
+        
+        const audio = audioRef.current;
+        if (audio.paused) {
+          audio.currentTime = 0;
+          await audio.play();
+          console.log('🔊 StationLayout: Alarm started');
+        }
+      } catch (error) {
+        console.warn('🔊 StationLayout: Could not start alarm (may need user interaction):', error);
+      }
+    };
+
+    const stopAlarm = () => {
+      try {
+        if (audioRef.current && !audioRef.current.paused) {
+          audioRef.current.pause();
+          audioRef.current.currentTime = 0;
+          console.log('🔇 StationLayout: Alarm stopped');
+        }
+      } catch (error) {
+        console.warn('🔇 StationLayout: Error stopping alarm:', error);
+      }
+    };
+
+    const previousCount = previousUnreadCountRef.current;
+    const currentCount = unreadCount;
+    previousUnreadCountRef.current = currentCount;
+
+    console.log(`🔔 StationLayout: Unread count changed from ${previousCount} to ${currentCount}`);
+
+    if (currentCount > 0) {
+      console.log('🔊 StationLayout: Unread notifications exist, starting alarm...');
+      startAlarm();
+    } else if (currentCount === 0 && previousCount > 0) {
+      console.log('🔇 StationLayout: All notifications marked as read, stopping alarm...');
+      stopAlarm();
+    }
+
+    // Cleanup on unmount
+    return () => {
+      // Don't stop alarm on unmount - let it continue playing across pages
+    };
+  }, [unreadCount]);
 
   // Debug function to check station_users table
   const debugStationTable = async () => {
@@ -315,16 +444,9 @@ const StationLayout = ({ children }) => {
                               !notification.is_read ? 'bg-blue-50' : ''
                             }`}
                             onClick={() => {
-                              markNotificationAsRead(notification.id);
-                              try {
-                                // Stop any active station alarm immediately
-                                if (window.__stationAlarmAudio) {
-                                  window.__stationAlarmAudio.pause();
-                                  window.__stationAlarmAudio.currentTime = 0;
-                                  window.__stationAlarmAudio.loop = false;
-                                }
-                              } catch (_) {}
-                              // Navigate to full notifications page
+                              // Just navigate to notifications page - don't mark as read yet
+                              // Users will mark as read manually on the notification page
+                              setNotificationsOpen(false);
                               window.location.href = '/station-dashboard/notification';
                             }}
                           >

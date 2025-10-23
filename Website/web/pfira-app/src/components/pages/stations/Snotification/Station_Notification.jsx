@@ -36,14 +36,8 @@ const Station_Notification = () => {
       const { error } = await supabase.from('notifications').update({ is_read: true }).eq('id', id);
       if (!error) {
         setNotifications(prev => prev.map(n => n.id === id ? { ...n, is_read: true } : n));
-        try {
-          // Stop any active station alarm immediately when a notification is marked read
-          if (window.__stationAlarmAudio) {
-            window.__stationAlarmAudio.pause();
-            window.__stationAlarmAudio.currentTime = 0;
-            window.__stationAlarmAudio.loop = false;
-          }
-        } catch (_) {}
+        // Don't manually stop the alarm here - let the polling mechanism in Sdashboard handle it
+        // The alarm will stop automatically when ALL notifications are marked as read
       }
     } catch (_) {}
   };
