@@ -1,6 +1,6 @@
 // Lightweight helper to call the external ChatAnalysisAPI without exposing any API keys
 
-const CHAT_ANALYSIS_URL = 'https://chatanalysisapi-production.up.railway.app/analyze-message';
+const CHAT_ANALYSIS_URL = 'https://ai-alarm-analyzer.onrender.com/analyze-message';
 
 export const analyzeMessageForFireAlarm = async (messageText) => {
   try {
@@ -10,7 +10,7 @@ export const analyzeMessageForFireAlarm = async (messageText) => {
     }
 
     console.log('🤖 AI Analysis: Analyzing message:', messageText.substring(0, 50) + '...');
-    console.log('🤖 AI Analysis: Calling Railway endpoint:', CHAT_ANALYSIS_URL);
+    console.log('🤖 AI Analysis: Calling Render endpoint:', CHAT_ANALYSIS_URL);
 
     const response = await fetch(CHAT_ANALYSIS_URL, {
       method: 'POST',
@@ -22,7 +22,7 @@ export const analyzeMessageForFireAlarm = async (messageText) => {
 
     if (!response.ok) {
       const errorText = await response.text();
-      console.error('🤖 AI Analysis: Railway backend error:', response.status, errorText);
+      console.error('🤖 AI Analysis: Render backend error:', response.status, errorText);
       return null;
     }
 

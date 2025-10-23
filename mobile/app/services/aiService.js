@@ -1,6 +1,6 @@
 // Lightweight helper to call the external ChatAnalysisAPI without exposing any API keys
 
-const CHAT_ANALYSIS_URL = 'https://chatanalysisapi-production.up.railway.app/analyze-message';
+const CHAT_ANALYSIS_URL = 'https://ai-alarm-analyzer.onrender.com/analyze-message';
 
 export const analyzeMessageForFireAlarm = async (messageText) => {
   try {
