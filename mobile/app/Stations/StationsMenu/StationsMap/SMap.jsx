@@ -314,7 +314,7 @@ Please respond immediately to this assignment.`;
         if (!ids.length) { setAssignedReports([]); return; }
 
         // Load from external API
-        const resp = await fetch('https://fire-detection-api-production-f8a3.up.railway.app/get_reports');
+        const resp = await fetch('https://fire-detection-api-production-f55b.up.railway.app/get_reports');
         const apiData = resp.ok ? await resp.json() : [];
         const apiById = new Map((apiData || []).map(r => [String(r.id), r]));
 

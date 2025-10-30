@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+                                          import React, { useState, useEffect } from 'react';
 import { supabase } from '../../../../config/supabase';
 import { FiSearch, FiFilter, FiClock, FiMapPin, FiUser, FiAlertTriangle, FiBell, FiTrendingUp, FiX, FiRefreshCw } from 'react-icons/fi';
 import { useNavigate } from 'react-router-dom';
@@ -13,12 +13,14 @@ const Overview = () => {
   const [generalAlarmStates, setGeneralAlarmStates] = useState({});
   const [isLoading, setIsLoading] = useState(true);
   const [lastRefresh, setLastRefresh] = useState(new Date());
-  const [editingStatus, setEditingStatus] = useState({});
   const [editingFinalAlarm, setEditingFinalAlarm] = useState({});
+  const [showAlarmConfirmModal, setShowAlarmConfirmModal] = useState(false);
+  const [pendingAlarmChange, setPendingAlarmChange] = useState(null); // { reportId, newAlarmLevel, currentAlarm }
   const [aiChatSuggestions, setAiChatSuggestions] = useState([]);
   const [chatAlarmByReport, setChatAlarmByReport] = useState({});
   const [assignedResponders, setAssignedResponders] = useState([]);
   const [isLoadingAssigned, setIsLoadingAssigned] = useState(false);
+  const [stationAssignments, setStationAssignments] = useState({}); // reportId -> station info
   
   // Admin cancellation states
   const [showCancelModal, setShowCancelModal] = useState(false);
@@ -32,79 +34,97 @@ const Overview = () => {
   const [timeRangeFilter, setTimeRangeFilter] = useState('all');
 
   // API endpoint for fetching reports
-  const API_URL = 'https://fire-detection-api-production-f8a3.up.railway.app';
+  const API_URL = 'https://fire-detection-api-production-f55b.up.railway.app';
 
-  // Fetch reports from Flask API
+  // Fetch reports (API first, fallback to Supabase)
   const fetchReports = async () => {
     try {
       setIsLoading(true);
-      console.log('Fetching reports from:', `${API_URL}/get_reports`);
-      
-      const response = await fetch(`${API_URL}/get_reports`);
-      console.log('Response status:', response.status);
-      
-      if (response.ok) {
-        const data = await response.json();
-        console.log('API Response data:', data);
-        console.log('Total reports received:', data.length);
-        
-        // Transform API data to match the expected format
-        const transformedReports = data.map(report => ({
-          id: report.id,
-          time: formatTime(report.formatted_timestamp || report.created_at),
-          reporter: report.reporter || 'Unknown Reporter',
-          location: report.address || report.geotag_location || 'Location unavailable',
-          status: report.status || 'On Going',
-          suggestedAlarmLevel: chatAlarmByReport[report.id] || report.recommended_alarm_level || report.alarm_level || 'Unknown',
-          finalAlarmLevel: report.final_fire_alarm_level || '1st Alarm',
-          description: report.cause_of_fire || 'No cause specified',
-          picture: report.image_url,
-          minutesAgo: calculateMinutesAgo(report.created_at || report.timestamp),
-          // Additional fields from API
-          prediction: report.prediction,
-          confidence: report.confidence,
-          structure: report.structure,
-          smokeIntensity: report.smoke_intensity,
-          smokeConfidence: report.smoke_confidence,
-          numberOfStructures: report.number_of_structures_on_fire,
-          reporterId: report.reporterId,
-          timestamp: report.created_at || report.timestamp,
-          // Location data
-          latitude: report.latitude,
-          longitude: report.longitude,
-          address: report.address,
-          geotag_location: report.geotag_location,
-          // Cancellation info
-          cancelled_by: report.cancelled_by,
-          cancellation_reason: report.cancellation_reason
-        }));
-        
-        console.log('Transformed reports:', transformedReports);
-        console.log('Debug - Sample report cancelled_by field:', transformedReports.find(r => r.status === 'Cancelled')?.cancelled_by);
-        
-        // Debug: Log raw API data for cancelled reports
-        const cancelledReports = data.filter(r => r.status === 'Cancelled');
-        console.log('Debug - Raw API data for cancelled reports:', cancelledReports);
-        cancelledReports.forEach((report, index) => {
-          console.log(`Debug - Cancelled report ${index + 1}:`, {
+      // 1) Try the Flask API (same source Stations consume)
+      try {
+        const apiRes = await fetch(`${API_URL}/get_reports`);
+        if (apiRes.ok) {
+          const apiData = await apiRes.json();
+          const transformedFromApi = (apiData || []).map(report => ({
             id: report.id,
-            status: report.status,
+            time: formatTime(report.formatted_timestamp || report.created_at || report.timestamp),
+            reporter: report.reporter || report.user_name || report.reporter_name || 'Unknown Reporter',
+            location: report.address || report.geotag_location || 'Location unavailable',
+            status: report.status || determineStatus(report.prediction),
+            suggestedAlarmLevel: chatAlarmByReport[report.id] || normalizeAiLabel(report.recommended_alarm_level || report.alarm_level) || 'Unknown',
+            finalAlarmLevel: report.final_fire_alarm_level || '1st Alarm',
+            description: report.cause_of_fire || report.cause || 'No cause specified',
+            picture: report.image_url,
+            minutesAgo: calculateMinutesAgo(report.created_at || report.timestamp),
+            prediction: report.prediction,
+            confidence: report.confidence,
+            structure: report.structure,
+            smokeIntensity: report.smoke_intensity,
+            smokeConfidence: report.smoke_confidence,
+            numberOfStructures: report.number_of_structures_on_fire,
+            reporterId: report.reporterId || report.user_id,
+            timestamp: report.created_at || report.timestamp,
+            latitude: report.latitude,
+            longitude: report.longitude,
+            address: report.address,
+            geotag_location: report.geotag_location,
             cancelled_by: report.cancelled_by,
-            cancellation_reason: report.cancellation_reason,
-            allKeys: Object.keys(report)
-          });
-        });
-        
-        setReports(transformedReports);
-        setLastRefresh(new Date());
-      } else {
-        console.log('API returned error status:', response.status);
-        const errorData = await response.text();
-        console.log('Error response:', errorData);
-        setReports([]);
+            cancellation_reason: report.cancellation_reason
+          }));
+          setReports(transformedFromApi);
+          setLastRefresh(new Date());
+          setIsLoading(false);
+          return;
+        }
+        console.warn('API get_reports failed, status:', apiRes.status);
+      } catch (apiErr) {
+        console.warn('API get_reports error:', apiErr);
       }
+
+      // 2) Fallback: read directly from Supabase
+      const { data, error } = await supabase
+        .from('fire_reports')
+        .select('*')
+        .order('created_at', { ascending: false });
+      if (error) {
+        console.error('Supabase error:', error);
+        setReports([]);
+        setIsLoading(false);
+        return;
+      }
+      const transformedReports = (data || []).map(report => ({
+        id: report.id,
+        time: formatTime(report.formatted_timestamp || report.created_at || report.timestamp),
+        reporter: report.reporter || report.user_name || report.reporter_name || 'Unknown Reporter',
+        location: report.address || report.geotag_location || 'Location unavailable',
+        status: report.status || determineStatus(report.prediction),
+        suggestedAlarmLevel: chatAlarmByReport[report.id] || normalizeAiLabel(report.recommended_alarm_level || report.alarm_level) || 'Unknown',
+        finalAlarmLevel: report.final_fire_alarm_level || '1st Alarm',
+        description: report.cause_of_fire || 'No cause specified',
+        picture: report.image_url,
+        minutesAgo: calculateMinutesAgo(report.created_at || report.timestamp),
+        // Additional fields
+        prediction: report.prediction,
+        confidence: report.confidence,
+        structure: report.structure,
+        smokeIntensity: report.smoke_intensity,
+        smokeConfidence: report.smoke_confidence,
+        numberOfStructures: report.number_of_structures_on_fire,
+        reporterId: report.reporterId || report.user_id,
+        timestamp: report.created_at || report.timestamp,
+        // Location data
+        latitude: report.latitude,
+        longitude: report.longitude,
+        address: report.address,
+        geotag_location: report.geotag_location,
+        // Cancellation info
+        cancelled_by: report.cancelled_by,
+        cancellation_reason: report.cancellation_reason
+      }));
+      setReports(transformedReports);
+      setLastRefresh(new Date());
     } catch (error) {
-      console.log('Error loading reports:', error);
+      console.error('Error loading reports:', error);
       setReports([]);
     } finally {
       setIsLoading(false);
@@ -182,6 +202,65 @@ const Overview = () => {
     
     return () => clearInterval(interval);
   }, []);
+
+  // Fetch station assignments for all reports
+  useEffect(() => {
+    const fetchStationAssignments = async () => {
+      if (!reports || reports.length === 0) return;
+      
+      try {
+        const reportIds = reports.map(r => String(r.id));
+        
+        // Fetch all station assignments for these reports
+        const { data: assignments, error } = await supabase
+          .from('report_assignments')
+          .select('report_id, assignee_id, assignee_type, assigned_at')
+          .in('report_id', reportIds)
+          .eq('assignee_type', 'station');
+        
+        if (error) {
+          console.error('Error fetching station assignments:', error);
+          return;
+        }
+        
+        // Fetch station details for assigned station IDs
+        const stationIds = [...new Set((assignments || []).map(a => a.assignee_id))];
+        if (stationIds.length === 0) {
+          setStationAssignments({});
+          return;
+        }
+        
+        const { data: stations, error: stationErr } = await supabase
+          .from('station_users')
+          .select('id, station_name')
+          .in('id', stationIds);
+        
+        if (stationErr) {
+          console.error('Error fetching station details:', stationErr);
+          return;
+        }
+        
+        // Create a map of station ID to station name
+        const stationMap = new Map(stations?.map(s => [s.id, s.station_name]) || []);
+        
+        // Create assignment map: reportId -> station info
+        const assignmentMap = {};
+        (assignments || []).forEach(a => {
+          assignmentMap[String(a.report_id)] = {
+            stationId: a.assignee_id,
+            stationName: stationMap.get(a.assignee_id) || 'Unknown Station',
+            assignedAt: a.assigned_at
+          };
+        });
+        
+        setStationAssignments(assignmentMap);
+      } catch (err) {
+        console.error('Error in fetchStationAssignments:', err);
+      }
+    };
+    
+    fetchStationAssignments();
+  }, [reports]);
 
   // Load assigned responders when a report is selected
   useEffect(() => {
@@ -347,24 +426,6 @@ const Overview = () => {
     };
     return map[suggested] || suggested;
   };
-
-  // If no reports, backfill with AI chat suggestions
-  useEffect(() => {
-    if (!isLoading && reports.length === 0 && aiChatSuggestions.length > 0) {
-      const aiDerivedReports = aiChatSuggestions.map((m) => ({
-        id: `chat-${m.id}`,
-        time: formatTime(m.created_at),
-        reporter: 'AI Chat Suggestion',
-        location: '—',
-        status: 'On Going',
-        suggestedAlarmLevel: normalizeAiLabel(m.ai_suggested_alarm) || 'Under Control',
-        finalAlarmLevel: normalizeAiLabel(m.ai_suggested_alarm) || '1st Alarm',
-        timestamp: m.created_at,
-        isChatSuggestion: true
-      }));
-      setReports(aiDerivedReports);
-    }
-  }, [isLoading, reports.length, aiChatSuggestions]);
 
   // Filter reports based on search and filters
   const filteredReports = reports.filter(report => {
@@ -607,41 +668,12 @@ const Overview = () => {
     }
   };
 
-  // Handle status change
-  const handleStatusChange = (reportId, newStatus) => {
-    setEditingStatus(prev => ({ ...prev, [reportId]: false }));
-    
-    // If cancelling, show the cancel modal instead of direct update
-    if (newStatus === 'Cancelled') {
-      const report = reports.find(r => r.id === reportId);
-      setReportToCancel(report);
-      setCancelReason('');
-      setShowCancelModal(true);
-    } else {
-      updateReportStatus(reportId, newStatus);
-    }
-  };
-
   // Handle final alarm level change with confirmation
   const handleFinalAlarmChange = (reportId, newAlarmLevel) => {
     const currentReport = reports.find(r => r.id === reportId);
     const currentAlarmLevel = currentReport?.finalAlarmLevel || 'Unknown';
-    
-    // Show confirmation dialog
-    const confirmed = window.confirm(
-      `Are you sure you want to change the final alarm level from "${currentAlarmLevel}" to "${newAlarmLevel}"?\n\n` +
-      `Report ID: ${reportId}\n` +
-      `Location: ${currentReport?.location || 'Unknown'}\n\n` +
-      `This action will update the emergency response level and may trigger additional resource deployment.`
-    );
-    
-    if (confirmed) {
-      setEditingFinalAlarm(prev => ({ ...prev, [reportId]: false }));
-      updateFinalAlarmLevel(reportId, newAlarmLevel);
-    } else {
-      // If user cancels, just close the editing mode without saving
-      setEditingFinalAlarm(prev => ({ ...prev, [reportId]: false }));
-    }
+    setPendingAlarmChange({ reportId, newAlarmLevel, currentAlarm: currentAlarmLevel, report: currentReport });
+    setShowAlarmConfirmModal(true);
   };
 
   // Cancel report with reason
@@ -916,50 +948,12 @@ const Overview = () => {
                         <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-900">
                           {report.location}
                         </td>
+                        {/* Status column - View only for Admins (only Stations can change status) */}
                         <td className="px-4 py-4 whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
-                          {editingStatus[report.id] ? (
-                            <select
-                              value={report.status}
-                              onChange={(e) => handleStatusChange(report.id, e.target.value)}
-                              onBlur={() => setEditingStatus(prev => ({ ...prev, [report.id]: false }))}
-                              onClick={(e) => e.stopPropagation()}
-                              className="px-2 py-1 text-xs border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                              autoFocus
-                              disabled={report.status === 'Cancelled'}
-                            >
-                              <option value="On Going">On Going</option>
-                              <option value="Under Control">Under Control</option>
-                              <option value="Fire Out">Fire Out</option>
-                              <option value="Cancelled">Cancelled</option>
-                            </select>
-                          ) : (
+                          <div className="flex flex-col gap-1">
                             <span 
-                              className={`px-3 py-1 rounded-md text-xs font-medium border ${report.status === 'Cancelled' ? 'cursor-not-allowed opacity-70' : 'cursor-pointer hover:bg-opacity-80'} ${getStatusColor(report.status)}`}
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                if (report.status === 'Cancelled') {
-                                  const cancelledBy = report?.cancelled_by;
-                                  const cancellationReason = report?.cancellation_reason;
-                                  console.log('Debug - Status span click - cancelled_by value:', cancelledBy, 'Type:', typeof cancelledBy);
-                                  console.log('Debug - Status span click - report object:', report);
-                                  
-                                  if (cancelledBy === 'Admin User' || cancelledBy === 'admin' || cancelledBy === 'Admin') {
-                                    const reasonText = cancellationReason ? `\n\nReason: ${cancellationReason}` : '';
-                                    alert(`This report was cancelled by an admin and cannot be edited.${reasonText}`);
-                                  } else if (cancelledBy) {
-                                    const reasonText = cancellationReason ? `\n\nReason: ${cancellationReason}` : '';
-                                    alert(`This report was cancelled by the citizen and cannot be edited.${reasonText}`);
-                                  } else {
-                                    const reasonText = cancellationReason ? `\n\nReason: ${cancellationReason}` : '';
-                                    alert(`This report was cancelled and cannot be edited.${reasonText}`);
-                                  }
-                                  return;
-                                }
-                                setEditingStatus(prev => ({ ...prev, [report.id]: true }));
-                              }}
-                              title={report.status === 'Cancelled' ? 
-                                `Cancelled by ${report?.cancelled_by === 'Admin User' || report?.cancelled_by === 'admin' || report?.cancelled_by === 'Admin' ? 'admin' : 'citizen'} - cannot be edited` : 
-                                'Click to edit status'}
+                              className={`px-3 py-1 rounded-md text-xs font-medium border ${report.status === 'Cancelled' ? 'opacity-70' : ''} ${getStatusColor(report.status)}`}
+                              title="Status can only be changed by Station users"
                             >
                               {report.status}
                               {report.status === 'Cancelled' && report?.cancelled_by && (
@@ -968,7 +962,13 @@ const Overview = () => {
                                 </span>
                               )}
                             </span>
-                          )}
+                            {/* Show "NO STATION ASSIGNED YET" badge if no station is assigned */}
+                            {!stationAssignments[String(report.id)] && (
+                              <span className="px-2 py-1 bg-amber-100 text-amber-800 border border-amber-300 rounded text-xs font-semibold text-center animate-pulse">
+                                ⚠️ NO STATION ASSIGNED
+                              </span>
+                            )}
+                          </div>
                         </td>
                         <td className="px-4 py-4 whitespace-nowrap">
                           <span className={`px-3 py-1 rounded-md text-xs font-medium border ${report.status === 'Cancelled' ? 'opacity-50 cursor-not-allowed' : ''} ${getAlarmLevelColor(report.suggestedAlarmLevel)}`}>
@@ -1080,6 +1080,47 @@ const Overview = () => {
                   )}
                 </tbody>
               </table>
+            </div>
+          </div>
+        )}
+
+        {/* Final Alarm Change Confirmation Modal */}
+        {showAlarmConfirmModal && pendingAlarmChange && (
+          <div className="fixed inset-0 backdrop-blur-sm bg-black bg-opacity-30 flex items-center justify-center p-4 z-50">
+            <div className="bg-white rounded-xl shadow-xl max-w-md w-full">
+              <div className="p-6">
+                <div className="mb-4">
+                  <h3 className="text-xl font-bold text-gray-900">Confirm Alarm Level Change</h3>
+                  <p className="mt-2 text-gray-600">
+                    Change final alarm level from <span className="font-semibold">{pendingAlarmChange.currentAlarm}</span> to
+                    <span className="font-semibold"> {pendingAlarmChange.newAlarmLevel}</span>?
+                  </p>
+                  <p className="mt-2 text-sm text-gray-500">
+                    Report ID: {pendingAlarmChange.reportId}<br/>
+                    Location: {pendingAlarmChange.report?.location || 'Unknown'}
+                  </p>
+                </div>
+                <div className="flex justify-end gap-3 mt-6">
+                  <button
+                    onClick={() => { setShowAlarmConfirmModal(false); setEditingFinalAlarm(prev => ({ ...prev, [pendingAlarmChange.reportId]: false })); setPendingAlarmChange(null); }}
+                    className="px-4 py-2 bg-gray-200 text-gray-800 rounded-md hover:bg-gray-300"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={() => {
+                      setShowAlarmConfirmModal(false);
+                      const { reportId, newAlarmLevel } = pendingAlarmChange;
+                      setEditingFinalAlarm(prev => ({ ...prev, [reportId]: false }));
+                      updateFinalAlarmLevel(reportId, newAlarmLevel);
+                      setPendingAlarmChange(null);
+                    }}
+                    className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700"
+                  >
+                    Confirm
+                  </button>
+                </div>
+              </div>
             </div>
           </div>
         )}

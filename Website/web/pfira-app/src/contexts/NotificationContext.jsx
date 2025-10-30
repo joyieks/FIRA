@@ -356,7 +356,7 @@ export const NotificationProvider = ({ children }) => {
         return;
       }
       
-      const response = await fetch('https://fire-detection-api-production-f8a3.up.railway.app/get_reports');
+      const response = await fetch('https://fire-detection-api-production-f55b.up.railway.app/get_reports');
       
       if (response.ok) {
         const data = await response.json();

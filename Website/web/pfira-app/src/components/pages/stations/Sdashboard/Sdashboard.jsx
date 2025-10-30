@@ -535,7 +535,7 @@ const Sdashboard = () => {
         });
 
         // 3) Fetch full fire reports from the same API used by admin
-        const response = await fetch('https://fire-detection-api-production-f8a3.up.railway.app/get_reports');
+        const response = await fetch('https://fire-detection-api-production-f55b.up.railway.app/get_reports');
         if (!response.ok) {
           console.error('❌ Failed to fetch fire reports for station view:', response.status);
           return;

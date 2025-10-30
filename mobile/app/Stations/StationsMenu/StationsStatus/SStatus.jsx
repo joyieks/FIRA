@@ -20,8 +20,9 @@ export default function SStatus() {
   const [resolvedReports, setResolvedReports] = useState(0);
   const [forwardedReports, setForwardedReports] = useState(0);
 
-  // Search and reports
+  // Search, filters and reports
   const [searchQuery, setSearchQuery] = useState('');
+  const [statusFilter, setStatusFilter] = useState('All'); // All | On Going | Under Control | Fire Out
   const [reports, setReports] = useState([]);
   const [assignedRespondersByReport, setAssignedRespondersByReport] = useState({});
   const [responders, setResponders] = useState([]);
@@ -29,7 +30,7 @@ export default function SStatus() {
   const [responderExisting, setResponderExisting] = useState({});
   const [isAssigning, setIsAssigning] = useState(false);
 
-  const API_URL = 'https://fire-detection-api-production-f8a3.up.railway.app';
+  const API_URL = 'https://fire-detection-api-production-f55b.up.railway.app';
 
   // Format time helper
   const formatTime = (timestamp) => {
@@ -55,6 +56,21 @@ export default function SStatus() {
       return `${days} day${days > 1 ? 's' : ''} ago`;
     } catch {
       return 'Unknown';
+    }
+  };
+
+  // Full date-time helper (matches Admin Overview style)
+  const formatFullDateTime = (timestamp) => {
+    if (!timestamp) return 'Unknown time';
+    try {
+      const date = new Date(timestamp);
+      if (isNaN(date.getTime())) return 'Unknown time';
+      return date.toLocaleString('en-US', {
+        year: 'numeric', month: 'short', day: 'numeric',
+        hour: '2-digit', minute: '2-digit', hour12: true
+      });
+    } catch {
+      return 'Unknown time';
     }
   };
 
@@ -159,13 +175,15 @@ export default function SStatus() {
       const filtered = (data || []).filter(r => ids.has(String(r.id)));
       const mapped = filtered.map(r => {
         const forwardingInfo = forwardedMetadata.get(String(r.id));
+        const suggested = r.recommended_alarm_level || r.alarm_level || '';
+        const normalizedSuggested = suggested && suggested.toLowerCase().startsWith('unknown') ? 'Unknown' : (suggested || 'Unknown');
         return {
           id: r.id,
           time: formatTime(r.formatted_timestamp || r.created_at),
           reporter: r.reporter_name || r.reporter || 'Unknown Reporter',
           location: r.address || r.geotag_location || 'Location unavailable',
           status: r.status || 'On Going',
-          suggestedAlarmLevel: r.recommended_alarm_level || r.alarm_level || 'Unknown',
+          suggestedAlarmLevel: normalizedSuggested,
           finalAlarmLevel: r.final_fire_alarm_level || '1st Alarm',
           description: r.cause_of_fire || r.cause || 'No cause specified',
           picture: r.image_url,
@@ -261,15 +279,22 @@ export default function SStatus() {
     loadResponders();
   }, [stationId]);
 
-  // Filter reports based on search
+  // Filter reports based on search and status
   const filteredReports = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
-    if (!q) return reports;
-    return reports.filter(r => 
-      (r.location||'').toLowerCase().includes(q) || 
-      (r.description||'').toLowerCase().includes(q)
-    );
-  }, [reports, searchQuery]);
+    return reports.filter((r) => {
+      // status chip filter
+      if (statusFilter !== 'All') {
+        const st = (r.status || '').toLowerCase();
+        if (statusFilter === 'On Going' && !(st.includes('on going') || st.includes('ongoing'))) return false;
+        if (statusFilter === 'Under Control' && !st.includes('under control')) return false;
+        if (statusFilter === 'Fire Out' && !st.includes('fire out')) return false;
+      }
+      // search
+      if (!q) return true;
+      return (r.location || '').toLowerCase().includes(q) || (r.description || '').toLowerCase().includes(q);
+    });
+  }, [reports, searchQuery, statusFilter]);
 
   // Get status color
   const getStatusColor = (status) => {
@@ -376,13 +401,34 @@ export default function SStatus() {
 
         {/* Search Bar */}
         <View className="px-4 mb-4">
-          <View className="bg-white rounded-xl p-3">
+          <View className="bg-white rounded-xl p-3" style={{ shadowColor: '#000', shadowOpacity: 0.08, shadowRadius: 8, shadowOffset: { width: 0, height: 3 }, elevation: 3 }}>
             <TextInput
               value={searchQuery}
               onChangeText={setSearchQuery}
               placeholder="Search reports by location or description..."
               className="text-gray-800"
             />
+          </View>
+        </View>
+
+        {/* Filters Row */}
+        <View className="px-4 mb-3">
+          <View className="flex-row">
+            {['All', 'On Going', 'Under Control', 'Fire Out'].map((s) => (
+              <TouchableOpacity
+                key={s}
+                onPress={() => setStatusFilter(s)}
+                style={{
+                  paddingHorizontal: 12,
+                  paddingVertical: 8,
+                  borderRadius: 12,
+                  marginRight: 8,
+                  backgroundColor: statusFilter === s ? '#fee2e2' : '#f1f5f9'
+                }}
+              >
+                <Text style={{ color: statusFilter === s ? '#b91c1c' : '#334155', fontWeight: '600' }}>{s}</Text>
+              </TouchableOpacity>
+            ))}
           </View>
         </View>
 
@@ -441,7 +487,7 @@ export default function SStatus() {
                       <Text className="font-bold text-gray-900 text-base mb-1">
                         {report.location}
                       </Text>
-                      <Text className="text-gray-500 text-sm">{report.minutesAgoText}</Text>
+                      <Text className="text-gray-500 text-sm">{formatFullDateTime(report.timestamp)}</Text>
                     </View>
                     <View style={{ backgroundColor: statusColor.bg, borderColor: statusColor.border }} className="px-3 py-1 rounded-lg border">
                       <Text style={{ color: statusColor.text }} className="text-xs font-bold">

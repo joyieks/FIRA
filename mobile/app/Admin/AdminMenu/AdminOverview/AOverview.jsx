@@ -1,8 +1,9 @@
 import React, { useEffect, useMemo, useState, useCallback } from 'react';
 import { View, Text, TouchableOpacity, ScrollView, RefreshControl, TextInput, Modal, Image, Platform, Alert } from 'react-native';
+import { MaterialIcons } from '@expo/vector-icons';
 import { supabase } from '../../../config/supabase';
 
-const API_URL = 'https://fire-detection-api-production-f8a3.up.railway.app';
+const API_URL = 'https://fire-detection-api-production-f55b.up.railway.app';
 
 export default function AOverview() {
   const [reports, setReports] = useState([]);
@@ -28,30 +29,67 @@ export default function AOverview() {
   const [showAlarmConfirmModal, setShowAlarmConfirmModal] = useState(false);
   const [pendingStatusChange, setPendingStatusChange] = useState(null);
   const [pendingAlarmChange, setPendingAlarmChange] = useState(null);
+  const [assignedStationReportIds, setAssignedStationReportIds] = useState(new Set()); // Set of report_id strings with station assigned
 
   const fetchReports = useCallback(async () => {
     try {
       setLoading(true);
-      
-      // Add timeout to prevent hanging
+      // 1) Prefer Supabase table (source of truth)
+      try {
+        const { data: sbData, error: sbErr } = await supabase
+          .from('fire_reports')
+          .select('*')
+          .order('created_at', { ascending: false });
+        if (!sbErr && Array.isArray(sbData) && sbData.length > 0) {
+          console.log('[AOverview] Supabase fire_reports rows:', sbData.length);
+          setReports(sbData);
+          // Load station assignments for these reports
+          const ids = sbData.map(r => String(r.id));
+          if (ids.length) {
+            const { data: assigns } = await supabase
+              .from('report_assignments')
+              .select('report_id')
+              .in('report_id', ids)
+              .eq('assignee_type', 'station');
+            setAssignedStationReportIds(new Set((assigns || []).map(a => String(a.report_id))));
+          } else {
+            setAssignedStationReportIds(new Set());
+          }
+          return;
+        }
+        if (sbErr) console.warn('[AOverview] Supabase fire_reports error:', sbErr?.message || sbErr);
+      } catch (sbCatch) {
+        console.warn('[AOverview] Supabase fire_reports catch:', sbCatch?.message || sbCatch);
+      }
+
+      // 2) Fallback to Flask API
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
-      
-      const res = await fetch(`${API_URL}/get_reports`, {
-        signal: controller.signal
-      });
-      
+      const timeoutId = setTimeout(() => controller.abort(), 10000);
+      const res = await fetch(`${API_URL}/get_reports`, { signal: controller.signal });
       clearTimeout(timeoutId);
-      
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
-      setReports(Array.isArray(data) ? data : []);
+      console.log('[AOverview] API get_reports length:', Array.isArray(data) ? data.length : 'non-array');
+      if (Array.isArray(data)) {
+        setReports(data);
+        const ids = data.map(r => String(r.id));
+        if (ids.length) {
+          const { data: assigns } = await supabase
+            .from('report_assignments')
+            .select('report_id')
+            .in('report_id', ids)
+            .eq('assignee_type', 'station');
+          setAssignedStationReportIds(new Set((assigns || []).map(a => String(a.report_id))));
+        } else {
+          setAssignedStationReportIds(new Set());
+        }
+      }
     } catch (e) {
       console.error('Error fetching reports:', e);
       if (e.name === 'AbortError') {
         console.error('Request timed out');
       }
-      setReports([]);
+      // Keep previous reports on error
     } finally {
       setLoading(false);
     }
@@ -61,13 +99,7 @@ export default function AOverview() {
     fetchReports();
   }, []); // Remove fetchReports dependency to prevent infinite re-renders
 
-  // Lightweight polling to keep list fresh
-  useEffect(() => {
-    const interval = setInterval(() => {
-      fetchReports();
-    }, 5000);
-    return () => clearInterval(interval);
-  }, [fetchReports]);
+  // Removed auto-polling: rely on manual Refresh button only
 
   // Load stations for assignment when screen mounts
   useEffect(() => {
@@ -138,13 +170,48 @@ export default function AOverview() {
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
     try {
+      // Prefer Supabase, fallback to API
+      try {
+        const { data: sbData, error: sbErr } = await supabase
+          .from('fire_reports')
+          .select('*')
+          .order('created_at', { ascending: false });
+        if (!sbErr && Array.isArray(sbData) && sbData.length > 0) {
+          setReports(sbData);
+          const ids = sbData.map(r => String(r.id));
+          if (ids.length) {
+            const { data: assigns } = await supabase
+              .from('report_assignments')
+              .select('report_id')
+              .in('report_id', ids)
+              .eq('assignee_type', 'station');
+            setAssignedStationReportIds(new Set((assigns || []).map(a => String(a.report_id))));
+          } else {
+            setAssignedStationReportIds(new Set());
+          }
+          return;
+        }
+      } catch (_) {}
       const res = await fetch(`${API_URL}/get_reports`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
-      setReports(Array.isArray(data) ? data : []);
+      if (Array.isArray(data)) {
+        setReports(data);
+        const ids = data.map(r => String(r.id));
+        if (ids.length) {
+          const { data: assigns } = await supabase
+            .from('report_assignments')
+            .select('report_id')
+            .in('report_id', ids)
+            .eq('assignee_type', 'station');
+          setAssignedStationReportIds(new Set((assigns || []).map(a => String(a.report_id))));
+        } else {
+          setAssignedStationReportIds(new Set());
+        }
+      }
     } catch (e) {
       console.error('Error refreshing reports:', e);
-      setReports([]);
+      // Keep previous reports on error
     } finally {
       setRefreshing(false);
     }
@@ -456,11 +523,12 @@ export default function AOverview() {
   };
 
   const filtered = useMemo(() => {
-    return reports.filter((r) => {
+    const result = reports.filter((r) => {
       const statusText = (r.status || '').toString().toLowerCase();
-      const isCancelled = statusText.includes('cancelled') || statusText.includes('canceled');
-      const isFireOut = statusText.includes('fire out');
-      if (!(/* hasCoords not required for overview */ !isCancelled && !isFireOut)) return false;
+      // Do NOT hide any statuses by default. Only apply explicit status filter below.
+      if (statusFilter !== 'All') {
+        if ((r.status || '') !== statusFilter) return false;
+      }
 
       const q = searchQuery.trim().toLowerCase();
       if (q) {
@@ -471,9 +539,7 @@ export default function AOverview() {
         if (!(location.includes(q) || reporter.includes(q) || cause.includes(q) || structure.includes(q))) return false;
       }
 
-      if (statusFilter !== 'All') {
-        if ((r.status || '') !== statusFilter) return false;
-      }
+      // No additional status gating here when statusFilter is All
 
       if (timeRangeFilter !== 'all') {
         const ts = r.created_at || r.timestamp;
@@ -518,13 +584,32 @@ export default function AOverview() {
         return 0;
       }
     });
+    // Safety: if filtering produced zero results but we actually have reports, log and return original
+    if (result.length === 0 && reports.length > 0) {
+      console.log('[AOverview] filter returned 0 but reports length =', reports.length, {
+        statusFilter,
+        timeRangeFilter,
+        searchQuery
+      });
+    }
+    return result;
   }, [reports, searchQuery, statusFilter, timeRangeFilter]);
 
   const stats = useMemo(() => {
-    const total = filtered.length;
-    const fire = filtered.filter((r) => (r.prediction || '').toLowerCase() === 'fire').length;
-    const noFire = filtered.filter((r) => (r.prediction || '').toLowerCase() === 'no fire').length;
-    return { total, fire, noFire };
+    const normalizePred = (p) => {
+      const s = String(p || '').toLowerCase().trim().replace(/[^a-z ]/g, ' ').replace(/\s+/g, ' ').trim();
+      if (!s) return 'unknown';
+      if (s.includes('no') && s.includes('fire')) return 'no fire';
+      if (s.includes('fire')) return 'fire';
+      return s;
+    };
+    const active = filtered.filter((r) => {
+      const st = String(r.status || '').toLowerCase();
+      return st.includes('on going') || st.includes('ongoing') || st.includes('under control');
+    }).length;
+    const fire = filtered.filter((r) => normalizePred(r.prediction) === 'fire').length;
+    const noFire = filtered.filter((r) => normalizePred(r.prediction) === 'no fire').length;
+    return { active, fire, noFire };
   }, [filtered]);
 
   const getSafeImageUri = (uri) => {
@@ -545,34 +630,42 @@ export default function AOverview() {
         <Text style={{ fontSize: 28, fontWeight: '800', color: '#0f172a', marginBottom: 16 }}>Emergency Reports Overview</Text>
 
         <View style={{ backgroundColor: 'white', borderRadius: 12, padding: 12, marginBottom: 12 }}>
-          <TextInput
-            value={searchQuery}
-            onChangeText={setSearchQuery}
-            placeholder="Search report by location, reporter, cause, or structure type..."
-            placeholderTextColor="#94a3b8"
-            style={{ borderWidth: 1, borderColor: '#e2e8f0', borderRadius: 10, paddingHorizontal: 12, paddingVertical: 10, color: '#0f172a' }}
-          />
-          <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 10 }}>
-            <View style={{ flexDirection: 'row' }}>
-              {['All', 'On Going', 'Under Control'].map((s) => (
-                <TouchableOpacity key={s} onPress={() => setStatusFilter(s)} style={{ paddingHorizontal: 10, paddingVertical: 8, borderRadius: 8, marginRight: 8, backgroundColor: statusFilter === s ? '#fee2e2' : '#f1f5f9' }}>
-                  <Text style={{ color: statusFilter === s ? '#b91c1c' : '#334155', fontWeight: '600' }}>{s}</Text>
-                </TouchableOpacity>
-              ))}
-            </View>
-            <View style={{ flexDirection: 'row' }}>
-              {['week', 'month'].map((t) => (
-                <TouchableOpacity key={t} onPress={() => setTimeRangeFilter(t)} style={{ paddingHorizontal: 10, paddingVertical: 8, borderRadius: 8, marginLeft: 8, backgroundColor: timeRangeFilter === t ? '#fee2e2' : '#f1f5f9' }}>
-                  <Text style={{ color: timeRangeFilter === t ? '#b91c1c' : '#334155', fontWeight: '600', textTransform: 'capitalize' }}>{t}</Text>
-                </TouchableOpacity>
-              ))}
-            </View>
+          <View style={{
+            backgroundColor: 'white', borderRadius: 10, paddingHorizontal: 0,
+            shadowColor: '#000', shadowOpacity: 0.08, shadowRadius: 8, shadowOffset: { width: 0, height: 3 }, elevation: 3
+          }}>
+            <TextInput
+              value={searchQuery}
+              onChangeText={setSearchQuery}
+              placeholder="Search reports by location, reporter, cause, or structure type..."
+              placeholderTextColor="#94a3b8"
+              style={{ borderWidth: 1, borderColor: '#e2e8f0', borderRadius: 10, paddingHorizontal: 12, paddingVertical: 10, color: '#0f172a' }}
+            />
+          </View>
+
+          {/* Status Filter Chips (match Stations UI) */}
+          <View style={{ flexDirection: 'row', marginTop: 10 }}>
+            {['All', 'On Going', 'Under Control', 'Fire Out'].map((s) => (
+              <TouchableOpacity
+                key={s}
+                onPress={() => setStatusFilter(s)}
+                style={{
+                  paddingHorizontal: 12,
+                  paddingVertical: 8,
+                  borderRadius: 12,
+                  marginRight: 8,
+                  backgroundColor: statusFilter === s ? '#fee2e2' : '#f1f5f9'
+                }}
+              >
+                <Text style={{ color: statusFilter === s ? '#b91c1c' : '#334155', fontWeight: '600' }}>{s}</Text>
+              </TouchableOpacity>
+            ))}
           </View>
         </View>
 
         <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 16 }}>
           <View style={{ alignItems: 'center', flex: 1 }}>
-            <Text style={{ fontSize: 28, fontWeight: '800', color: '#ef4444' }}>{stats.total}</Text>
+            <Text style={{ fontSize: 28, fontWeight: '800', color: '#ef4444' }}>{stats.active}</Text>
             <Text style={{ color: '#64748b', marginTop: 4 }}>Active Reports</Text>
           </View>
           <View style={{ alignItems: 'center', flex: 1 }}>
@@ -654,6 +747,25 @@ export default function AOverview() {
                   </View>
                 </View>
 
+                {/* No Station Assigned badge */}
+                {!assignedStationReportIds.has(String(r.id)) && (
+                  <View style={{
+                    backgroundColor: '#fef3c7',
+                    borderWidth: 1,
+                    borderColor: '#fde68a',
+                    borderRadius: 10,
+                    paddingHorizontal: 10,
+                    paddingVertical: 6,
+                    alignSelf: 'flex-start',
+                    marginBottom: 10,
+                    flexDirection: 'row',
+                    alignItems: 'center'
+                  }}>
+                    <MaterialIcons name="warning-amber" size={14} color="#d97706" />
+                    <Text style={{ marginLeft: 6, color: '#92400e', fontWeight: '700', fontSize: 12 }}>No station assigned</Text>
+                  </View>
+                )}
+
                 {/* Location */}
                 <Text style={{ fontSize: 14, color: '#4b5563', marginBottom: 12 }} numberOfLines={2}>
                   📍 {r.address || r.geotag_location || 'No address'}
@@ -675,7 +787,10 @@ export default function AOverview() {
                         fontWeight: '500',
                         fontSize: 12
                       }}>
-                        {r.recommended_alarm_level || r.alarm_level || 'N/A'}
+                        {(() => {
+                          const s = r.recommended_alarm_level || r.alarm_level || '';
+                          return s && s.toLowerCase().startsWith('unknown') ? 'Unknown' : (s || 'Unknown');
+                        })()}
                       </Text>
                     </View>
                   </View>
@@ -701,10 +816,10 @@ export default function AOverview() {
                 </View>
               </View>
 
-              {/* Actions Row - Positioned at bottom, outside content area */}
-              <View style={{ 
-                flexDirection: 'row', 
-                justifyContent: 'space-between', 
+              {/* Actions Row - modern pill buttons aligned with Stations UI */}
+              <View style={{
+                flexDirection: 'row',
+                justifyContent: 'space-between',
                 alignItems: 'center',
                 paddingHorizontal: 16,
                 paddingBottom: 16,
@@ -713,59 +828,46 @@ export default function AOverview() {
                 borderTopColor: '#f3f4f6',
                 gap: 8
               }}>
-                {/* View Details Button */}
                 <TouchableOpacity
                   onPress={() => setSelectedReport(r)}
                   style={{
-                    paddingHorizontal: 12,
-                    paddingVertical: 8,
-                    backgroundColor: '#3b82f6',
-                    borderRadius: 8,
-                    flexDirection: 'row',
+                    flex: 1,
+                    paddingVertical: 10,
+                    borderRadius: 10,
+                    backgroundColor: '#ef4444',
                     alignItems: 'center',
-                    flex: 1
+                    shadowColor: '#000', shadowOpacity: 0.06, shadowRadius: 6, shadowOffset: { width: 0, height: 2 }, elevation: 2
                   }}
                 >
-                  <Text style={{ color: 'white', fontWeight: '600', fontSize: 12, marginRight: 4 }}>👁️</Text>
-                  <Text style={{ color: 'white', fontWeight: '600', fontSize: 12 }}>Details</Text>
+                  <Text style={{ color: 'white', fontWeight: '700', fontSize: 12 }}>Details</Text>
                 </TouchableOpacity>
                 <TouchableOpacity
-                  style={{
-                    paddingHorizontal: 16,
-                    paddingVertical: 8,
-                    backgroundColor: '#f59e0b',
-                    borderRadius: 8,
-                    flexDirection: 'row',
-                    alignItems: 'center'
-                  }}
                   onPress={() => {
                     console.log('[Edit Button] Setting editReport to:', r);
                     setEditReport(r);
                     setShowEditModal(true);
                     console.log('[Edit Button] showEditModal set to true');
                   }}
-                >
-                  <Text style={{ color: 'white', fontWeight: '600', fontSize: 12, marginRight: 4 }}>✏️</Text>
-                  <Text style={{ color: 'white', fontWeight: '600', fontSize: 12 }}>Edit</Text>
-                </TouchableOpacity>
-                
-                <TouchableOpacity
                   style={{
-                    paddingHorizontal: 16,
-                    paddingVertical: 8,
-                    backgroundColor: '#ef4444',
-                    borderRadius: 8,
-                    flexDirection: 'row',
-                    alignItems: 'center'
+                    flex: 1,
+                    paddingVertical: 10,
+                    borderRadius: 10,
+                    backgroundColor: '#f59e0b',
+                    alignItems: 'center',
+                    shadowColor: '#000', shadowOpacity: 0.06, shadowRadius: 6, shadowOffset: { width: 0, height: 2 }, elevation: 2
                   }}
+                >
+                  <Text style={{ color: 'white', fontWeight: '700', fontSize: 12 }}>Edit</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
                   onPress={() => {
                     Alert.alert(
                       'Confirm Cancellation',
                       `Are you sure you want to cancel this report?\n\nReporter: ${r.reporter || r.user_name || 'Anonymous Reporter'}\nLocation: ${r.address || r.geotag_location || 'No address'}\n\nYou will be asked to provide a reason for cancellation.`,
                       [
-                        { text: 'Cancel', style: 'cancel' },
-                        { 
-                          text: 'Proceed', 
+                        { text: 'Back', style: 'cancel' },
+                        {
+                          text: 'Proceed',
                           style: 'destructive',
                           onPress: () => {
                             setCancelReport(r);
@@ -776,9 +878,16 @@ export default function AOverview() {
                       ]
                     );
                   }}
+                  style={{
+                    flex: 1,
+                    paddingVertical: 10,
+                    borderRadius: 10,
+                    backgroundColor: '#6b7280',
+                    alignItems: 'center',
+                    shadowColor: '#000', shadowOpacity: 0.06, shadowRadius: 6, shadowOffset: { width: 0, height: 2 }, elevation: 2
+                  }}
                 >
-                  <Text style={{ color: 'white', fontWeight: '600', fontSize: 12, marginRight: 4 }}>❌</Text>
-                  <Text style={{ color: 'white', fontWeight: '600', fontSize: 12 }}>Cancel</Text>
+                  <Text style={{ color: 'white', fontWeight: '700', fontSize: 12 }}>Cancel</Text>
                 </TouchableOpacity>
               </View>
             </View>
@@ -974,6 +1083,12 @@ export default function AOverview() {
                             .upsert(payload, { onConflict: 'report_id,assignee_type,assignee_id' });
                           if (error) throw error;
                           Alert.alert('Assigned', 'Report assigned to station successfully.');
+                          // Mark this report as assigned locally for the badge
+                          setAssignedStationReportIds(prev => {
+                            const next = new Set(prev);
+                            next.add(String(selectedReport.id));
+                            return next;
+                          });
                         } catch (e) {
                           Alert.alert('Error', e.message || 'Failed to assign station');
                         } finally {

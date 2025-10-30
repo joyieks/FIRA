@@ -40,9 +40,9 @@ export default function CMap() {
   });
   
   // API endpoints
-  const GET_REPORTS_URL = 'https://fire-detection-api-production-f8a3.up.railway.app/get_reports';
-  const UPDATE_REPORT_URL = 'https://fire-detection-api-production-f8a3.up.railway.app/update_report';
-  const UPDATE_STATUS_URL = 'https://fire-detection-api-production-f8a3.up.railway.app/update_report_status';
+  const GET_REPORTS_URL = 'https://fire-detection-api-production-f55b.up.railway.app/get_reports';
+  const UPDATE_REPORT_URL = 'https://fire-detection-api-production-f55b.up.railway.app/update_report';
+  const UPDATE_STATUS_URL = 'https://fire-detection-api-production-f55b.up.railway.app/update_report_status';
 
   // Get current user
   useEffect(() => {

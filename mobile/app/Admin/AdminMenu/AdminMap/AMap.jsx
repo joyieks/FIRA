@@ -12,8 +12,7 @@ import {
   Dimensions,
   StatusBar,
   Platform,
-  Image,
-  TextInput
+  Image
 } from 'react-native';
 import MapView, { Marker, Callout, Circle } from 'react-native-maps';
 import * as Location from 'expo-location';
@@ -43,14 +42,11 @@ export default function AMap({ isSidebarOpen = false }) {
   const [showReportModal, setShowReportModal] = useState(false);
   const [stations, setStations] = useState([]);
   const [jurisdictionRadius] = useState(2000);
-  // Force station-only assignments
   const [assigneeType, setAssigneeType] = useState('station');
   const [assigneeId, setAssigneeId] = useState('');
   const [assignmentNote, setAssignmentNote] = useState('');
   const [redirectTarget, setRedirectTarget] = useState('');
   const [redirectNote, setRedirectNote] = useState('');
-  const [currentAssignment, setCurrentAssignment] = useState(null);
-  const [forwardedTo, setForwardedTo] = useState([]);
 
   // Dashboard states
   const [showDashboard, setShowDashboard] = useState(true);
@@ -82,42 +78,15 @@ export default function AMap({ isSidebarOpen = false }) {
   const fetchFireReports = useCallback(async () => {
     setReportsLoading(true);
     try {
-      const response = await fetch('https://fire-detection-api-production-f8a3.up.railway.app/get_reports');
+      const response = await fetch('https://fire-detection-api-production-f55b.up.railway.app/get_reports');
       
       if (response.ok) {
         const data = await response.json();
         console.log('📊 Fetched fire reports for mobile admin dashboard:', data.length);
         
-        // Normalize coordinates: prefer latitude/longitude; otherwise parse from geotag_location
-        const tryParseCoords = (s) => {
-          if (!s) return { ok: false };
-          const text = String(s);
-          // Prefer patterns with decimals and a comma/space separator
-          const m = text.match(/(-?\d{1,2}\.\d+)\s*,?\s*(-?\d{1,3}\.\d+)/);
-          if (!m) return { ok: false };
-          const lat = parseFloat(m[1]);
-          const lng = parseFloat(m[2]);
-          if (isNaN(lat) || isNaN(lng)) return { ok: false };
-          if (lat < -90 || lat > 90 || lng < -180 || lng > 180) return { ok: false };
-          return { ok: true, lat, lng };
-        };
-
-        const normalized = (data || []).map((r) => {
-          let lat = r.latitude; let lng = r.longitude;
-          const latOk = lat != null && !isNaN(parseFloat(lat)) && parseFloat(lat) >= -90 && parseFloat(lat) <= 90;
-          const lngOk = lng != null && !isNaN(parseFloat(lng)) && parseFloat(lng) >= -180 && parseFloat(lng) <= 180;
-          if (!(latOk && lngOk)) {
-            const parsed = tryParseCoords(r.geotag_location || r.address || r.location);
-            if (parsed.ok) { lat = parsed.lat; lng = parsed.lng; }
-          }
-          return { ...r, latitude: lat, longitude: lng };
-        });
-
         // Filter reports that have valid coordinates AND are not cancelled or fire out
-        const reportsWithCoords = normalized.filter(report => {
-          const latNum = parseFloat(report.latitude);
-          const lngNum = parseFloat(report.longitude);
-          const hasCoords = report.latitude != null && report.longitude != null && !isNaN(latNum) && !isNaN(lngNum) && latNum >= -90 && latNum <= 90 && lngNum >= -180 && lngNum <= 180;
+        const reportsWithCoords = data.filter(report => {
+          const hasCoords = report.latitude && report.longitude && !isNaN(parseFloat(report.latitude)) && !isNaN(parseFloat(report.longitude));
           const statusText = (report.status || '').toString().toLowerCase();
           const isCancelled = statusText.includes('cancelled') || statusText.includes('canceled');
           const isFireOut = statusText.includes('fire out');
@@ -131,16 +100,7 @@ export default function AMap({ isSidebarOpen = false }) {
           console.log(`Mobile Admin Report ${report.id}: ${parseFloat(report.latitude).toFixed(6)}, ${parseFloat(report.longitude).toFixed(6)} - ${report.address || report.geotag_location || 'No address'} - Status: ${report.status || 'Unknown'}`);
         });
         
-        // If there are valid reports, recenter softly around first one to ensure visibility
         setFireReports(reportsWithCoords);
-        if (reportsWithCoords.length > 0) {
-          const first = reportsWithCoords[0];
-          const latNum = parseFloat(first.latitude);
-          const lngNum = parseFloat(first.longitude);
-          if (!isNaN(latNum) && !isNaN(lngNum)) {
-            setMapRegion(r => ({ ...r, latitude: latNum, longitude: lngNum }));
-          }
-        }
         console.log('✅ Valid fire reports (filtered):', reportsWithCoords.length);
       } else {
         console.error('❌ Failed to fetch fire reports:', response.status);
@@ -157,14 +117,6 @@ export default function AMap({ isSidebarOpen = false }) {
   // Load fire reports on component mount
   useEffect(() => {
     fetchFireReports();
-  }, [fetchFireReports]);
-
-  // Poll periodically so markers appear promptly for new reports
-  useEffect(() => {
-    const id = setInterval(() => {
-      fetchFireReports();
-    }, 5000);
-    return () => clearInterval(id);
   }, [fetchFireReports]);
 
   // Load stations and geocode addresses for markers
@@ -248,145 +200,23 @@ export default function AMap({ isSidebarOpen = false }) {
     setShowReportModal(true);
   };
 
-  // Fetch current assignment and forwarding info for a report
-  const loadAssignmentInfo = useCallback(async (reportId) => {
-    if (!reportId) return;
-
-    try {
-      // 1. Fetch current assignment
-      const { data: assignment, error: assignError } = await supabase
-        .from('report_assignments')
-        .select('assignee_type, assignee_id, assigned_at, note')
-        .eq('report_id', reportId)
-        .single();
-
-      if (assignError && assignError.code !== 'PGRST116') {
-        console.error('Error fetching assignment:', assignError);
-      }
-
-      // If we have an assignment and it's a station, get the station name
-      if (assignment && assignment.assignee_type === 'station') {
-        const { data: stationData } = await supabase
-          .from('station_users')
-          .select('station_name')
-          .eq('id', assignment.assignee_id)
-          .single();
-
-        setCurrentAssignment({
-          type: assignment.assignee_type,
-          id: assignment.assignee_id,
-          name: stationData?.station_name || 'Unknown Station',
-          assigned_at: assignment.assigned_at,
-          note: assignment.note || ''
-        });
-      } else {
-        setCurrentAssignment(null);
-      }
-
-      // 2. Fetch forwarding history
-      const { data: forwards, error: forwardError } = await supabase
-        .from('report_routes')
-        .select('target, note, forwarded_at')
-        .eq('report_id', reportId)
-        .order('forwarded_at', { ascending: false });
-
-      if (forwardError) {
-        console.error('Error fetching forwards:', forwardError);
-      }
-
-      // Parse the forwarded stations
-      if (forwards && forwards.length > 0) {
-        const forwardedStations = await Promise.all(
-          forwards.map(async (forward) => {
-            // Parse target format: 'station:<id>' or 'agency:police'
-            const [targetType, targetId] = forward.target.split(':');
-            
-            if (targetType === 'station') {
-              const { data: stationData } = await supabase
-                .from('station_users')
-                .select('station_name')
-                .eq('id', targetId)
-                .single();
-
-              return {
-                type: 'station',
-                name: stationData?.station_name || 'Unknown Station',
-                note: forward.note,
-                forwarded_at: forward.forwarded_at
-              };
-            } else {
-              return {
-                type: 'agency',
-                name: targetId,
-                note: forward.note,
-                forwarded_at: forward.forwarded_at
-              };
-            }
-          })
-        );
-
-        setForwardedTo(forwardedStations);
-      } else {
-        setForwardedTo([]);
-      }
-    } catch (err) {
-      console.error('Error loading assignment info:', err);
-    }
-  }, []);
-
-  // Load assignment info when a report is selected
-  useEffect(() => {
-    if (selectedReport) {
-      loadAssignmentInfo(selectedReport.id);
-    } else {
-      setCurrentAssignment(null);
-      setForwardedTo([]);
-    }
-  }, [selectedReport, loadAssignmentInfo]);
-
   const handleAssign = async () => {
     try {
-      if (!selectedReport) {
-        Alert.alert('Error', 'Select a fire report first.');
-        return;
-      }
-      if (!assigneeId) {
-        Alert.alert('Error', 'Choose an assignee.');
-        return;
-      }
+      if (!selectedReport || !assigneeId) return;
       const payload = {
         report_id: String(selectedReport.id),
-        assignee_type: "station",
+        assignee_type: assigneeType,
         assignee_id: assigneeId,
         assigned_at: new Date().toISOString()
       };
       console.log('[Assign-Mobile] assignmentNote=', assignmentNote);
       const { error } = await supabase
         .from('report_assignments')
-        .upsert({ ...payload, note: assignmentNote && assignmentNote.trim() ? assignmentNote.trim() : null }, { onConflict: 'report_id,assignee_type,assignee_id' });
+        .upsert({ ...payload, note: assignmentNote && assignmentNote.trim() ? assignmentNote.trim() : null }, { onConflict: 'report_id' });
       if (error) throw error;
 
-      // Snapshot report coordinates so station dashboards can render reliably
-      try {
-        const lat = parseFloat(selectedReport.latitude);
-        const lng = parseFloat(selectedReport.longitude);
-        await supabase
-          .from('assigned_report_snapshots')
-          .upsert({
-            report_id: String(selectedReport.id),
-            lat: isNaN(lat) ? null : lat,
-            lng: isNaN(lng) ? null : lng,
-            address: selectedReport.address || selectedReport.geotag_location || null,
-            snapshot_json: selectedReport
-          }, { onConflict: 'report_id' });
-      } catch (snapErr) {
-        console.warn('Snapshot upsert failed (table may not exist):', snapErr?.message || snapErr);
-      }
-
       setAssignmentNote('');
-      Alert.alert('Success', 'Report assigned successfully.');
-      // Reload the assignment info
-      loadAssignmentInfo(selectedReport.id);
+      Alert.alert('Assigned', 'Report assignment saved.');
     } catch (e) {
       console.error('Assign failed (mobile):', e);
       Alert.alert('Error', 'Failed to assign report.');
@@ -395,14 +225,7 @@ export default function AMap({ isSidebarOpen = false }) {
 
   const handleRedirect = async () => {
     try {
-      if (!selectedReport) {
-        Alert.alert('Error', 'Select a fire report first.');
-        return;
-      }
-      if (!redirectTarget) {
-        Alert.alert('Error', 'Choose a redirect target.');
-        return;
-      }
+      if (!selectedReport || !redirectTarget) return;
       const payload = {
         report_id: String(selectedReport.id),
         target: redirectTarget,
@@ -413,10 +236,8 @@ export default function AMap({ isSidebarOpen = false }) {
         .from('report_routes')
         .insert(payload);
       if (error) throw error;
-      Alert.alert('Success', 'Report forwarded successfully.');
+      Alert.alert('Forwarded', 'Report forwarded successfully.');
       setRedirectNote('');
-      // Reload the forwarding info
-      loadAssignmentInfo(selectedReport.id);
     } catch (e) {
       console.error('Redirect failed (mobile):', e);
       Alert.alert('Error', 'Failed to forward report.');
@@ -767,10 +588,7 @@ export default function AMap({ isSidebarOpen = false }) {
                   {selectedReport.structure ? (
                     <View style={styles.modalRow}>
                       <Text style={styles.modalLabel}>Structure Analysis:</Text>
-                      <Text style={styles.modalValue}>
-                        {selectedReport.structure}
-                        {selectedReport.structure_confidence ? ` (${selectedReport.structure_confidence})` : ''}
-                      </Text>
+                      <Text style={styles.modalValue}>{selectedReport.structure}</Text>
                     </View>
                   ) : null}
 
@@ -825,52 +643,15 @@ export default function AMap({ isSidebarOpen = false }) {
                     </View>
                   )}
 
-                  {/* Current Assignment Display */}
-                  {currentAssignment && (
-                    <View style={[styles.modalSection, { marginTop: 12 }]}>
-                      <View style={{ backgroundColor: '#dbeafe', borderLeftWidth: 4, borderLeftColor: '#3b82f6', padding: 12, borderRadius: 8 }}>
-                        <Text style={{ fontWeight: 'bold', color: '#1e3a8a', marginBottom: 4 }}>📍 Currently Assigned To:</Text>
-                        <Text style={{ color: '#1e40af', fontSize: 14, fontWeight: '600' }}>{currentAssignment.name}</Text>
-                        <Text style={{ color: '#2563eb', fontSize: 12, marginTop: 4 }}>
-                          Assigned: {formatDate(currentAssignment.assigned_at)}
-                        </Text>
-                        {currentAssignment.note && (
-                          <Text style={{ color: '#1d4ed8', fontSize: 12, marginTop: 4, fontStyle: 'italic' }}>
-                            Note: {currentAssignment.note}
-                          </Text>
-                        )}
-                      </View>
-                    </View>
-                  )}
-
-                  {/* Forwarded To Display */}
-                  {forwardedTo.length > 0 && (
-                    <View style={[styles.modalSection, { marginTop: 12 }]}>
-                      <View style={{ backgroundColor: '#fef3c7', borderLeftWidth: 4, borderLeftColor: '#f59e0b', padding: 12, borderRadius: 8 }}>
-                        <Text style={{ fontWeight: 'bold', color: '#78350f', marginBottom: 8 }}>📨 Forwarded To:</Text>
-                        {forwardedTo.map((forward, index) => (
-                          <View key={index} style={index > 0 ? { marginTop: 8, paddingTop: 8, borderTopWidth: 1, borderTopColor: '#fde68a' } : null}>
-                            <Text style={{ color: '#92400e', fontSize: 14, fontWeight: '600' }}>{forward.name}</Text>
-                            {forward.note && (
-                              <Text style={{ color: '#b45309', fontSize: 12, marginTop: 4, fontStyle: 'italic' }}>
-                                Note: {forward.note}
-                              </Text>
-                            )}
-                            <Text style={{ color: '#d97706', fontSize: 12, marginTop: 4 }}>
-                              Forwarded: {formatDate(forward.forwarded_at)}
-                            </Text>
-                          </View>
-                        ))}
-                      </View>
-                    </View>
-                  )}
-
                   {/* Assignment controls */}
                   <View style={[styles.modalSection, { marginTop: 12 }]}> 
                     <Text style={styles.modalLabel}>Assignment</Text>
                     <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 6 }}>
-                      <TouchableOpacity disabled style={{ padding: 8, backgroundColor: '#ef4444', borderRadius: 6, marginRight: 8 }}>
-                        <Text style={{ color: 'white' }}>Station</Text>
+                      <TouchableOpacity onPress={() => setAssigneeType('station')} style={{ padding: 8, backgroundColor: assigneeType==='station'?'#ef4444':'#e5e7eb', borderRadius: 6, marginRight: 8 }}>
+                        <Text style={{ color: assigneeType==='station'?'white':'#111827' }}>Station</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity onPress={() => setAssigneeType('responder')} style={{ padding: 8, backgroundColor: assigneeType==='responder'?'#ef4444':'#e5e7eb', borderRadius: 6 }}>
+                        <Text style={{ color: assigneeType==='responder'?'white':'#111827' }}>Responder</Text>
                       </TouchableOpacity>
                     </View>
                     <View style={{ marginTop: 8 }}>
@@ -896,14 +677,12 @@ export default function AMap({ isSidebarOpen = false }) {
                       <TouchableOpacity onPress={handleAssign} style={{ marginTop: 8, paddingVertical: 10, backgroundColor: '#2563eb', borderRadius: 8, alignItems: 'center' }}>
                         <Text style={{ color: 'white', fontWeight: 'bold' }}>Assign</Text>
                       </TouchableOpacity>
-                      <Text style={{ fontSize: 11, color: '#6b7280', marginTop: 4 }}>You can reassign anytime — the latest assignment is active.</Text>
                     </View>
                   </View>
 
                   {/* Redirect controls */}
                   <View style={[styles.modalSection, { marginTop: 12 }]}> 
                     <Text style={styles.modalLabel}>Redirect / Forward</Text>
-                    <Text style={{ fontSize: 12, color: '#6b7280', marginTop: 4, marginBottom: 6 }}>Select target station or agency</Text>
                     <ScrollView horizontal showsHorizontalScrollIndicator={false}>
                       {(stations||[]).map(s => (
                         <TouchableOpacity key={`rt-${s.id}`} onPress={() => setRedirectTarget(`station:${s.id}`)} style={{ paddingVertical: 6, paddingHorizontal: 10, backgroundColor: redirectTarget===`station:${s.id}`?'#f59e0b':'#f3f4f6', borderRadius: 16, marginRight: 8 }}>
@@ -920,21 +699,9 @@ export default function AMap({ isSidebarOpen = false }) {
                         <Text style={{ color: redirectTarget==='agency:barangay'?'white':'#111827' }}>Barangay</Text>
                       </TouchableOpacity>
                     </ScrollView>
-                    <Text style={{ fontSize: 12, color: '#6b7280', marginTop: 10, marginBottom: 4 }}>Forward Note (optional)</Text>
-                    <View style={{ borderWidth: 1, borderColor: '#d1d5db', borderRadius: 8 }}>
-                      <TextInput
-                        placeholder="Add a note for this forwarding..."
-                        value={redirectNote}
-                        onChangeText={setRedirectNote}
-                        multiline
-                        numberOfLines={3}
-                        style={{ paddingHorizontal: 10, paddingVertical: 8, minHeight: 60, color: '#111827' }}
-                      />
-                    </View>
                     <TouchableOpacity onPress={handleRedirect} style={{ marginTop: 8, paddingVertical: 10, backgroundColor: '#f59e0b', borderRadius: 8, alignItems: 'center' }}>
                       <Text style={{ color: 'white', fontWeight: 'bold' }}>Forward</Text>
                     </TouchableOpacity>
-                    <Text style={{ fontSize: 11, color: '#6b7280', marginTop: 4 }}>Forwarding keeps the original assignment and records provenance.</Text>
                   </View>
                 </ScrollView>
               </>
@@ -958,7 +725,13 @@ const styles = StyleSheet.create({
     backgroundColor: '#000',
   },
   mapContainer: {
-    ...StyleSheet.absoluteFillObject,
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    width: width,
+    height: height,
     zIndex: 1,
   },
   map: {
@@ -1261,30 +1034,5 @@ const styles = StyleSheet.create({
     height: 200,
     borderRadius: 8,
     marginTop: 8,
-  },
-  modalRow: {
-    marginBottom: 12,
-  },
-  modalLabel: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#374151',
-    marginBottom: 4,
-  },
-  modalValue: {
-    fontSize: 14,
-    color: '#1f2937',
-  },
-  badge: {
-    backgroundColor: '#fef3c7',
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 4,
-    alignSelf: 'flex-start',
-  },
-  badgeText: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: '#92400e',
   },
 });

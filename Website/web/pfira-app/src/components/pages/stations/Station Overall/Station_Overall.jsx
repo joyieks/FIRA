@@ -10,7 +10,6 @@ const Station_Overview = () => {
   const [reports, setReports] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
   const [openStatusDropdown, setOpenStatusDropdown] = useState(null);
-  const [openAlarmDropdown, setOpenAlarmDropdown] = useState(null);
   const [openAssignDropdown, setOpenAssignDropdown] = useState(null);
   const [assigning, setAssigning] = useState({}); // reportId->boolean
   const [responders, setResponders] = useState([]);
@@ -22,7 +21,7 @@ const Station_Overview = () => {
   const [aiChatSuggestions, setAiChatSuggestions] = useState([]); // recent AI suggestions from messages
   const [chatAlarmByReport, setChatAlarmByReport] = useState({}); // reportId -> normalized label
 
-  const API_URL = 'https://fire-detection-api-production-f8a3.up.railway.app';
+  const API_URL = 'https://fire-detection-api-production-f55b.up.railway.app';
 
   const formatTime = (timestamp) => {
     if (!timestamp) return 'Unknown';
@@ -290,12 +289,6 @@ const Station_Overview = () => {
 
   const toggleStatusDropdown = (reportId) => {
     setOpenStatusDropdown(openStatusDropdown === reportId ? null : reportId);
-    setOpenAlarmDropdown(null);
-  };
-
-  const toggleAlarmDropdown = (reportId) => {
-    setOpenAlarmDropdown(openAlarmDropdown === reportId ? null : reportId);
-    setOpenStatusDropdown(null);
   };
 
   const toggleAssignDropdown = async (reportId) => {
@@ -318,23 +311,43 @@ const Station_Overview = () => {
     }
   };
 
-  const handleStatusChange = (reportId, newStatus) => {
-    setReports(prev => prev.map(report => 
-      report.id === reportId ? { ...report, status: newStatus } : report
-    ));
-    setOpenStatusDropdown(null);
-  };
+  const handleStatusChange = async (reportId, newStatus) => {
+    try {
+      // Optimistic UI update
+      setReports(prev => prev.map(report => 
+        report.id === reportId ? { ...report, status: newStatus } : report
+      ));
+      setOpenStatusDropdown(null);
 
-  const handleAlarmLevelChange = (reportId, newLevel) => {
-    setReports(prev => prev.map(report => 
-      report.id === reportId ? { ...report, finalAlarmLevel: newLevel } : report
-    ));
-    setOpenAlarmDropdown(null);
+      const res = await fetch(`${API_URL}/update_report_status`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json'
+        },
+        body: JSON.stringify({ report_id: reportId, status: newStatus })
+      });
+
+      if (!res.ok) {
+        // Revert change on failure
+        setReports(prev => prev.map(report =>
+          report.id === reportId ? { ...report, status: report.status || 'On Going' } : report
+        ));
+        let err = '';
+        try { const j = await res.clone().json(); err = j?.error || j?.message || JSON.stringify(j); }
+        catch (_) { try { err = await res.text(); } catch (_) { err = `HTTP ${res.status}`; } }
+        alert(`Failed to update status: ${err}`);
+      }
+    } catch (e) {
+      setReports(prev => prev.map(report =>
+        report.id === reportId ? { ...report, status: report.status || 'On Going' } : report
+      ));
+      alert(`Error updating status: ${e.message}`);
+    }
   };
 
   const closeAllDropdowns = () => {
     setOpenStatusDropdown(null);
-    setOpenAlarmDropdown(null);
     setOpenAssignDropdown(null);
   };
 
@@ -498,6 +511,10 @@ const Station_Overview = () => {
     }
   };
 
+  // Confirmation modal for status changes
+  const [showStatusConfirmModal, setShowStatusConfirmModal] = useState(false);
+  const [pendingStatusChange, setPendingStatusChange] = useState(null); // { reportId, status, currentStatus }
+
   return (
     <div className="min-h-screen bg-gray-50 p-6" onClick={closeAllDropdowns}>
       <div className="max-w-none mx-auto">
@@ -630,7 +647,8 @@ const Station_Overview = () => {
                                     key={status}
                                     onClick={(e) => {
                                       e.stopPropagation();
-                                      handleStatusChange(report.id, status);
+                                      setPendingStatusChange({ reportId: report.id, status, currentStatus: report.status });
+                                      setShowStatusConfirmModal(true);
                                     }}
                                     className="block w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100"
                                   >
@@ -640,39 +658,39 @@ const Station_Overview = () => {
                               </div>
                             </div>
                           )}
+
+      {/* Status Change Confirmation Modal */}
+      {showStatusConfirmModal && pendingStatusChange && (
+        <div className="fixed inset-0 backdrop-blur-sm bg-black bg-opacity-30 flex items-center justify-center p-4 z-[9999]">
+          <div className="bg-white rounded-xl shadow-xl max-w-md w-full">
+            <div className="p-6">
+              <h3 className="text-xl font-bold text-gray-900 mb-2">Confirm Status Change</h3>
+              <p className="text-gray-700">Change status from <span className="font-semibold">{pendingStatusChange.currentStatus || 'Unknown'}</span> to <span className="font-semibold">{pendingStatusChange.status}</span>?</p>
+              <div className="flex justify-end gap-3 mt-6">
+                <button
+                  onClick={() => { setShowStatusConfirmModal(false); setPendingStatusChange(null); }}
+                  className="px-4 py-2 bg-gray-200 text-gray-800 rounded-md hover:bg-gray-300"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={() => { setShowStatusConfirmModal(false); const { reportId, status } = pendingStatusChange; setPendingStatusChange(null); handleStatusChange(reportId, status); }}
+                  className="px-4 py-2 bg-red-600 text-white rounded-md hover:bg-red-700"
+                >
+                  Confirm
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
                         </div>
                       </td>
-                      {/* Manual Fire Alarm Level (final) */}
+                      {/* Fire Alarm Level (display only - stations cannot modify) */}
                       <td className="px-4 py-4 whitespace-nowrap">
-                        <div className="relative">
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              toggleAlarmDropdown(report.id);
-                            }}
-                            className={`px-3 py-1 rounded-md text-xs font-medium border ${getAlarmLevelColor(report.finalAlarmLevel)} hover:bg-gray-50 transition-colors`}
-                          >
-                            {report.finalAlarmLevel}
-                          </button>
-                          {openAlarmDropdown === report.id && (
-                            <div className="absolute z-10 mt-1 w-40 bg-white border border-gray-300 rounded-md shadow-lg">
-                              <div className="py-1">
-                                {['1st Alarm', '2nd Alarm', '3rd Alarm', '4th Alarm', '5th Alarm', 'TASK FORCE', 'General Alarm'].map((level) => (
-                                  <button
-                                    key={level}
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      handleAlarmLevelChange(report.id, level);
-                                    }}
-                                    className="block w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100"
-                                  >
-                                    {level}
-                                  </button>
-                                ))}
-                              </div>
-                            </div>
-                          )}
-                        </div>
+                        <span className={`px-3 py-1 rounded-md text-xs font-medium border ${getAlarmLevelColor(report.finalAlarmLevel)}`}>
+                          {report.finalAlarmLevel}
+                        </span>
                       </td>
                       {/* AI Suggested Fire Alarm (display only) */}
                       <td className="px-4 py-4 whitespace-nowrap">

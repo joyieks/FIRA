@@ -668,7 +668,7 @@ export default function RMap() {
       }
 
       // Fetch fire reports from API
-      const response = await fetch('https://fire-detection-api-production-f8a3.up.railway.app/get_reports');
+      const response = await fetch('https://fire-detection-api-production-f55b.up.railway.app/get_reports');
       if (!response.ok) {
         console.error('Failed to fetch fire reports from API');
         return;

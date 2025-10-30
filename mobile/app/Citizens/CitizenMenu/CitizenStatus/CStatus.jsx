@@ -8,8 +8,8 @@ import { useAuth } from '../../../config/AuthContext';
 import { supabase } from '../../../config/supabase';
 
 // Fire Detection API base
-const API_URL = 'https://fire-detection-api-production-f8a3.up.railway.app/predict';
-const API_BASE = 'https://fire-detection-api-production-f8a3.up.railway.app';
+const API_URL = 'https://fire-detection-api-production-f55b.up.railway.app/predict';
+const API_BASE = 'https://fire-detection-api-production-f55b.up.railway.app';
 
 const CStatus = () => {
   const [activeTab, setActiveTab] = useState('All');
@@ -26,6 +26,7 @@ const CStatus = () => {
   // Sample data for reports
   const [yourReports, setYourReports] = useState([]);
   const [nearbyReports, setNearbyReports] = useState([]);
+  const [allReports, setAllReports] = useState([]); // TEMPORARY: Store all reports for debugging
   const [addressCache, setAddressCache] = useState({});
 
   // Use Supabase auth context
@@ -73,7 +74,7 @@ const CStatus = () => {
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 15000); // 15 second timeout
       
-      const response = await fetch('https://fire-detection-api-production-f8a3.up.railway.app/get_reports', {
+      const response = await fetch('https://fire-detection-api-production-f55b.up.railway.app/get_reports', {
         signal: controller.signal,
         headers: {
           'Accept': 'application/json',
@@ -88,10 +89,22 @@ const CStatus = () => {
         const data = await response.json();
         console.log('API Response data received, total reports:', data.length);
         
+        // Debug: Log sample report structure
+        if (data.length > 0) {
+          console.log('Sample report structure:', JSON.stringify(data[0], null, 2));
+        }
+        
+        // Debug: Log current user info
+        console.log('Current user info:', {
+          uid: currentUser.uid,
+          email: currentUser.email,
+          firstName: currentUser.firstName
+        });
+        
         // Filter reports by current user's UID
         const userReportsRaw = data.filter(report => {
           const reporterId = report.reporterId || report.user_id;
-          console.log('Checking report:', reporterId, 'against user:', currentUser.uid);
+          console.log('Checking report ID:', report.id, 'reporterId:', reporterId, 'against user:', currentUser.uid);
           return reporterId === currentUser.uid;
         });
         
@@ -111,8 +124,18 @@ const CStatus = () => {
         const userReports = userReportsRaw.filter(isActiveReport);
         const otherReports = otherReportsRaw.filter(isActiveReport);
 
-        console.log('Active user reports:', userReports.length);
-        console.log('Active other reports:', otherReports.length);
+        console.log('Raw user reports (before active filter):', userReportsRaw.length);
+        console.log('Raw other reports (before active filter):', otherReportsRaw.length);
+        console.log('Active user reports (after filter):', userReports.length);
+        console.log('Active other reports (after filter):', otherReports.length);
+        
+        // Debug: Log sample of filtered reports
+        if (userReports.length > 0) {
+          console.log('Sample user report:', JSON.stringify(userReports[0], null, 2));
+        }
+        if (otherReports.length > 0) {
+          console.log('Sample other report:', JSON.stringify(otherReports[0], null, 2));
+        }
         
         // Debug: Log sample report data to understand timestamp structure
         if (userReports.length > 0) {
@@ -156,6 +179,11 @@ const CStatus = () => {
 
         setYourReports(enrichedUser);
         setNearbyReports(enrichedOther);
+        
+        // TEMPORARY: Store all active reports for debugging
+        const allActiveReports = data.filter(isActiveReport);
+        setAllReports(allActiveReports);
+        console.log('All active reports stored:', allActiveReports.length);
       } else {
         throw new Error(`API returned status: ${response.status}`);
       }
@@ -174,6 +202,7 @@ const CStatus = () => {
         console.log('Failed to load reports after retries');
         setYourReports([]);
         setNearbyReports([]);
+        setAllReports([]);
       }
     } finally {
       const useLoadingUI = !showEmergencyModal && !showLocationPicker && !showModal;
@@ -714,7 +743,9 @@ const CStatus = () => {
         title = 'Nearby Reports';
         break;
       case 'All':
-        reports = [...yourReports, ...nearbyReports];
+        // TEMPORARY: Show all reports from API for debugging
+        // TODO: Remove this temporary fix once we identify the issue
+        reports = allReports;
         title = 'All Reports';
         break;
     }
@@ -948,7 +979,7 @@ const CStatus = () => {
             onPress={() => setActiveTab('All')}
           >
             <Text className={`text-center font-semibold ${activeTab === 'All' ? 'text-white' : 'text-gray-600'}`}>
-              All ({yourReports.length + nearbyReports.length})
+              All ({allReports.length})
             </Text>
           </TouchableOpacity>
         </View>
