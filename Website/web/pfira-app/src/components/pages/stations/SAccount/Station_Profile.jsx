@@ -9,6 +9,7 @@ const Station_Profile = () => {
   const [showChangePassword, setShowChangePassword] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [notification, setNotification] = useState({ visible: false, type: 'success', message: '' });
   const [profileData, setProfileData] = useState({
     id: '',
     station_name: '',
@@ -16,6 +17,8 @@ const Station_Profile = () => {
     address: '',
     phone: '',
     position: '',
+    num_firetrucks: '',
+    firetruck_size: '',
     role: 'stationUser',
     active: true,
     status: 'active',
@@ -47,7 +50,7 @@ const Station_Profile = () => {
       
       if (error) {
         console.error('❌ Error fetching station profile:', error);
-        alert(`Failed to fetch station profile: ${error.message}`);
+        setNotification({ visible: true, type: 'error', message: `Failed to fetch station profile: ${error.message}` });
         return;
       }
       
@@ -59,7 +62,7 @@ const Station_Profile = () => {
       
     } catch (error) {
       console.error('❌ Error fetching station profile:', error);
-      alert(`Failed to fetch station profile: ${error.message}`);
+      setNotification({ visible: true, type: 'error', message: `Failed to fetch station profile: ${error.message}` });
     } finally {
       setLoading(false);
     }
@@ -98,23 +101,25 @@ const Station_Profile = () => {
           address: profileData.address,
           phone: profileData.phone,
           position: profileData.position,
+          num_firetrucks: profileData.num_firetrucks === '' ? null : Number(profileData.num_firetrucks),
+          firetruck_size: profileData.firetruck_size || null,
           updated_at: new Date().toISOString()
         })
         .eq('id', profileData.id);
       
       if (error) {
         console.error('❌ Error updating station profile:', error);
-        alert(`Error updating profile: ${error.message}`);
+        setNotification({ visible: true, type: 'error', message: `Error updating profile: ${error.message}` });
         return;
       }
       
       console.log('✅ Station profile updated successfully');
-      alert('Profile updated successfully!');
+      setNotification({ visible: true, type: 'success', message: 'Profile updated successfully' });
       setIsEditing(false);
       
     } catch (error) {
       console.error('❌ Error updating station profile:', error);
-      alert(`Error updating profile: ${error.message}`);
+      setNotification({ visible: true, type: 'error', message: `Error updating profile: ${error.message}` });
     } finally {
       setSaving(false);
     }
@@ -135,7 +140,7 @@ const Station_Profile = () => {
       
       if (error) {
         console.error('❌ Error updating account status:', error);
-        alert(`Error updating account status: ${error.message}`);
+        setNotification({ visible: true, type: 'error', message: `Error updating account status: ${error.message}` });
         return;
       }
       
@@ -147,11 +152,11 @@ const Station_Profile = () => {
       }));
       
       console.log('✅ Account status updated successfully');
-      alert(`Account ${newActiveStatus ? 'enabled' : 'disabled'} successfully!`);
+      setNotification({ visible: true, type: 'success', message: `Account ${newActiveStatus ? 'enabled' : 'disabled'} successfully` });
       
     } catch (error) {
       console.error('❌ Error updating account status:', error);
-      alert(`Error updating account status: ${error.message}`);
+      setNotification({ visible: true, type: 'error', message: `Error updating account status: ${error.message}` });
     }
   };
 
@@ -168,6 +173,27 @@ const Station_Profile = () => {
 
   return (
     <div className="p-6 bg-gray-100 min-h-screen">
+      {/* Toast Notification */}
+      {notification.visible && (
+        <div className={`fixed top-4 right-4 z-50 transition transform ${notification.type === 'success' ? 'bg-green-600' : 'bg-red-600'} text-white shadow-lg rounded-lg max-w-sm w-full`}
+             onAnimationEnd={() => {}}>
+          <div className="px-4 py-3 flex items-start">
+            <div className="flex-1">
+              <p className="font-medium">
+                {notification.type === 'success' ? 'Success' : 'Error'}
+              </p>
+              <p className="text-sm opacity-95">{notification.message}</p>
+            </div>
+            <button
+              className="ml-3 text-white/90 hover:text-white"
+              onClick={() => setNotification(prev => ({ ...prev, visible: false }))}
+              aria-label="Close notification"
+            >
+              ×
+            </button>
+          </div>
+        </div>
+      )}
       <div className="bg-white rounded-xl shadow-md overflow-hidden">
         {/* Profile Header */}
         <div className="bg-red-600 p-6 text-white">
@@ -330,6 +356,39 @@ const Station_Profile = () => {
                   ) : (
                     <p className="text-gray-800">{profileData.phone ? `+63${profileData.phone}` : 'Not specified'}</p>
                   )}
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-500 mb-1">Number of Firetrucks</label>
+                    {isEditing ? (
+                      <input
+                        type="number"
+                        name="num_firetrucks"
+                        min="0"
+                        value={profileData.num_firetrucks ?? ''}
+                        onChange={handleInputChange}
+                        className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:border-red-500"
+                        placeholder="e.g., 3"
+                      />
+                    ) : (
+                      <p className="text-gray-800">{profileData.num_firetrucks ?? 'Not specified'}</p>
+                    )}
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-500 mb-1">Firetruck Size</label>
+                    {isEditing ? (
+                      <input
+                        type="text"
+                        name="firetruck_size"
+                        value={profileData.firetruck_size || ''}
+                        onChange={handleInputChange}
+                        className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:border-red-500"
+                        placeholder="e.g., Small/Medium/Large or length in meters"
+                      />
+                    ) : (
+                      <p className="text-gray-800">{profileData.firetruck_size || 'Not specified'}</p>
+                    )}
+                  </div>
                 </div>
                 {isDisabled && (
                   <div className="bg-yellow-50 border-l-4 border-yellow-400 p-4 rounded-r-lg">

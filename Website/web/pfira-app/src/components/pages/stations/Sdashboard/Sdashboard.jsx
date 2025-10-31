@@ -720,8 +720,9 @@ const Sdashboard = () => {
   }, [currentStationId]);
 
   const mapContainerStyle = {
-    width: '100vw',
-    height: '100vh'
+    width: '100%',
+    // Fill viewport height minus header + paddings to avoid page scroll
+    height: 'calc(100vh - 120px)'
   };
 
   const center = {

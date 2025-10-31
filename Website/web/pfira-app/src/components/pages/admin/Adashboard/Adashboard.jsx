@@ -485,8 +485,8 @@ const Adashboard = () => {
   }, [fireReports, pendingSelection, mapLoaded]);
 
   const mapContainerStyle = {
-    width: '100vw',
-    height: '100vh'
+    width: '100%',
+    height: 'calc(100vh - 120px)'
   };
 
   const onLoad = useCallback((map) => {

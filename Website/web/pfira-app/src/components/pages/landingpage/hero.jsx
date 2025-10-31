@@ -154,34 +154,31 @@ const hero = () => {
 
       <Section id="team">
         <div className="max-w-6xl mx-auto px-6 py-24 md:py-28">
-          <div className="grid md:grid-cols-2 gap-8 items-center">
-            <div className="reveal opacity-0 translate-y-6">
-              <h2 className="text-3xl md:text-4xl font-bold text-white">Our Team</h2>
-              <p className="mt-4 text-gray-300">A multidisciplinary group focused on reliability, usability, and safety.</p>
-              <div className="mt-8 grid grid-cols-1 sm:grid-cols-2 gap-6">
-                {[{
-                  role: 'Hustler', name: 'Eijay Pepito', img: '/team1.jpg'
-                },{
-                  role: 'Hipster', name: 'Joan Joy Diocampo', img: '/team2.jpg'
-                },{
-                  role: 'Hacker', name: 'Kenji Parilla', img: '/team3.jpg'
-                },{
-                  role: 'Writer', name: 'Jashmine Verdida', img: '/team4.jpg'
-                }].map(({ role, name, img }) => (
-                  <div key={name} className="group overflow-hidden rounded-xl bg-neutral-800 border border-neutral-700 hover:border-red-600/40 shadow-sm hover:shadow-md transition-all duration-200">
-                    <div className="relative h-56 md:h-64 w-full overflow-hidden">
-                      <img src={img} alt={name} className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105" onError={(e) => { e.currentTarget.src = '/fire2.png' }} />
-                      <div className="absolute inset-0 bg-gradient-to-t from-neutral-900/80 to-transparent" />
-                    </div>
-                    <div className="p-4">
-                      <div className="text-sm uppercase tracking-wide text-red-400 font-semibold">{role}</div>
-                      <div className="mt-1 text-lg text-gray-100 font-medium">{name}</div>
-                    </div>
-                  </div>
-                ))}
+          <div className="reveal opacity-0 translate-y-6 text-center mb-12">
+            <h2 className="text-3xl md:text-4xl font-bold text-white">Our Team</h2>
+            <p className="mt-4 text-gray-300 max-w-2xl mx-auto">A multidisciplinary group focused on reliability, usability, and safety.</p>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-6 max-w-5xl mx-auto">
+            {[{
+              role: 'Hustler', name: 'Eijay Pepito', img: '/eijay.jpg'
+            },{
+              role: 'Hipster', name: 'Joan Joy Diocampo', img: '/joanjoy.JPG'
+            },{
+              role: 'Hacker', name: 'Kenji Parilla', img: '/kenji.jpg'
+            },{
+              role: 'Writer', name: 'Jashmine Verdida', img: '/jash.JPG'
+            }].map(({ role, name, img }) => (
+              <div key={name} className="group overflow-hidden rounded-xl bg-neutral-800 border border-neutral-700 hover:border-red-600/40 shadow-sm hover:shadow-md transition-all duration-200">
+                <div className="relative h-56 md:h-64 w-full overflow-hidden">
+                  <img src={img} alt={name} className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105" onError={(e) => { e.currentTarget.src = '/fire2.png' }} />
+                  <div className="absolute inset-0 bg-gradient-to-t from-neutral-900/80 to-transparent" />
+                </div>
+                <div className="p-4">
+                  <div className="text-sm uppercase tracking-wide text-red-400 font-semibold">{role}</div>
+                  <div className="mt-1 text-lg text-gray-100 font-medium">{name}</div>
+                </div>
               </div>
-            </div>
-            <img src="/fire3.png" alt="Team" className="reveal opacity-0 translate-y-6 rounded-xl shadow-md opacity-90" />
+            ))}
           </div>
         </div>
       </Section>
