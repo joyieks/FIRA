@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { GoogleMap, LoadScript, Marker, InfoWindow, Circle } from '@react-google-maps/api';
+import { GoogleMap, Marker, InfoWindow, Circle, useJsApiLoader } from '@react-google-maps/api';
 import { useOutletContext } from 'react-router-dom';
 import { supabase } from '../../../../config/supabase';
 
@@ -39,6 +39,11 @@ const Sdashboard = () => {
   const interactionHandlerRegisteredRef = useRef(false);
   const [showSoundPrompt, setShowSoundPrompt] = useState(false);
   const [unreadCount, setUnreadCount] = useState(0);
+  // Load Google Maps API once to avoid duplicate script injection when navigating
+  const { isLoaded: isMapsLoaded, loadError: mapsLoadError } = useJsApiLoader({
+    id: 'google-map-script',
+    googleMapsApiKey: GOOGLE_MAPS_API_KEY
+  });
 
   // Preload alert audio and try to enable on first user interaction
   useEffect(() => {
@@ -903,11 +908,13 @@ const Sdashboard = () => {
         </div>
       )}
       
-      <LoadScript 
-        googleMapsApiKey={GOOGLE_MAPS_API_KEY}
-        onLoad={() => console.log('✅ Google Maps API loaded')}
-        onError={(error) => console.error('❌ Google Maps API error:', error)}
-      >
+      {/* Render map only when Google Maps API is loaded to prevent duplicate loads */}
+      {mapsLoadError && (
+        <div className="p-4 bg-red-50 text-red-700 border border-red-200 rounded mb-3">
+          Failed to load Google Maps. Please refresh the page.
+        </div>
+      )}
+      {isMapsLoaded && (
         <GoogleMap
           mapContainerStyle={mapContainerStyle}
           center={mapCenter}
@@ -1249,7 +1256,7 @@ const Sdashboard = () => {
             </InfoWindow>
           )}
         </GoogleMap>
-      </LoadScript>
+      )}
       
       {/* Sound enable prompt (shown only if browser blocked autoplay) */}
       {showSoundPrompt && (

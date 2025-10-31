@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { GoogleMap, LoadScript, Marker, InfoWindow, Circle } from '@react-google-maps/api';
+import { GoogleMap, Marker, InfoWindow, Circle, useJsApiLoader } from '@react-google-maps/api';
 import { supabase } from '../../../../config/supabase';
 import { useNotifications } from '../../../../contexts/NotificationContext';
 
@@ -29,6 +29,11 @@ const Adashboard = () => {
   const [assignmentNote, setAssignmentNote] = useState('');
   const [currentAssignment, setCurrentAssignment] = useState(null); // Current assignment info
   const [forwardedTo, setForwardedTo] = useState([]); // List of stations this was forwarded to
+  // Load Google Maps API once globally to avoid duplicate script loads
+  const { isLoaded: isMapsLoaded, loadError: mapsLoadError } = useJsApiLoader({
+    id: 'google-map-script',
+    googleMapsApiKey: GOOGLE_MAPS_API_KEY
+  });
 
   // Fixed location for Bureau of Fire Protection - Regional Office VII
   // 7VXR+5VG, 6000 Natalio B. Bacalso Ave, Cebu City, 6000 Cebu
@@ -593,21 +598,16 @@ const Adashboard = () => {
           <div className="absolute inset-0 rounded-full border-4 border-red-400 animate-ping opacity-75"></div>
         </div>
       )}
-      
-      <LoadScript 
-        key={`maps-${retryCount}-${mapLoadTimeout ? Date.now() : 'initial'}`}
-        googleMapsApiKey={GOOGLE_MAPS_API_KEY}
-        onLoad={handleLoadScriptLoad}
-        onError={handleLoadScriptError}
-        loadingElement={
-          <div className="absolute inset-0 bg-white bg-opacity-90 flex items-center justify-center z-10">
-            <div className="text-center">
-              <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-red-600 mx-auto mb-4"></div>
-              <p className="text-gray-600">Loading Google Maps API...</p>
-            </div>
+      {mapsLoadError && (
+        <div className="absolute inset-0 bg-white bg-opacity-90 flex items-center justify-center z-10">
+          <div className="text-center">
+            <div className="text-red-600 text-6xl mb-4">🗺️</div>
+            <p className="text-red-600 font-semibold mb-2">Failed to load Google Maps API</p>
+            <p className="text-gray-600">Please refresh the page.</p>
           </div>
-        }
-      >
+        </div>
+      )}
+      {isMapsLoaded && (
         <GoogleMap
           mapContainerStyle={mapContainerStyle}
           center={mapCenter}
@@ -866,7 +866,7 @@ const Adashboard = () => {
             </InfoWindow>
           )}
         </GoogleMap>
-      </LoadScript>
+      )}
       
       {/* Loading Overlay */}
       {!mapLoaded && !mapError && (
