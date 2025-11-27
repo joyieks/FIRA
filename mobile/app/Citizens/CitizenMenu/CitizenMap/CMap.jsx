@@ -7,8 +7,10 @@ import * as ImagePicker from 'expo-image-picker';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { supabase } from '../../../config/supabase';
+import { createNearbyIncidentNotifications } from '../../../services/citizenNotificationService';
+import AcknowledgmentModal from './AcknowledgmentModal';
 
-export default function CMap() {
+export default function CMap({ reportIdToFocus, setReportIdToFocus }) {
   const navigation = useNavigation();
   
   // User location
@@ -21,6 +23,17 @@ export default function CMap() {
   const [showReportModal, setShowReportModal] = useState(false);
   const [showLegend, setShowLegend] = useState(false);
   const [currentUser, setCurrentUser] = useState(null);
+  const [region, setRegion] = useState(null);
+  
+  // Nearby incidents notification
+  const [nearbyIncidents, setNearbyIncidents] = useState([]);
+  const [showNearbyNotification, setShowNearbyNotification] = useState(false);
+  const [processedNearbyIds, setProcessedNearbyIds] = useState(new Set());
+  
+  // Acknowledgment modal
+  const [showAcknowledgmentModal, setShowAcknowledgmentModal] = useState(false);
+  const [acknowledgmentReportLocation, setAcknowledgmentReportLocation] = useState(null);
+  const [processedAcknowledgmentIds, setProcessedAcknowledgmentIds] = useState(new Set());
   
   // Edit/Cancel states
   const [showEditModal, setShowEditModal] = useState(false);
@@ -123,6 +136,108 @@ export default function CMap() {
     }, [])
   );
 
+  // Calculate distance between two coordinates using Haversine formula
+  const calculateDistance = (lat1, lon1, lat2, lon2) => {
+    const R = 6371; // Earth's radius in kilometers
+    const dLat = (lat2 - lat1) * Math.PI / 180;
+    const dLon = (lon2 - lon1) * Math.PI / 180;
+    const a = 
+      Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+      Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+      Math.sin(dLon / 2) * Math.sin(dLon / 2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    return R * c; // Distance in kilometers
+  };
+
+  // Check for nearby incidents
+  const checkNearbyIncidents = () => {
+    if (!location || !reports.length) {
+      setNearbyIncidents([]);
+      setShowNearbyNotification(false);
+      return;
+    }
+
+    const MIN_DISTANCE_KM = 0.5; // 500 meters - not too close (immediate danger zone)
+    const MAX_DISTANCE_KM = 5.0; // 5 kilometers - not too far (still relevant)
+    
+    const nearby = reports
+      .map(report => {
+        const reportLat = parseFloat(report.latitude);
+        const reportLon = parseFloat(report.longitude);
+        
+        if (isNaN(reportLat) || isNaN(reportLon)) return null;
+        
+        const distance = calculateDistance(
+          location.latitude,
+          location.longitude,
+          reportLat,
+          reportLon
+        );
+        
+        // Only include reports within the reasonable range
+        if (distance >= MIN_DISTANCE_KM && distance <= MAX_DISTANCE_KM) {
+          return {
+            ...report,
+            distance: distance,
+            distanceText: distance < 1 
+              ? `${Math.round(distance * 1000)}m away` 
+              : `${distance.toFixed(1)}km away`
+          };
+        }
+        return null;
+      })
+      .filter(Boolean)
+      .sort((a, b) => a.distance - b.distance); // Sort by closest first
+
+    setNearbyIncidents(nearby);
+
+    // Show notification if there are new nearby incidents
+    if (nearby.length > 0) {
+      const newIncidents = nearby.filter(incident => 
+        !processedNearbyIds.has(incident.id)
+      );
+      
+      if (newIncidents.length > 0) {
+        // Mark new incidents as processed
+        setProcessedNearbyIds(prev => {
+          const newSet = new Set(prev);
+          newIncidents.forEach(incident => newSet.add(incident.id));
+          return newSet;
+        });
+        
+        // Create notifications in Supabase for new nearby incidents
+        if (currentUser?.id) {
+          createNearbyIncidentNotifications(currentUser.id, newIncidents)
+            .then(result => {
+              if (result.success) {
+                console.log(`✅ Created ${result.count} notification(s) for nearby incidents`);
+              } else {
+                console.warn('⚠️ Some notifications failed to create:', result.errors);
+              }
+            })
+            .catch(error => {
+              console.error('❌ Error creating nearby incident notifications:', error);
+            });
+        }
+        
+        // Show notification banner
+        setShowNearbyNotification(true);
+        
+        // Auto-hide after 10 seconds
+        setTimeout(() => {
+          setShowNearbyNotification(false);
+        }, 10000);
+      }
+    } else {
+      setShowNearbyNotification(false);
+    }
+  };
+
+  // Check for nearby incidents when location or reports change
+  useEffect(() => {
+    checkNearbyIncidents();
+  }, [location, reports]);
+
 
   // Set initial region for the map
   const initialRegion = location
@@ -138,6 +253,147 @@ export default function CMap() {
         latitudeDelta: 0.05,
         longitudeDelta: 0.05,
       };
+
+  // Real-time subscription for acknowledgment notifications
+  useEffect(() => {
+    if (!currentUser?.id) return;
+
+    console.log('🔔 Setting up acknowledgment notification subscription for citizen:', currentUser.id);
+
+    const channel = supabase
+      .channel(`citizen-acknowledgment:${currentUser.id}`)
+      .on('postgres_changes', {
+        event: 'INSERT',
+        schema: 'public',
+        table: 'notifications',
+        filter: `user_id=eq.${currentUser.id}&user_type=eq.citizen`
+      }, async (payload) => {
+        const notification = payload.new;
+        console.log('📬 New notification received:', notification);
+
+        // Check if this is an acknowledgment notification
+        if (notification.title && notification.title.includes('Acknowledged')) {
+          // Avoid showing the same notification multiple times
+          if (processedAcknowledgmentIds.has(notification.id)) {
+            console.log('⚠️ Already processed this acknowledgment notification');
+            return;
+          }
+
+          setProcessedAcknowledgmentIds(prev => new Set([...prev, notification.id]));
+
+          // Get report location from notification message or fetch report
+          let reportLocation = null;
+          if (notification.related_report_id) {
+            try {
+              const response = await fetch(GET_REPORTS_URL);
+              if (response.ok) {
+                const allReports = await response.json();
+                const report = allReports.find(r => String(r.id) === String(notification.related_report_id));
+                if (report) {
+                  reportLocation = report.address || report.geotag_location || report.location || 'Location not specified';
+                }
+              }
+            } catch (error) {
+              console.error('Error fetching report for acknowledgment:', error);
+            }
+          }
+
+          // Extract location from message if not found
+          if (!reportLocation && notification.message) {
+            const locationMatch = notification.message.match(/📍 Location: (.+)/);
+            if (locationMatch) {
+              reportLocation = locationMatch[1].split('\n')[0];
+            }
+          }
+
+          setAcknowledgmentReportLocation(reportLocation || 'Your reported location');
+          setShowAcknowledgmentModal(true);
+          console.log('✅ Showing acknowledgment modal');
+        }
+      })
+      .subscribe((status) => {
+        console.log('🔔 Acknowledgment subscription status:', status);
+      });
+
+    return () => {
+      channel.unsubscribe();
+    };
+  }, [currentUser?.id]);
+
+  // Focus on a specific report when reportIdToFocus changes
+  useEffect(() => {
+    if (!reportIdToFocus) return;
+
+    const focusOnReport = async () => {
+      // Try to find the report in current reports first
+      let reportToFocus = reports.find(r => String(r.id) === String(reportIdToFocus));
+      
+      // If not found in current reports, try fetching from API directly
+      if (!reportToFocus) {
+        try {
+          console.log('📋 Report not in current list, fetching from API...');
+          const response = await fetch(GET_REPORTS_URL);
+          if (response.ok) {
+            const allReports = await response.json();
+            reportToFocus = allReports.find(r => String(r.id) === String(reportIdToFocus));
+            
+            // If found, add it to reports if it's not cancelled/fire out
+            if (reportToFocus) {
+              const statusText = (reportToFocus.status || '').toString().toLowerCase();
+              const isCancelled = statusText.includes('cancelled') || statusText.includes('canceled');
+              const isFireOut = statusText.includes('fire out');
+              
+              if (!isCancelled && !isFireOut && reportToFocus.latitude && reportToFocus.longitude) {
+                setReports(prev => {
+                  const exists = prev.some(r => String(r.id) === String(reportToFocus.id));
+                  return exists ? prev : [...prev, reportToFocus];
+                });
+              }
+            }
+          }
+        } catch (error) {
+          console.error('Error fetching report for focus:', error);
+        }
+      }
+      
+      if (reportToFocus) {
+        const reportLat = parseFloat(reportToFocus.latitude);
+        const reportLon = parseFloat(reportToFocus.longitude);
+        
+        if (!isNaN(reportLat) && !isNaN(reportLon)) {
+          console.log('📍 Focusing map on report:', reportIdToFocus, { reportLat, reportLon });
+          
+          // Center map on the report
+          const focusRegion = {
+            latitude: reportLat,
+            longitude: reportLon,
+            latitudeDelta: 0.005, // Zoom in closer
+            longitudeDelta: 0.005,
+          };
+          setRegion(focusRegion);
+          
+          // Open the report modal
+          setSelectedReport(reportToFocus);
+          setShowReportModal(true);
+          
+          // Clear the focus after handling
+          if (setReportIdToFocus) {
+            setTimeout(() => {
+              setReportIdToFocus(null);
+            }, 1000);
+          }
+        } else {
+          console.warn('⚠️ Report coordinates invalid:', reportToFocus);
+          if (setReportIdToFocus) setReportIdToFocus(null);
+        }
+      } else {
+        console.warn('⚠️ Report not found:', reportIdToFocus);
+        if (setReportIdToFocus) setReportIdToFocus(null);
+      }
+    };
+
+    focusOnReport();
+  }, [reportIdToFocus, reports]);
 
 
   // Show loading state
@@ -213,7 +469,13 @@ export default function CMap() {
 
   // Handle marker press
   const handleMarkerPress = (report) => {
-    setSelectedReport(report);
+    // Add distance info if this is a nearby incident
+    const nearbyIncident = nearbyIncidents.find(incident => incident.id === report.id);
+    const reportWithDistance = nearbyIncident 
+      ? { ...report, distanceText: nearbyIncident.distanceText, distance: nearbyIncident.distance }
+      : report;
+    
+    setSelectedReport(reportWithDistance);
     setShowReportModal(true);
   };
 
@@ -340,6 +602,8 @@ export default function CMap() {
       <MapView
         style={{ flex: 1 }}
         initialRegion={initialRegion}
+        region={region || initialRegion}
+        onRegionChangeComplete={setRegion}
         showsUserLocation={true}
         zoomEnabled
         scrollEnabled
@@ -349,6 +613,8 @@ export default function CMap() {
         {/* Report markers with fire icons */}
         {reports.map((report) => {
           console.log(`Rendering marker for report ${report.id} at:`, report.latitude, report.longitude, `Address: ${report.address || report.geotag_location}`);
+          const isNearby = nearbyIncidents.some(incident => incident.id === report.id);
+          
           return (
             <Marker
               key={`${report.id}-${report.latitude}-${report.longitude}-${report.address || report.geotag_location || 'no-address'}`} // Force re-render on location or address change
@@ -361,19 +627,35 @@ export default function CMap() {
               description={report.cause_of_fire || 'Emergency report'}
             >
               <View className="items-center">
+                {/* Nearby indicator ring */}
+                {isNearby && (
+                  <View 
+                    className="absolute w-12 h-12 rounded-full border-4 border-red-500 opacity-50"
+                    style={{
+                      animation: 'pulse 2s infinite'
+                    }}
+                  />
+                )}
                 <View 
-                  className="w-8 h-8 rounded-full items-center justify-center border-2 border-white"
+                  className={`w-8 h-8 rounded-full items-center justify-center border-2 ${isNearby ? 'border-red-500' : 'border-white'}`}
                   style={{ 
                     backgroundColor: getMarkerColor(report),
                     shadowColor: '#000',
                     shadowOffset: { width: 0, height: 2 },
                     shadowOpacity: 0.25,
                     shadowRadius: 3.84,
-                    elevation: 5
+                    elevation: 5,
+                    zIndex: isNearby ? 10 : 1
                   }}
                 >
                   <Text style={{ fontSize: 16 }}>🔥</Text>
                 </View>
+                {/* Nearby badge */}
+                {isNearby && (
+                  <View className="absolute -top-1 -right-1 bg-red-500 rounded-full w-4 h-4 items-center justify-center border border-white">
+                    <Text className="text-white text-xs" style={{ fontSize: 8 }}>!</Text>
+                  </View>
+                )}
               </View>
             </Marker>
           );
@@ -382,7 +664,13 @@ export default function CMap() {
 
       {/* Refresh button */}
       <TouchableOpacity
-        className="absolute top-12 right-4 bg-blue-500 rounded-full p-3 shadow-lg"
+        style={{
+          position: 'absolute',
+          top: 48,
+          right: 16,
+          zIndex: 4,
+        }}
+        className="bg-blue-500 rounded-full p-3 shadow-lg"
         onPress={() => {
           console.log('Manual refresh triggered');
           fetchReports();
@@ -392,15 +680,83 @@ export default function CMap() {
         <MaterialIcons name="refresh" size={24} color="white" />
       </TouchableOpacity>
 
+      {/* Nearby Incidents Notification Banner */}
+      {showNearbyNotification && nearbyIncidents.length > 0 && (
+        <View 
+          style={{
+            position: 'absolute',
+            top: 48,
+            left: 16,
+            right: 16,
+            zIndex: 5,
+          }}
+          className="bg-red-50 border-2 border-red-500 rounded-lg p-3 shadow-lg"
+        >
+          <View className="flex-row items-center justify-between mb-2">
+            <View className="flex-row items-center flex-1">
+              <MaterialIcons name="warning" size={24} color="#ef4444" />
+              <Text className="text-red-800 font-bold text-base ml-2">
+                {nearbyIncidents.length} Fire Incident{nearbyIncidents.length > 1 ? 's' : ''} Nearby
+              </Text>
+            </View>
+            <TouchableOpacity
+              onPress={() => setShowNearbyNotification(false)}
+              className="ml-2"
+            >
+              <MaterialIcons name="close" size={20} color="#ef4444" />
+            </TouchableOpacity>
+          </View>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} className="mt-2">
+            {nearbyIncidents.slice(0, 3).map((incident) => (
+              <TouchableOpacity
+                key={incident.id}
+                className="bg-white rounded-lg p-2 mr-2 min-w-[200px] border border-red-200"
+                onPress={() => {
+                  setSelectedReport(incident);
+                  setShowReportModal(true);
+                  setShowNearbyNotification(false);
+                }}
+              >
+                <Text className="text-red-800 font-semibold text-sm" numberOfLines={1}>
+                  {incident.address || incident.geotag_location || 'Fire Incident'}
+                </Text>
+                <Text className="text-red-600 text-xs mt-1">
+                  {incident.distanceText}
+                </Text>
+                <Text className="text-gray-600 text-xs mt-1" numberOfLines={1}>
+                  {incident.recommended_alarm_level || incident.alarm_level || 'Active'}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </ScrollView>
+          {nearbyIncidents.length > 3 && (
+            <Text className="text-red-600 text-xs mt-2 text-center">
+              +{nearbyIncidents.length - 3} more incident{nearbyIncidents.length - 3 > 1 ? 's' : ''}
+            </Text>
+          )}
+        </View>
+      )}
+
       {/* Reports count indicator with legend toggle */}
       <TouchableOpacity 
-        className="absolute top-12 left-4 bg-white rounded-lg p-3 shadow-lg"
+        style={{
+          position: 'absolute',
+          top: showNearbyNotification ? 200 : 48,
+          left: 16,
+          zIndex: 4,
+        }}
+        className="bg-white rounded-lg p-3 shadow-lg"
         onPress={() => setShowLegend(!showLegend)}
         activeOpacity={0.8}
       >
         <Text className="text-sm font-semibold text-gray-800">
           📍 {reports.length} Reports
         </Text>
+        {nearbyIncidents.length > 0 && (
+          <Text className="text-xs text-red-600 font-semibold mt-1">
+            ⚠️ {nearbyIncidents.length} Nearby
+          </Text>
+        )}
         <Text className="text-xs text-gray-500 mt-1">
           Tap for legend
         </Text>
@@ -408,7 +764,15 @@ export default function CMap() {
 
       {/* Color Legend */}
       {showLegend && (
-        <View className="absolute top-32 left-4 bg-white rounded-lg p-3 shadow-lg max-w-xs">
+        <View 
+          style={{
+            position: 'absolute',
+            top: showNearbyNotification ? 280 : 128,
+            left: 16,
+            zIndex: 4,
+          }}
+          className="bg-white rounded-lg p-3 shadow-lg max-w-xs"
+        >
           <View className="flex-row items-center justify-between mb-2">
             <Text className="text-sm font-semibold text-gray-800">Fire Alarm Levels</Text>
             <TouchableOpacity onPress={() => setShowLegend(false)}>
@@ -532,6 +896,16 @@ export default function CMap() {
                       <Text className="text-gray-500 text-xs mt-1">
                         Coordinates: {selectedReport.geotag_location}
                       </Text>
+                    )}
+                    {selectedReport.distanceText && (
+                      <View className="mt-2 bg-red-50 border border-red-200 rounded-lg p-2">
+                        <View className="flex-row items-center">
+                          <MaterialIcons name="location-on" size={16} color="#ef4444" />
+                          <Text className="text-red-800 font-semibold text-sm ml-1">
+                            {selectedReport.distanceText} from your location
+                          </Text>
+                        </View>
+                      </View>
                     )}
                   </View>
 
@@ -769,6 +1143,13 @@ export default function CMap() {
           </TouchableWithoutFeedback>
         </KeyboardAvoidingView>
       </Modal>
+
+      {/* Acknowledgment Modal */}
+      <AcknowledgmentModal
+        visible={showAcknowledgmentModal}
+        onClose={() => setShowAcknowledgmentModal(false)}
+        reportLocation={acknowledgmentReportLocation}
+      />
     </View>
   );
 }

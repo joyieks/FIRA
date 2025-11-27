@@ -634,33 +634,37 @@ export default function RMap() {
     }
   };
 
-  // Fetch assigned fire reports
+  // Fetch assigned fire reports from report_assignments table (station-assigned only)
   const fetchAssignedReports = async () => {
     if (!userData?.id) return;
 
     try {
-      console.log('🔍 Fetching assigned reports for responder:', userData.id);
+      console.log('🔍 Fetching station-assigned reports for responder:', userData.id);
       
-      // Get fire report IDs from responder notifications (unread or accepted)
-      const { data: notifications, error: notificationError } = await supabase
-        .from('responder_notifications')
-        .select('fire_report_id, status, message')
-        .eq('responder_id', userData.id)
-        .or('is_read.eq.false,status.eq.accepted');
+      // Get assignments from report_assignments table where responder is assigned
+      const { data: assignments, error: assignmentError } = await supabase
+        .from('report_assignments')
+        .select('report_id, assigned_at')
+        .eq('assignee_type', 'responder')
+        .eq('assignee_id', userData.id)
+        .order('assigned_at', { ascending: false }); // Get latest first
 
-      if (notificationError) {
-        console.error('Error fetching notifications:', notificationError);
+      if (assignmentError) {
+        console.error('Error fetching assignments:', assignmentError);
         return;
       }
 
-      if (!notifications || notifications.length === 0) {
-        console.log('No assigned reports found');
+      if (!assignments || assignments.length === 0) {
+        console.log('No station assignments found for this responder');
         setAssignedReports([]);
+        setAcceptedAssignment(null);
+        setRouteCoordinates([]);
+        setRouteInfo(null);
         return;
       }
 
-      const reportIds = notifications.map(n => n.fire_report_id).filter(Boolean);
-      console.log('📋 Fire report IDs from notifications:', reportIds);
+      const reportIds = assignments.map(a => a.report_id).filter(Boolean);
+      console.log('📋 Fire report IDs from assignments:', reportIds);
 
       if (reportIds.length === 0) {
         setAssignedReports([]);
@@ -677,15 +681,18 @@ export default function RMap() {
       const allReports = await response.json();
       console.log('🔥 All reports from API:', allReports);
       
-      const assignedFireReports = allReports.filter(report => 
-        reportIds.includes(String(report.id)) && 
-        report.latitude && 
-        report.longitude
-      ).map(report => {
-        // Check if this report is accepted
-        const notification = notifications.find(n => n.fire_report_id === String(report.id));
+      // Filter reports: must be assigned, have coordinates, and NOT be "Fire Out"
+      const assignedFireReports = allReports.filter(report => {
+        const isAssigned = reportIds.includes(String(report.id));
+        const hasCoordinates = report.latitude && report.longitude;
+        const isNotFireOut = report.status?.toLowerCase() !== 'fire out';
         
-        // Log the report data to see what fields are available
+        return isAssigned && hasCoordinates && isNotFireOut;
+      }).map(report => {
+        // Find the assignment to get assigned_at timestamp
+        const assignment = assignments.find(a => a.report_id === String(report.id));
+        
+        // Log the report data
         console.log('📋 Report data for ID', report.id, ':', report);
         console.log('📝 Cause fields in report:', {
           cause: report.cause,
@@ -696,39 +703,74 @@ export default function RMap() {
           incident_cause: report.incident_cause
         });
         
-        // Extract cause from notification message as fallback
-        let causeFromNotification = null;
-        if (notification?.message) {
-          const messageLines = notification.message.split('\n');
-          const causeLine = messageLines.find(line => line.includes('📝 Cause: '));
-          if (causeLine) {
-            causeFromNotification = causeLine.replace('📝 Cause: ', '').trim();
-            console.log('📝 Cause from notification:', causeFromNotification);
-          }
-        }
-        
         return {
           ...report,
-          isAccepted: notification?.status === 'accepted',
-          // Add cause from notification as fallback
+          assigned_at: assignment?.assigned_at || new Date().toISOString(),
+          // Add cause from report
           cause: report.cause || 
                  report.possible_cause || 
                  report.fire_cause || 
                  report.cause_of_fire ||
-                 causeFromNotification ||
                  'Not specified'
         };
       });
 
+      // Sort by assigned_at (latest first) to get the most recent assignment
+      assignedFireReports.sort((a, b) => {
+        const dateA = new Date(a.assigned_at || 0);
+        const dateB = new Date(b.assigned_at || 0);
+        return dateB - dateA; // Descending (newest first)
+      });
+
       console.log('✅ Assigned fire reports found:', assignedFireReports.length);
+      console.log('📅 Reports sorted by assignment date (latest first)');
       setAssignedReports(assignedFireReports);
 
-      // If there's an accepted assignment, calculate route automatically
-      const acceptedReport = assignedFireReports.find(report => report.isAccepted);
-      if (acceptedReport && location) {
-        console.log('🗺️ Found accepted assignment, calculating route automatically');
-        setAcceptedAssignment(acceptedReport);
-        await calculateRoute(parseFloat(acceptedReport.latitude), parseFloat(acceptedReport.longitude), location);
+      // Automatically show route for the LATEST assigned report (first in sorted array)
+      const latestAssignedReport = assignedFireReports.length > 0 ? assignedFireReports[0] : null;
+      
+      if (latestAssignedReport) {
+        console.log('🗺️ Latest assigned report found:', latestAssignedReport.id);
+        console.log('📍 Report status:', latestAssignedReport.status);
+        console.log('📍 Report coordinates:', latestAssignedReport.latitude, latestAssignedReport.longitude);
+        
+        // Only show route if status is NOT "Fire Out"
+        const reportStatus = (latestAssignedReport.status || '').toLowerCase();
+        if (reportStatus !== 'fire out') {
+          setAcceptedAssignment(latestAssignedReport);
+          
+          // Calculate route if location is available
+          if (location?.coords) {
+            console.log('🗺️ Calculating route to latest assigned report...');
+            const lat = parseFloat(latestAssignedReport.latitude);
+            const lng = parseFloat(latestAssignedReport.longitude);
+            
+            if (!isNaN(lat) && !isNaN(lng)) {
+              await calculateRoute(lat, lng, location);
+              
+              // Center map on the route
+              const routeRegion = {
+                latitude: (location.coords.latitude + lat) / 2,
+                longitude: (location.coords.longitude + lng) / 2,
+                latitudeDelta: Math.abs(location.coords.latitude - lat) * 1.5 + 0.01,
+                longitudeDelta: Math.abs(location.coords.longitude - lng) * 1.5 + 0.01,
+              };
+              setRegion(routeRegion);
+            }
+          } else {
+            console.log('⚠️ Location not available yet, route will be calculated when location is ready');
+          }
+        } else {
+          console.log('⚠️ Latest report is "Fire Out", not showing route');
+          setAcceptedAssignment(null);
+          setRouteCoordinates([]);
+          setRouteInfo(null);
+        }
+      } else {
+        console.log('⚠️ No assigned reports found');
+        setAcceptedAssignment(null);
+        setRouteCoordinates([]);
+        setRouteInfo(null);
       }
 
     } catch (error) {
@@ -847,6 +889,101 @@ export default function RMap() {
       fetchStationInfo();
     }
   }, [userData?.id, userData?.stationId, userData?.station_id]);
+
+  // Recalculate route when location becomes available and there's an assigned report
+  useEffect(() => {
+    if (location?.coords && acceptedAssignment && !routeCoordinates.length) {
+      const lat = parseFloat(acceptedAssignment.latitude);
+      const lng = parseFloat(acceptedAssignment.longitude);
+      
+      if (!isNaN(lat) && !isNaN(lng)) {
+        console.log('🗺️ Location available, recalculating route to assigned report...');
+        calculateRoute(lat, lng, location).then(() => {
+          // Center map on the route
+          const routeRegion = {
+            latitude: (location.coords.latitude + lat) / 2,
+            longitude: (location.coords.longitude + lng) / 2,
+            latitudeDelta: Math.abs(location.coords.latitude - lat) * 1.5 + 0.01,
+            longitudeDelta: Math.abs(location.coords.longitude - lng) * 1.5 + 0.01,
+          };
+          setRegion(routeRegion);
+        });
+      }
+    }
+  }, [location, acceptedAssignment]);
+
+  // Real-time subscription for new assignments and status changes
+  useEffect(() => {
+    if (!userData?.id) return;
+
+    console.log('📡 Setting up real-time subscription for assignments...');
+    
+    const channel = supabase
+      .channel(`responder-assignments:${userData.id}`)
+      .on('postgres_changes', {
+        event: 'INSERT',
+        schema: 'public',
+        table: 'report_assignments',
+        filter: `assignee_type=eq.responder&assignee_id=eq.${userData.id}`
+      }, (payload) => {
+        console.log('🆕 New assignment received:', payload.new);
+        // Refresh assigned reports when new assignment is created
+        fetchAssignedReports();
+      })
+      .on('postgres_changes', {
+        event: 'DELETE',
+        schema: 'public',
+        table: 'report_assignments',
+        filter: `assignee_type=eq.responder&assignee_id=eq.${userData.id}`
+      }, (payload) => {
+        console.log('🗑️ Assignment removed:', payload.old);
+        // Refresh assigned reports when assignment is removed
+        fetchAssignedReports();
+      })
+      .subscribe((status) => {
+        console.log('📡 Assignment subscription status:', status);
+      });
+
+    return () => {
+      channel.unsubscribe();
+    };
+  }, [userData?.id]);
+
+  // Poll for report status changes (check if assigned report becomes "Fire Out")
+  useEffect(() => {
+    if (!acceptedAssignment) return;
+
+    const checkReportStatus = async () => {
+      try {
+        const response = await fetch('https://fire-detection-api-production-f55b.up.railway.app/get_reports');
+        if (!response.ok) return;
+
+        const reports = await response.json();
+        const currentReport = Array.isArray(reports) 
+          ? reports.find(r => String(r.id) === String(acceptedAssignment.id))
+          : null;
+
+        if (currentReport) {
+          const reportStatus = (currentReport.status || '').toLowerCase();
+          if (reportStatus === 'fire out') {
+            console.log('🔥 Assigned report is now "Fire Out", clearing route...');
+            setAcceptedAssignment(null);
+            setRouteCoordinates([]);
+            setRouteInfo(null);
+            // Refresh to get updated list
+            fetchAssignedReports();
+          }
+        }
+      } catch (error) {
+        console.error('Error checking report status:', error);
+      }
+    };
+
+    // Check every 10 seconds
+    const statusInterval = setInterval(checkReportStatus, 10000);
+    
+    return () => clearInterval(statusInterval);
+  }, [acceptedAssignment]);
 
   // Always render the map instantly; show a lightweight overlay while loading
 
@@ -1389,25 +1526,16 @@ export default function RMap() {
                 </View>
               )}
 
-                        {/* Action buttons */}
+                        {/* Assignment Info - Station assigned only */}
                         <View style={styles.actionButtons}>
-                          {acceptedAssignment?.id === selectedReport?.id ? (
-                            <View style={styles.acceptedButton}>
-                              <Ionicons name="checkmark-circle" size={20} color="#10b981" />
-                              <Text style={styles.acceptedButtonText}>Assignment Accepted</Text>
-                            </View>
-                          ) : (
-                            <TouchableOpacity
-                              style={styles.acceptButton}
-                              onPress={() => {
-                                handleAcceptAssignment(selectedReport);
-                                setShowReportModal(false);
-                              }}
-                            >
-                              <Ionicons name="checkmark" size={20} color="#fff" />
-                              <Text style={styles.acceptButtonText}>Accept Assignment</Text>
-                            </TouchableOpacity>
-                          )}
+                          <View style={styles.assignedInfoButton}>
+                            <Ionicons name="checkmark-circle" size={20} color="#10b981" />
+                            <Text style={styles.assignedInfoText}>
+                              {acceptedAssignment?.id === selectedReport?.id 
+                                ? 'Route Active - Station Assignment' 
+                                : 'Station Assigned'}
+                            </Text>
+                          </View>
                         </View>
             </ScrollView>
           </View>
@@ -1578,6 +1706,22 @@ const styles = StyleSheet.create({
     borderColor: '#10b981',
   },
   acceptedButtonText: {
+    color: '#10b981',
+    fontSize: 16,
+    fontWeight: 'bold',
+    marginLeft: 8,
+  },
+  assignedInfoButton: {
+    backgroundColor: '#f0fdf4',
+    paddingHorizontal: 24,
+    paddingVertical: 12,
+    borderRadius: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderWidth: 2,
+    borderColor: '#10b981',
+  },
+  assignedInfoText: {
     color: '#10b981',
     fontSize: 16,
     fontWeight: 'bold',

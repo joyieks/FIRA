@@ -5,6 +5,9 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { View, Text, TextInput, ScrollView, TouchableOpacity, Modal, Image, Alert, RefreshControl } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { supabase } from '../../../config/supabase';
+import { notifyRespondersOnStatusChange, fetchReportData } from '../../../services/responderNotificationService';
+import { notifyRespondersOnBulkAssignment } from '../../../services/responderAssignmentNotification';
+import { notifyAllUsersOnStatusChange } from '../../../services/universalNotificationService';
 
 export default function SStatus() {
   const insets = useSafeAreaInsets();
@@ -608,14 +611,52 @@ export default function SStatus() {
                           onPress={async () => {
                             try {
                               setIsAssigning(true);
+                              const oldStatus = selectedReport.status;
                               const res = await fetch(`${API_URL}/update_report_status`, {
                                 method: 'POST',
                                 headers: { 'Content-Type': 'application/json' },
                                 body: JSON.stringify({ report_id: selectedReport.id, status: s })
                               });
                               if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                              
+                              // Update local state
                               setReports(prev => prev.map(r => r.id === selectedReport.id ? { ...r, status: s } : r));
                               setSelectedReport(prev => prev ? { ...prev, status: s } : prev);
+                              
+                              // Notify responders of status change
+                              try {
+                                // Fetch full report data for notification
+                                const reportData = await fetchReportData(selectedReport.id);
+                                const reportForNotification = reportData || {
+                                  ...selectedReport,
+                                  status: s,
+                                  latitude: selectedReport.latitude,
+                                  longitude: selectedReport.longitude,
+                                  address: selectedReport.location
+                                };
+                                
+                                // Notify responders (existing service)
+                                await notifyRespondersOnStatusChange(
+                                  selectedReport.id,
+                                  s,
+                                  oldStatus,
+                                  reportForNotification
+                                );
+                                console.log('✅ Responder notifications sent for status change');
+                                
+                                // Notify all users (admin, station, citizen)
+                                await notifyAllUsersOnStatusChange(
+                                  selectedReport.id,
+                                  s,
+                                  oldStatus,
+                                  reportForNotification
+                                );
+                                console.log('✅ Universal notifications sent for status change');
+                              } catch (notifError) {
+                                console.error('⚠️ Error sending notifications:', notifError);
+                                // Don't fail the status update if notification fails
+                              }
+                              
                               Alert.alert('Success', 'Status updated successfully');
                             } catch (e) {
                               Alert.alert('Error', `Failed to update status: ${e.message}`);
@@ -775,6 +816,17 @@ export default function SStatus() {
                                   .from('report_assignments')
                                   .insert(rows);
                                 if (addErr) throw addErr;
+                                
+                                // Notify newly assigned responders
+                                try {
+                                  const reportData = await fetchReportData(rid);
+                                  const reportForNotification = reportData || selectedReport;
+                                  await notifyRespondersOnBulkAssignment(toAdd, rid, reportForNotification);
+                                  console.log('✅ Assignment notifications sent to responders');
+                                } catch (notifError) {
+                                  console.error('⚠️ Error sending assignment notifications:', notifError);
+                                  // Don't fail the assignment if notification fails
+                                }
                               }
                               
                               if (toRemove.length > 0) {

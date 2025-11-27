@@ -174,6 +174,9 @@ export default function SNotifications({ onUnreadCountChange }) {
   const getNotificationIcon = (type) => {
     // For station notifications, type='assignment' means fire report assigned/forwarded
     switch (type) {
+      case 'fire_alert':
+      case 'emergency':
+        return { name: 'emergency', color: '#ef4444', bg: '#fef2f2' };
       case 'assignment':
         return { name: 'emergency', color: '#ef4444', bg: '#fef2f2' };
       case 'equipment':
@@ -185,16 +188,31 @@ export default function SNotifications({ onUnreadCountChange }) {
       case 'training':
         return { name: 'school', color: '#10b981', bg: '#f0fdf4' };
       case 'system':
+      case 'info':
         return { name: 'info', color: '#6b7280', bg: '#f9fafb' };
       default:
         return { name: 'notifications', color: '#6b7280', bg: '#f9fafb' };
     }
   };
 
-  const getPriorityColor = (type) => {
-    // Assignment notifications are high priority
-    if (type === 'assignment') return '#ef4444';
-    return '#6b7280';
+  const getPriorityColor = (priority) => {
+    // Use priority field if available, otherwise fall back to type
+    if (priority) {
+      switch (priority) {
+        case 'urgent':
+          return '#dc2626';
+        case 'high':
+          return '#ef4444';
+        case 'normal':
+          return '#f59e0b';
+        case 'low':
+          return '#10b981';
+        default:
+          return '#6b7280';
+      }
+    }
+    // Fallback: Assignment and fire_alert notifications are high priority
+    return '#ef4444';
   };
 
   const formatDate = (dateString) => {
@@ -275,7 +293,7 @@ export default function SNotifications({ onUnreadCountChange }) {
       >
         {notifications.map((notification) => {
           const icon = getNotificationIcon(notification.type);
-          const priorityColor = getPriorityColor(notification.type);
+          const priorityColor = getPriorityColor(notification.priority || notification.type);
           
           return (
             <TouchableOpacity
