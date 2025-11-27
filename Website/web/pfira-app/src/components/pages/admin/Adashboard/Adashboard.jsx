@@ -764,9 +764,27 @@ const Adashboard = () => {
                   {selectedReport.structure && (
                     <p><strong>Structure:</strong> {selectedReport.structure}{selectedReport.structure_confidence ? ` (${selectedReport.structure_confidence})` : ''}</p>
                   )}
-                  {selectedReport.number_of_structures_on_fire && (
-                    <p><strong>Structures Affected:</strong> {selectedReport.number_of_structures_on_fire} structure(s)</p>
-                  )}
+                  {(() => {
+                    // Helper function to clean up "Unknown - count not provided" text
+                    const cleanStructuresValue = (value) => {
+                      if (!value) return null;
+                      const str = String(value);
+                      if (str.toLowerCase().includes('count not provided') || 
+                          str.toLowerCase().includes('not provided') ||
+                          str.toLowerCase().includes('unknown -')) {
+                        return null;
+                      }
+                      const num = Number(value);
+                      if (!isNaN(num) && isFinite(num)) {
+                        return num;
+                      }
+                      return null;
+                    };
+                    const structures = cleanStructuresValue(selectedReport.number_of_structures_on_fire);
+                    return structures != null ? (
+                      <p><strong>Structures Affected:</strong> {structures} structure(s)</p>
+                    ) : null;
+                  })()}
                   <p><strong>Location:</strong> {selectedReport.address || selectedReport.geotag_location}</p>
                   <p><strong>Reported:</strong> {selectedReport.formatted_timestamp}</p>
                   {selectedReport.image_url && (

@@ -1,6 +1,6 @@
                                           import React, { useState, useEffect } from 'react';
 import { supabase } from '../../../../config/supabase';
-import { FiSearch, FiFilter, FiClock, FiMapPin, FiUser, FiAlertTriangle, FiBell, FiTrendingUp, FiX, FiRefreshCw } from 'react-icons/fi';
+import { FiSearch, FiFilter, FiClock, FiMapPin, FiUser, FiAlertTriangle, FiBell, FiTrendingUp, FiX } from 'react-icons/fi';
 import { useNavigate } from 'react-router-dom';
 
 const Overview = () => {
@@ -80,7 +80,7 @@ const Overview = () => {
         structure: report.structure,
         smokeIntensity: report.smoke_intensity,
         smokeConfidence: report.smoke_confidence,
-        numberOfStructures: report.number_of_structures_on_fire,
+        numberOfStructures: cleanStructuresValue(report.number_of_structures_on_fire),
         reporterId: report.reporterId,
         timestamp: report.created_at || report.timestamp,
         // Location data
@@ -147,6 +147,24 @@ const Overview = () => {
       case 'no fire': return 'Under Control';
       default: return 'Unknown';
     }
+  };
+
+  // Helper function to clean up "Unknown - count not provided" text
+  const cleanStructuresValue = (value) => {
+    if (!value) return null;
+    const str = String(value);
+    // Check if it contains "count not provided" or similar patterns
+    if (str.toLowerCase().includes('count not provided') || 
+        str.toLowerCase().includes('not provided') ||
+        str.toLowerCase().includes('unknown -')) {
+      return null; // Return null so it displays as "Unknown"
+    }
+    // If it's a valid number, return it
+    const num = Number(value);
+    if (!isNaN(num) && isFinite(num)) {
+      return num;
+    }
+    return null;
   };
 
   // Determine suggested alarm based on number of structures
@@ -291,7 +309,7 @@ const Overview = () => {
       try {
         const { data, error } = await supabase
           .from('messages')
-          .select('id, text, ai_suggested_alarm, created_at, sender_type, report_id')
+          .select('id, text, ai_suggested_alarm, suggested_alarm_level, created_at, sender_type, report_id')
           .not('ai_suggested_alarm', 'is', null)
           .order('created_at', { ascending: false })
           .limit(200);
@@ -301,8 +319,28 @@ const Overview = () => {
       }
     };
     loadAiSuggestions();
-    const interval = setInterval(loadAiSuggestions, 30000);
-    return () => clearInterval(interval);
+    
+    // Faster polling - every 5 seconds instead of 30
+    const interval = setInterval(loadAiSuggestions, 5000);
+    
+    // Real-time subscription for instant updates
+    const subscription = supabase
+      .channel('ai_suggestions_admin')
+      .on('postgres_changes', {
+        event: '*',
+        schema: 'public',
+        table: 'messages',
+        filter: 'ai_suggested_alarm=not.is.null'
+      }, () => {
+        console.log('🔔 Real-time: AI suggestion detected, reloading...');
+        loadAiSuggestions();
+      })
+      .subscribe();
+    
+    return () => {
+      clearInterval(interval);
+      subscription.unsubscribe();
+    };
   }, []);
 
   // Compute strongest chat-based alarm per report_id
@@ -323,13 +361,34 @@ const Overview = () => {
       };
       return map[label] ?? 0;
     };
-    const normalizeAiLabelLocal = (aiValue) => {
+    const normalizeAiLabelLocal = (aiValue, suggestedAlarmLevel) => {
+      // Priority 1: Use suggested_alarm_level field directly if available
+      if (suggestedAlarmLevel && suggestedAlarmLevel !== 'NONE') {
+        // Normalize the suggested_alarm_level value
+        const normalized = suggestedAlarmLevel.toLowerCase().trim();
+        const map = {
+          'none': 'Under Control',
+          'first': '1st Alarm', 'first_alarm': '1st Alarm', '1st alarm': '1st Alarm',
+          'second': '2nd Alarm', 'second_alarm': '2nd Alarm', '2nd alarm': '2nd Alarm',
+          'third': '3rd Alarm', 'third_alarm': '3rd Alarm', '3rd alarm': '3rd Alarm',
+          'fourth': '4th Alarm', 'fourth_alarm': '4th Alarm', '4th alarm': '4th Alarm',
+          'fifth': '5th Alarm', 'fifth_alarm': '5th Alarm', '5th alarm': '5th Alarm',
+          'task_force_alpha': 'TASK FORCE ALPHA',
+          'task_force_bravo': 'TASK FORCE BRAVO',
+          'task_force_charlie': 'TASK FORCE CHARLIE',
+          'task_force_delta_echo_hotel_india': 'TASK FORCE DELTA',
+          'task_force_delta': 'TASK FORCE DELTA',
+          'general': 'GENERAL ALARM', 'general_alarm': 'GENERAL ALARM'
+        };
+        return map[normalized] || suggestedAlarmLevel;
+      }
+      
       if (!aiValue) return null;
       let suggested = null;
       if (typeof aiValue === 'string') {
         const trimmed = aiValue.trim();
         if ((trimmed.startsWith('{') && trimmed.endsWith('}')) || (trimmed.startsWith('[') && trimmed.endsWith(']'))) {
-          try { return normalizeAiLabelLocal(JSON.parse(trimmed)); } catch (_) {}
+          try { return normalizeAiLabelLocal(JSON.parse(trimmed), suggestedAlarmLevel); } catch (_) {}
         }
         suggested = aiValue;
       } else if (aiValue?.suggested_alarm) {
@@ -358,7 +417,7 @@ const Overview = () => {
     (aiChatSuggestions || []).forEach((m) => {
       const reportId = m.report_id;
       if (!reportId) return;
-      const label = normalizeAiLabelLocal(m.ai_suggested_alarm);
+      const label = normalizeAiLabelLocal(m.ai_suggested_alarm, m.suggested_alarm_level);
       if (!label) return;
       const current = bestByReport[reportId];
       if (!current || toStrength(label) > toStrength(current)) {
@@ -732,43 +791,9 @@ const Overview = () => {
   return (
     <div className="min-h-screen bg-gray-50 p-4" onClick={() => {}}>
       <div className="w-full">
-        {/* Header with refresh info */}
+        {/* Header */}
         <div className="flex justify-between items-center mb-6">
           <h1 className="text-2xl font-bold text-gray-900">Emergency Reports Overview</h1>
-          <div className="flex items-center space-x-4">
-            <div className="text-sm text-gray-500">
-              Last updated: {lastRefresh.toLocaleTimeString()}
-            </div>
-            <button
-              onClick={handleManualRefresh}
-              disabled={isLoading}
-              className="flex items-center space-x-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              <FiRefreshCw className={`w-4 h-4 ${isLoading ? 'animate-spin' : ''}`} />
-              <span>Refresh</span>
-            </button>
-            <button
-              onClick={() => {
-                console.log('Testing API connection...');
-                fetch(`${API_URL}/get_reports`)
-                  .then(response => {
-                    console.log('Test response status:', response.status);
-                    return response.json();
-                  })
-                  .then(data => {
-                    console.log('Test API data:', data);
-                    alert(`API Test: Found ${data.length} reports`);
-                  })
-                  .catch(error => {
-                    console.error('Test API error:', error);
-                    alert('API Test failed: ' + error.message);
-                  });
-              }}
-              className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700"
-            >
-              Test API
-            </button>
-          </div>
         </div>
 
         {/* Search and Filters */}
@@ -886,8 +911,8 @@ const Overview = () => {
                     <th className="px-4 py-4 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-24">Reporter</th>
                     <th className="px-4 py-4 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-28">Location</th>
                     <th className="px-4 py-4 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-32">Status</th>
-                    <th className="px-4 py-4 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-36">Suggested Alarm Level</th>
-                    <th className="px-4 py-4 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-40">Final Alarm Level</th>
+                    <th className="px-4 py-4 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-40">Fire Alarm Level</th>
+                    <th className="px-4 py-4 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-36">Suggested Fire Alarm</th>
                     <th className="px-4 py-4 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-28">Actions</th>
                   </tr>
                 </thead>
@@ -956,11 +981,6 @@ const Overview = () => {
                               </span>
                             )}
                           </div>
-                        </td>
-                        <td className="px-4 py-4 whitespace-nowrap">
-                          <span className={`px-3 py-1 rounded-md text-xs font-medium border ${report.status === 'Cancelled' ? 'opacity-50 cursor-not-allowed' : ''} ${getAlarmLevelColor(report.suggestedAlarmLevel)}`}>
-                            {report.suggestedAlarmLevel}
-                          </span>
                         </td>
                         <td className="px-4 py-4 whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
                           {editingFinalAlarm[report.id] ? (
@@ -1047,6 +1067,11 @@ const Overview = () => {
                           )}
                         </td>
                         <td className="px-4 py-4 whitespace-nowrap">
+                          <span className={`px-3 py-1 rounded-md text-xs font-medium border ${getAlarmLevelColor(report.suggestedAlarmLevel)}`}>
+                            {report.suggestedAlarmLevel}
+                          </span>
+                        </td>
+                        <td className="px-4 py-4 whitespace-nowrap">
                           <button
                             className="px-3 py-1 bg-gray-600 text-white rounded-md hover:bg-gray-700 transition-colors text-xs font-medium flex items-center space-x-1"
                             onClick={(e) => {
@@ -1073,7 +1098,7 @@ const Overview = () => {
 
         {/* Detailed Report Modal */}
         {showReportModal && selectedReport && (
-          <div className="fixed inset-0 backdrop-blur-sm bg-black bg-opacity-30 flex items-center justify-center p-4 z-50">
+          <div className="fixed inset-0 backdrop-blur-md bg-white/20 flex items-center justify-center p-4 z-50">
             <div className="bg-white rounded-xl shadow-xl max-w-4xl w-full max-h-[90vh] overflow-y-auto">
               <div className="p-8">
                 <div className="flex justify-between items-center mb-8">
@@ -1156,7 +1181,7 @@ const Overview = () => {
                       <div>
                         <label className="block text-sm font-medium text-blue-700 mb-2">Structures Affected:</label>
                         <span className="text-lg font-semibold text-blue-900">
-                          {selectedReport.numberOfStructures || 'Not specified'}
+                          {selectedReport.numberOfStructures || 'Unknown'}
                         </span>
                       </div>
                     </div>
@@ -1173,7 +1198,9 @@ const Overview = () => {
                     <div>
                       <label className="block text-lg font-medium text-gray-700 mb-3">Suggested Alarm Level:</label>
                       <span className={`px-3 py-3 rounded-md text-base font-medium border ${getAlarmLevelColor(selectedReport.suggestedAlarmLevel)}`}>
-                        {selectedReport.suggestedAlarmLevel}
+                        {selectedReport.suggestedAlarmLevel?.includes('Unknown - structure count not provided') 
+                          ? 'Unknown' 
+                          : selectedReport.suggestedAlarmLevel}
                       </span>
                     </div>
                     <div>
@@ -1236,7 +1263,7 @@ const Overview = () => {
 
         {/* Admin Cancellation Modal */}
         {showCancelModal && (
-          <div className="fixed inset-0 backdrop-blur-sm bg-black bg-opacity-30 flex items-center justify-center p-4 z-50">
+          <div className="fixed inset-0 backdrop-blur-md bg-white/20 flex items-center justify-center p-4 z-50">
             <div className="bg-white rounded-xl shadow-xl max-w-md w-full">
               <div className="p-6">
                 <div className="flex justify-between items-center mb-6">

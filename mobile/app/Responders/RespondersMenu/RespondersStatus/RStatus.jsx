@@ -1,13 +1,12 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, TouchableOpacity, ScrollView, Alert, Image, Modal, RefreshControl } from 'react-native';
+import { View, Text, TouchableOpacity, ScrollView, Image, Modal, RefreshControl } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useAuth } from '../../../config/AuthContext';
 import { supabase } from '../../../config/supabase';
 
-export default function RStatus() {
+export default function RStatus({ onNavigateToMap }) {
   const { userData } = useAuth();
   const [assignments, setAssignments] = useState([]);
-  const [notifications, setNotifications] = useState([]);
   const [showFullReport, setShowFullReport] = useState(false);
   const [selectedAssignment, setSelectedAssignment] = useState(null);
   const [refreshing, setRefreshing] = useState(false);
@@ -20,12 +19,12 @@ export default function RStatus() {
     }
 
     try {
-      // Load active notifications for this responder (unread or accepted)
+      // Load active notifications for this responder (pending or accepted only)
       const { data: notificationData, error } = await supabase
         .from('responder_notifications')
         .select('*')
         .eq('responder_id', userData.id)
-        .or('is_read.eq.false,status.eq.accepted')
+        .in('status', ['pending', 'accepted'])
         .order('created_at', { ascending: false });
 
       if (error) {
@@ -33,198 +32,57 @@ export default function RStatus() {
         return;
       }
 
-      setNotifications(notificationData || []);
-
-      // Also load assignments directly from report_assignments for this responder
-      const { data: directAssignRows, error: assignErr } = await supabase
-        .from('report_assignments')
-        .select('report_id')
-        .eq('assignee_type', 'responder')
-        .eq('assignee_id', userData.id);
-      if (assignErr) {
-        console.error('Error loading direct assignments:', assignErr);
-      }
-
-      // Merge report IDs from notifications and direct assignments
-      const idsFromNotifications = (notificationData || [])
+      // Get report IDs from active notifications only
+      const uniqueReportIds = (notificationData || [])
         .map(n => n.fire_report_id)
         .filter(Boolean)
         .map(String);
-      const idsFromAssignments = (directAssignRows || [])
-        .map(r => String(r.report_id));
-      const uniqueReportIds = Array.from(new Set([...idsFromNotifications, ...idsFromAssignments]));
+      
+      console.log('📋 Unique report IDs to load:', uniqueReportIds);
 
       if (uniqueReportIds.length === 0) {
+        console.log('⚠️ No report IDs found - setting empty assignments');
         setAssignments([]);
         return;
       }
 
       // Fetch reports once and build assignment cards
+      console.log('🌐 Fetching reports from Railway API...');
       const response = await fetch('https://fire-detection-api-production-f55b.up.railway.app/get_reports');
       const allReports = response.ok ? await response.json() : [];
+      console.log('📊 Fetched reports from API:', allReports?.length || 0);
+      
       const reportsById = new Map((allReports || []).map(r => [String(r.id), r]));
+      console.log('🗺️ Reports by ID map size:', reportsById.size);
 
       const processedFromIds = await Promise.all(uniqueReportIds.map(async (rid) => {
+        console.log(`🔍 Looking for report ID: ${rid}`);
         const report = reportsById.get(String(rid));
-        if (!report) return null;
+        if (!report) {
+          console.warn(`⚠️ Report not found in API response: ${rid}`);
+          return null;
+        }
+        
+        // Filter out Fire Out and Under Control reports
+        const status = report.status?.toLowerCase();
+        if (status === 'fire out' || status === 'under control') {
+          console.log(`⏭️ Skipping ${status} report: ${rid}`);
+          return null;
+        }
+        
+        console.log(`✅ Found active report: ${rid} - ${report.location || report.address || 'Unknown location'}`);
         // Try to find a notification for status/accepted flag
         const notif = (notificationData || []).find(n => String(n.fire_report_id) === String(rid));
         return buildAssignmentFromReport(report, notif);
       }));
 
       const validAssignments = processedFromIds.filter(Boolean);
+      console.log('✅ Valid assignments processed:', validAssignments.length);
+      console.log('📋 Assignment details:', validAssignments.map(a => ({ id: a.fireReportId, location: a.location, status: a.status })));
       setAssignments(validAssignments);
       console.log('✅ Loaded assignments for responder:', validAssignments.length);
     } catch (error) {
       console.error('Error in loadNotifications:', error);
-    }
-  };
-
-  // Function to process a single notification into an assignment
-  const processNotificationToAssignment = async (notification) => {
-    try {
-      console.log('📨 Processing notification:', notification.id, 'for fire report:', notification.fire_report_id);
-        
-        // Parse the message to extract fire report details
-        console.log('📨 Raw notification message:', notification.message);
-        const messageLines = notification.message.split('\n');
-        console.log('📝 Message lines:', messageLines);
-        
-        // Helper function to safely extract field values
-        const extractField = (line, prefix) => {
-          if (!line) return 'Unknown';
-          const value = line.replace(prefix, '').trim();
-          return value || 'Unknown';
-        };
-        
-        // Helper function to find field by emoji/prefix
-        const findFieldByPrefix = (prefix) => {
-          const line = messageLines.find(l => l.includes(prefix));
-          return extractField(line, prefix);
-        };
-        
-        // Extract fields using robust method
-        const reporter = findFieldByPrefix('👤 Reporter: ');
-        const location = findFieldByPrefix('📍 Location: ');
-        const alarmLevel = findFieldByPrefix('🔥 Alarm Level: ');
-        const aiDetection = findFieldByPrefix('📊 AI Detection: ');
-        const reportedTime = findFieldByPrefix('⏰ Reported: ');
-        const cause = findFieldByPrefix('📝 Cause: ');
-        const smokeAnalysis = findFieldByPrefix('💨 Smoke Analysis: ');
-        const structure = findFieldByPrefix('🏠 Structure: ');
-        const structuresAffected = findFieldByPrefix('🏘️ Structures Affected: ');
-        
-        console.log('📋 Parsed fire report data:', {
-          reporter,
-          location,
-          alarmLevel,
-          aiDetection,
-          reportedTime,
-          cause,
-          smokeAnalysis,
-          structure,
-          structuresAffected
-        });
-        
-        // Fetch fire report details to get the image URL, status, and additional fields
-        let imageUrl = null;
-        let fireReportStatus = 'Unknown';
-        let reporterFromAPI = 'Unknown Reporter';
-        let smokeAnalysisFromAPI = 'Not analyzed';
-        let structureFromAPI = 'Unknown';
-        let structuresAffectedFromAPI = 'Unknown';
-        let fireReport = null; // Store fire report for AI detection formatting
-        
-        try {
-          const response = await fetch('https://fire-detection-api-production-f55b.up.railway.app/get_reports');
-          if (response.ok) {
-            const reports = await response.json();
-            fireReport = reports.find(report => String(report.id) === String(notification.fire_report_id));
-            if (fireReport) {
-              console.log('🔥 Fire report data from API:', fireReport);
-              
-              imageUrl = fireReport.image_url || null;
-              fireReportStatus = fireReport.status || 'Unknown';
-              
-              // Extract additional fields from API data with correct field names
-              reporterFromAPI = fireReport.reporter_name || 
-                               fireReport.reporter || 
-                               fireReport.reported_by || 
-                               fireReport.user_name ||
-                               'Unknown Reporter';
-              
-              // Format smoke analysis with intensity and confidence like admin dashboard
-              const smokeIntensity = fireReport.smoke_intensity || fireReport.smoke_level || '';
-              const smokeConfidence = fireReport.smoke_confidence || fireReport.smoke_analysis || '';
-              smokeAnalysisFromAPI = `${smokeIntensity} ${smokeConfidence}`.trim() || 'Not analyzed';
-              
-              structureFromAPI = fireReport.structure || 
-                               fireReport.structure_type || 
-                               fireReport.building_type ||
-                               fireReport.property_type ||
-                               'Unknown';
-              
-              // Use the correct field name for structures affected (like admin dashboard)
-              structuresAffectedFromAPI = fireReport.number_of_structures_on_fire || 
-                                        fireReport.structures_affected || 
-                                        fireReport.affected_structures || 
-                                        fireReport.building_count ||
-                                        fireReport.property_count ||
-                                        'Unknown';
-            }
-          }
-        } catch (error) {
-          console.log('Could not fetch fire report details:', error);
-        }
-        
-        // Final fallback: if API data is still unknown, use some reasonable defaults
-        if (reporterFromAPI === 'Unknown Reporter') {
-          reporterFromAPI = 'Citizen Reporter';
-        }
-        if (smokeAnalysisFromAPI === 'Not analyzed') {
-          smokeAnalysisFromAPI = 'High 75.5%';
-        }
-        if (structureFromAPI === 'Unknown') {
-          structureFromAPI = 'Residential Building';
-        }
-        if (structuresAffectedFromAPI === 'Unknown') {
-          structuresAffectedFromAPI = '1 structure(s)';
-        } else if (typeof structuresAffectedFromAPI === 'number') {
-          structuresAffectedFromAPI = `${structuresAffectedFromAPI} structure(s)`;
-        } else if (typeof structuresAffectedFromAPI === 'string' && !structuresAffectedFromAPI.includes('structure')) {
-          structuresAffectedFromAPI = `${structuresAffectedFromAPI} structure(s)`;
-        }
-        
-        // Format AI detection with confidence percentage like admin dashboard
-        let formattedAiDetection = aiDetection;
-        if (fireReport && fireReport.confidence) {
-          formattedAiDetection = `${fireReport.prediction || aiDetection} (${fireReport.confidence})`;
-        }
-        
-        return {
-          id: notification.id,
-          title: notification.title,
-          location: location,
-          description: notification.message,
-          priority: notification.priority,
-          createdAt: notification.created_at,
-          fireReportId: notification.fire_report_id,
-          alarmLevel: alarmLevel,
-          aiDetection: formattedAiDetection,
-          reportedTime: reportedTime,
-          cause: cause,
-          imageUrl: imageUrl,
-          status: fireReportStatus,
-          isAccepted: notification.status === 'accepted',
-          // Use API data for these fields instead of parsed message data
-          reporter: reporterFromAPI,
-          smokeAnalysis: smokeAnalysisFromAPI,
-          structure: structureFromAPI,
-          structuresAffected: structuresAffectedFromAPI
-        };
-    } catch (error) {
-      console.error('Error processing notification:', notification.id, error);
-      return null;
     }
   };
 
@@ -282,23 +140,10 @@ export default function RStatus() {
       })
       .subscribe();
 
-    // Also subscribe to direct assignment changes
-    const assignSub = supabase
-      .channel(`report_assignments:responder:${userData?.id}`)
-      .on('postgres_changes', {
-        event: '*',
-        schema: 'public',
-        table: 'report_assignments',
-        filter: `assignee_type=eq.responder,assignee_id=eq.${userData?.id}`
-      }, () => {
-        loadNotifications();
-      })
-      .subscribe();
-
     return () => {
       subscription.unsubscribe();
-      assignSub.unsubscribe();
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [userData?.id]);
 
 
@@ -309,67 +154,6 @@ export default function RStatus() {
       case 'Fire Out': return '#16a34a'; // green-600
       case 'Cancelled': return '#6b7280'; // gray-500
       default: return '#6b7280'; // gray-500
-    }
-  };
-
-  const getFireReportStatusBgColor = (status) => {
-    switch (status) {
-      case 'On Going': return '#fef2f2'; // red-50
-      case 'Under Control': return '#fffbeb'; // amber-50
-      case 'Fire Out': return '#f0fdf4'; // green-50
-      case 'Cancelled': return '#f9fafb'; // gray-50
-      default: return '#f9fafb'; // gray-50
-    }
-  };
-
-
-  const markNotificationAsAccepted = async (notificationId) => {
-    try {
-      const { error } = await supabase
-        .from('responder_notifications')
-        .update({ 
-          is_read: true,
-          status: 'accepted',
-          accepted_at: new Date().toISOString()
-        })
-        .eq('id', notificationId);
-
-      if (error) {
-        console.error('Error marking notification as accepted:', error);
-      }
-    } catch (error) {
-      console.error('Error marking notification as accepted:', error);
-    }
-  };
-
-  const handleQuickAction = (action) => {
-    switch (action) {
-      case 'accept':
-        Alert.alert('Assignment Accepted', 'You have accepted the current assignment.');
-        // Mark the current notification as accepted (but keep it visible)
-        if (selectedAssignment?.notificationId) {
-          // Use the actual notification ID, not the concatenated ID
-          markNotificationAsAccepted(selectedAssignment.notificationId);
-          // Update the assignment status in the state
-          setAssignments(prevAssignments => 
-            prevAssignments.map(assignment => 
-              assignment.id === selectedAssignment.id 
-                ? { ...assignment, isAccepted: true }
-                : assignment
-            )
-          );
-        } else {
-          console.log('⚠️ No notification ID found for this assignment (might be a direct assignment)');
-        }
-        break;
-      case 'decline':
-        Alert.alert('Assignment Declined', 'Please provide a reason for declining.');
-        break;
-      case 'backup':
-        Alert.alert('Backup Requested', 'Backup has been requested for your current assignment.');
-        break;
-      default:
-        break;
     }
   };
 
@@ -463,7 +247,7 @@ export default function RStatus() {
           <View className="bg-gray-50 p-6 rounded-lg items-center">
             <MaterialIcons name="assignment" size={48} color="#9ca3af" />
             <Text className="text-gray-500 text-center mt-2">No active assignments</Text>
-            <Text className="text-gray-400 text-sm text-center">You'll be notified when a new assignment comes in</Text>
+            <Text className="text-gray-400 text-sm text-center">You&apos;ll be notified when a new assignment comes in</Text>
           </View>
         )}
       </View>
@@ -576,33 +360,6 @@ export default function RStatus() {
                       </View>
                     )}
                   </View>
-                </View>
-
-                {/* Action Buttons */}
-                <View className="flex-row gap-3 mt-4 mb-6">
-                  {selectedAssignment.isAccepted ? (
-                    <View className="bg-green-100 flex-1 py-4 rounded-lg flex-row items-center justify-center">
-                      <MaterialIcons name="check-circle" size={20} color="#059669" />
-                      <Text className="text-green-800 text-center font-bold text-base ml-2">Assignment Accepted</Text>
-                    </View>
-                  ) : (
-                    <TouchableOpacity
-                      className="bg-red-600 flex-1 py-4 rounded-lg"
-                      onPress={() => {
-                        setShowFullReport(false);
-                        handleQuickAction('accept');
-                      }}
-                    >
-                      <Text className="text-white text-center font-bold text-base">Accept Assignment</Text>
-                    </TouchableOpacity>
-                  )}
-                  
-                  <TouchableOpacity
-                    className="bg-gray-600 flex-1 py-4 rounded-lg"
-                    onPress={() => setShowFullReport(false)}
-                  >
-                    <Text className="text-white text-center font-bold text-base">Close</Text>
-                  </TouchableOpacity>
                 </View>
               </View>
             )}

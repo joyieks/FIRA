@@ -12,11 +12,18 @@ export default function RespondersScreen() {
   const [activeTab, setActiveTab] = useState(2); // Default to Status
   const [selectedContact, setSelectedContact] = useState(null);
   const [unreadCount, setUnreadCount] = useState(0);
+  const [routingInfo, setRoutingInfo] = useState(null);
+
+  const handleNavigateToMap = (fireInfo) => {
+    console.log('🗺️ Navigating to map with fire info:', fireInfo);
+    setRoutingInfo(fireInfo);
+    setActiveTab(1); // Switch to Map tab (index 1)
+  };
 
   const TABS = [
     { component: <RNotifications onUnreadCountChange={setUnreadCount} /> },
-    { component: <RMap /> },
-    { component: <RStatus /> },
+    { component: <RMap routingInfo={routingInfo} /> },
+    { component: <RStatus onNavigateToMap={handleNavigateToMap} /> },
     { component: <RFiraChat onContactSelect={setSelectedContact} /> },
     { component: <RProfile /> },
   ];

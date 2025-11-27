@@ -64,10 +64,19 @@ async function getStationUsers(stationId) {
  */
 async function getReportCreator(reportData) {
   try {
+    console.log('🔍 Getting report creator from reportData:', {
+      user_id: reportData?.user_id,
+      reporter_id: reportData?.reporter_id,
+      reporter: reportData?.reporter,
+      reporter_name: reportData?.reporter_name
+    });
+    
     // Check if report has reporter_id or user_id (this is typically the auth user ID)
-    const reporterId = reportData?.reporter_id || reportData?.user_id || reportData?.reported_by_id;
+    const reporterId = reportData?.user_id || reportData?.reporter_id || reportData?.reported_by_id;
     
     if (!reporterId) {
+      console.log('⚠️ No reporter ID found, trying to find by reporter name/email');
+      
       // Try to find by reporter name/email in citizens/citizen_users table
       const reporterName = reportData?.reporter_name || reportData?.reporter || reportData?.reported_by;
       const reporterEmail = reportData?.reporter_email || reportData?.email;
@@ -82,6 +91,7 @@ async function getReportCreator(reportData) {
           .limit(1);
         
         if (citizens && citizens.length > 0) {
+          console.log('✅ Found citizen by email in citizens table:', citizens[0].id);
           return citizens[0];
         }
         
@@ -94,12 +104,38 @@ async function getReportCreator(reportData) {
           .limit(1);
         
         if (citizenUsers && citizenUsers.length > 0) {
+          console.log('✅ Found citizen by email in citizen_users table:', citizenUsers[0].id);
           return citizenUsers[0];
         }
       }
       
+      console.log('⚠️ Could not find citizen by email, checking auth.users');
+      
+      // As a last resort, check auth.users by matching the reporter name
+      if (reporterName) {
+        const { data: authUsers } = await supabase.auth.admin.listUsers();
+        const matchingUser = authUsers?.users?.find(u => {
+          const userEmail = u.email;
+          const fullName = `${u.user_metadata?.first_name || ''} ${u.user_metadata?.last_name || ''}`.trim();
+          return fullName === reporterName || userEmail === reporterEmail;
+        });
+        
+        if (matchingUser) {
+          console.log('✅ Found user in auth.users:', matchingUser.id);
+          return {
+            id: matchingUser.id,
+            email: matchingUser.email,
+            first_name: matchingUser.user_metadata?.first_name,
+            last_name: matchingUser.user_metadata?.last_name
+          };
+        }
+      }
+      
+      console.log('❌ Could not find citizen by any method');
       return null;
     }
+
+    console.log('🔍 Found reporter ID:', reporterId);
 
     // Try to fetch from citizens table first (by ID - which should match auth user ID)
     let { data, error } = await supabase
@@ -109,26 +145,40 @@ async function getReportCreator(reportData) {
       .eq('active', true)
       .single();
 
+    if (!error && data) {
+      console.log('✅ Found citizen in citizens table:', data.id);
+      return data;
+    }
+
     // If not found in citizens, try citizen_users table
-    if (error || !data) {
-      const { data: citizenUserData, error: citizenUserError } = await supabase
-        .from('citizen_users')
-        .select('id, first_name, last_name, email')
-        .eq('id', reporterId)
-        .eq('status', 'active')
-        .single();
-      
-      if (!citizenUserError && citizenUserData) {
-        return citizenUserData;
-      }
+    const { data: citizenUserData, error: citizenUserError } = await supabase
+      .from('citizen_users')
+      .select('id, first_name, last_name, email')
+      .eq('id', reporterId)
+      .eq('status', 'active')
+      .single();
+    
+    if (!citizenUserError && citizenUserData) {
+      console.log('✅ Found citizen in citizen_users table:', citizenUserData.id);
+      return citizenUserData;
+    }
+    
+    // Try auth.users as final fallback
+    console.log('🔍 Trying auth.users table with ID:', reporterId);
+    const { data: authUser, error: authError } = await supabase.auth.admin.getUserById(reporterId);
+    
+    if (!authError && authUser) {
+      console.log('✅ Found user in auth.users:', authUser.user.id);
+      return {
+        id: authUser.user.id,
+        email: authUser.user.email,
+        first_name: authUser.user.user_metadata?.first_name,
+        last_name: authUser.user.user_metadata?.last_name
+      };
     }
 
-    if (error && !data) {
-      console.error('❌ Error fetching citizen:', error);
-      return null;
-    }
-
-    return data;
+    console.log('❌ Could not find citizen in any table');
+    return null;
   } catch (error) {
     console.error('❌ Error getting report creator:', error);
     return null;

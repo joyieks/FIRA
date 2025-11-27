@@ -4,6 +4,24 @@ import { useOutletContext } from 'react-router-dom';
 import { supabase } from '../../../../config/supabase';
 
 const Sdashboard = () => {
+  // Helper function to clean up "Unknown - count not provided" text
+  const cleanStructuresValue = (value) => {
+    if (!value) return null;
+    const str = String(value);
+    // Check if it contains "count not provided" or similar patterns
+    if (str.toLowerCase().includes('count not provided') || 
+        str.toLowerCase().includes('not provided') ||
+        str.toLowerCase().includes('unknown -')) {
+      return null; // Return null so it displays as "Unknown"
+    }
+    // If it's a valid number, return it
+    const num = Number(value);
+    if (!isNaN(num) && isFinite(num)) {
+      return num;
+    }
+    return null;
+  };
+
   // Safely read outlet context; on hard reload this can be undefined before layout mounts
   const outletContext = (typeof useOutletContext === 'function' ? useOutletContext() : {}) || {};
   const { stationData } = outletContext;
@@ -799,7 +817,7 @@ const Sdashboard = () => {
         `📝 Cause: ${fireReport.cause_of_fire || fireReport.cause || 'Not specified'}\n` +
         `💨 Smoke Analysis: ${fireReport.smoke_analysis || 'Not analyzed'}\n` +
         `🏠 Structure: ${fireReport.structure_type || 'Unknown'}\n` +
-        `🏘️ Structures Affected: ${fireReport.structures_affected || 'Unknown'}`;
+        `🏘️ Structures Affected: ${cleanStructuresValue(fireReport.structures_affected || fireReport.number_of_structures_on_fire) || 'Unknown'}`;
 
       // Send notifications to all responders using responder_notifications table
       const notificationPromises = responders.map(async (responder) => {
@@ -1148,9 +1166,12 @@ const Sdashboard = () => {
                   {selectedAssignedReport.structure && (
                     <p><strong>Structure:</strong> {selectedAssignedReport.structure}{selectedAssignedReport.structure_confidence ? ` (${selectedAssignedReport.structure_confidence})` : ''}</p>
                   )}
-                  {selectedAssignedReport.number_of_structures_on_fire != null && (
-                    <p><strong>Structures Affected:</strong> {selectedAssignedReport.number_of_structures_on_fire} structure(s)</p>
-                  )}
+                  {(() => {
+                    const structures = cleanStructuresValue(selectedAssignedReport.number_of_structures_on_fire || selectedAssignedReport.structures_affected);
+                    return structures != null ? (
+                      <p><strong>Structures Affected:</strong> {structures} structure(s)</p>
+                    ) : null;
+                  })()}
                   <p><strong>Location:</strong> {selectedAssignedReport.address || selectedAssignedReport.geotag_location || 'Not specified'}</p>
                   {(selectedAssignedReport.formatted_timestamp || selectedAssignedReport.timestamp) && (
                     <p><strong>Reported:</strong> {selectedAssignedReport.formatted_timestamp || selectedAssignedReport.timestamp}</p>
@@ -1258,54 +1279,6 @@ const Sdashboard = () => {
         </GoogleMap>
       )}
       
-      {/* Sound enable prompt (shown only if browser blocked autoplay) */}
-      {showSoundPrompt && (
-        <div className="absolute top-4 right-4 z-30 space-x-2 flex items-center">
-          <button
-            onClick={async () => {
-              try {
-                if (audioContextRef.current && audioContextRef.current.state === 'suspended') {
-                  await audioContextRef.current.resume();
-                }
-                if (audioRef.current) {
-                  try { audioRef.current.muted = false; } catch (_) {}
-                  try { audioRef.current.load(); } catch (_) {}
-                  const isLooping = !!audioRef.current.loop && audioRef.current.paused === false;
-                  if (!isLooping) {
-                    audioRef.current.currentTime = 0;
-                    audioRef.current.volume = 1.0;
-                    await audioRef.current.play();
-                    setTimeout(() => { try { audioRef.current && audioRef.current.pause(); } catch (_) {} }, 1200);
-                  }
-                }
-                setShowSoundPrompt(false);
-                pendingAlertRef.current = false;
-                try { localStorage.setItem('stationAudioEnabled', 'true'); } catch (_) {}
-              } catch (err) {
-                console.warn('❌ Station: Explicit audio enable failed', err);
-              }
-            }}
-            className="px-3 py-2 bg-red-600 text-white rounded shadow hover:bg-red-700 text-sm"
-          >
-            Enable alert sound
-          </button>
-          <button
-            onClick={async () => {
-              try {
-                if (audioContextRef.current && audioContextRef.current.state === 'suspended') {
-                  await audioContextRef.current.resume();
-                }
-                await startAlarmLoop();
-              } catch (_) {}
-            }}
-            className="px-3 py-2 bg-gray-100 text-gray-800 rounded shadow hover:bg-gray-200 text-sm"
-          >
-            Test alarm
-          </button>
-          <p className="mt-1 text-xs text-gray-700 bg-white/80 rounded px-2 py-1">Click once to allow sound; required by your browser.</p>
-        </div>
-      )}
-
       {/* (Bell moved to top-right StationLayout) */}
 
       {/* Loading Overlay */}

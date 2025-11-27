@@ -7,7 +7,7 @@ import { supabase } from '../../../config/supabase';
 import { useAuth } from '../../../config/AuthContext';
 import { GOOGLE_MAPS_API_KEY, MAP_CONFIG, DIRECTIONS_API } from '../../../config/map';
 
-export default function RMap() {
+export default function RMap({ routingInfo }) {
   const { userData } = useAuth();
   const [location, setLocation] = useState(null);
   const [errorMsg, setErrorMsg] = useState(null);
@@ -23,6 +23,7 @@ export default function RMap() {
   const [isCalculatingRoute, setIsCalculatingRoute] = useState(false);
   const [routeInfo, setRouteInfo] = useState(null); // { duration, distance, status }
   const [isGettingLocation, setIsGettingLocation] = useState(false);
+  const [allRoutes, setAllRoutes] = useState([]); // Array of { reportId, coordinates, routeInfo, color }
 
   // Helper functions
   const getAlarmLevelColor = (alarmLevel) => {
@@ -365,6 +366,177 @@ export default function RMap() {
     return points;
   };
 
+  // Calculate routes for all assigned reports
+  const calculateRoutesForAllAssignments = async (reports, currentLocation) => {
+    if (!currentLocation?.coords || !reports || reports.length === 0) {
+      console.log('⚠️ Cannot calculate routes: missing location or reports');
+      return [];
+    }
+
+    console.log(`🗺️ Calculating routes for ${reports.length} assignments...`);
+    
+    const routeColors = [
+      '#3b82f6', // blue
+      '#ef4444', // red  
+      '#10b981', // green
+      '#f59e0b', // amber
+      '#8b5cf6', // purple
+      '#ec4899', // pink
+      '#06b6d4', // cyan
+      '#f97316', // orange
+    ];
+
+    const calculatedRoutes = [];
+
+    for (let i = 0; i < reports.length; i++) {
+      const report = reports[i];
+      const lat = parseFloat(report.latitude);
+      const lng = parseFloat(report.longitude);
+
+      if (isNaN(lat) || isNaN(lng)) {
+        console.log(`⚠️ Invalid coordinates for report ${report.id}, skipping route calculation`);
+        continue;
+      }
+
+      console.log(`🔄 Calculating route ${i + 1}/${reports.length} for report ${report.id}...`);
+
+      try {
+        const origin = `${currentLocation.coords.latitude},${currentLocation.coords.longitude}`;
+        const destination = `${lat},${lng}`;
+        
+        const directionsUrl = `${DIRECTIONS_API.BASE_URL}?origin=${origin}&destination=${destination}&mode=${DIRECTIONS_API.TRAVEL_MODE}&avoid=${DIRECTIONS_API.AVOID}&departure_time=now&traffic_model=best_guess&alternatives=false&key=${GOOGLE_MAPS_API_KEY}`;
+        
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 15000); // Increased to 15 seconds
+        
+        const response = await fetch(directionsUrl, {
+          signal: controller.signal,
+          headers: {
+            'Accept': 'application/json',
+            'Content-Type': 'application/json',
+          }
+        }).catch(fetchError => {
+          clearTimeout(timeoutId);
+          if (fetchError.name === 'AbortError') {
+            console.log(`⏱️ Route request timed out for report ${report.id}, using fallback`);
+          }
+          throw fetchError;
+        });
+        
+        clearTimeout(timeoutId);
+
+        if (response.ok) {
+          const data = await response.json();
+          
+          if (data.status === 'OK' && data.routes && data.routes.length > 0) {
+            const route = data.routes[0];
+            const leg = route.legs[0];
+            const points = route.overview_polyline.points;
+            const decodedPoints = decodePolyline(points);
+
+            calculatedRoutes.push({
+              reportId: report.id,
+              coordinates: decodedPoints,
+              routeInfo: {
+                status: 'success',
+                duration: leg?.duration?.text || 'Unknown',
+                durationValue: leg?.duration?.value || 0,
+                distance: leg?.distance?.text || 'Unknown',
+                distanceValue: leg?.distance?.value || 0,
+                durationInTraffic: leg?.duration_in_traffic?.text || null,
+              },
+              color: routeColors[i % routeColors.length],
+              reportLocation: report.address || report.geotag_location || 'Unknown location'
+            });
+
+            console.log(`✅ Route ${i + 1} calculated: ${leg?.distance?.text} - ${leg?.duration?.text}`);
+          } else {
+            // Create straight line fallback for this report
+            console.log(`⚠️ No Google route for report ${report.id}, using straight line`);
+            const straightLine = [
+              { latitude: currentLocation.coords.latitude, longitude: currentLocation.coords.longitude },
+              { latitude: lat, longitude: lng }
+            ];
+            
+            const distance = calculateDistance(
+              currentLocation.coords.latitude,
+              currentLocation.coords.longitude,
+              lat,
+              lng
+            );
+
+            calculatedRoutes.push({
+              reportId: report.id,
+              coordinates: straightLine,
+              routeInfo: {
+                status: 'fallback',
+                duration: 'Est. ' + Math.round(distance / 40 * 60) + ' min',
+                distance: distance.toFixed(1) + ' km',
+                isStraightLine: true
+              },
+              color: routeColors[i % routeColors.length],
+              reportLocation: report.address || report.geotag_location || 'Unknown location'
+            });
+          }
+        }
+      } catch (error) {
+        // Log based on error type - don't show error for timeouts
+        if (error.name === 'AbortError') {
+          console.log(`⏱️ Route calculation timed out for report ${report.id}, using estimated route`);
+        } else {
+          console.log(`⚠️ Route calculation failed for report ${report.id}: ${error.message || error}`);
+        }
+        
+        // Create straight line fallback
+        const straightLine = [
+          { latitude: currentLocation.coords.latitude, longitude: currentLocation.coords.longitude },
+          { latitude: lat, longitude: lng }
+        ];
+        
+        const distance = calculateDistance(
+          currentLocation.coords.latitude,
+          currentLocation.coords.longitude,
+          lat,
+          lng
+        );
+
+        calculatedRoutes.push({
+          reportId: report.id,
+          coordinates: straightLine,
+          routeInfo: {
+            status: 'fallback',
+            duration: 'Est. ' + Math.round(distance / 40 * 60) + ' min',
+            distance: distance.toFixed(1) + ' km',
+            isStraightLine: true
+          },
+          color: routeColors[i % routeColors.length],
+          reportLocation: report.address || report.geotag_location || 'Unknown location'
+        });
+      }
+
+      // Small delay between requests to avoid rate limiting
+      if (i < reports.length - 1) {
+        await new Promise(resolve => setTimeout(resolve, 300));
+      }
+    }
+
+    console.log(`✅ Calculated ${calculatedRoutes.length} routes out of ${reports.length} reports`);
+    return calculatedRoutes;
+  };
+
+  // Helper function to calculate distance between two coordinates (in km)
+  const calculateDistance = (lat1, lon1, lat2, lon2) => {
+    const R = 6371; // Earth's radius in km
+    const dLat = (lat2 - lat1) * Math.PI / 180;
+    const dLon = (lon2 - lon1) * Math.PI / 180;
+    const a = 
+      Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+      Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+      Math.sin(dLon / 2) * Math.sin(dLon / 2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    return R * c;
+  };
+
   // Function to get current location with retries
   const getCurrentLocationWithRetry = async (maxRetries = 3) => {
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
@@ -634,28 +806,28 @@ export default function RMap() {
     }
   };
 
-  // Fetch assigned fire reports from report_assignments table (station-assigned only)
+  // Fetch assigned fire reports from responder_notifications table (station-assigned only)
   const fetchAssignedReports = async () => {
     if (!userData?.id) return;
 
     try {
       console.log('🔍 Fetching station-assigned reports for responder:', userData.id);
       
-      // Get assignments from report_assignments table where responder is assigned
-      const { data: assignments, error: assignmentError } = await supabase
-        .from('report_assignments')
-        .select('report_id, assigned_at')
-        .eq('assignee_type', 'responder')
-        .eq('assignee_id', userData.id)
-        .order('assigned_at', { ascending: false }); // Get latest first
+      // Get assignments from responder_notifications table where status is pending or accepted
+      const { data: notifications, error: notificationError } = await supabase
+        .from('responder_notifications')
+        .select('fire_report_id, created_at')
+        .eq('responder_id', userData.id)
+        .in('status', ['pending', 'accepted'])
+        .order('created_at', { ascending: false }); // Get latest first
 
-      if (assignmentError) {
-        console.error('Error fetching assignments:', assignmentError);
+      if (notificationError) {
+        console.error('Error fetching notifications:', notificationError);
         return;
       }
 
-      if (!assignments || assignments.length === 0) {
-        console.log('No station assignments found for this responder');
+      if (!notifications || notifications.length === 0) {
+        console.log('No active assignments found for this responder');
         setAssignedReports([]);
         setAcceptedAssignment(null);
         setRouteCoordinates([]);
@@ -663,8 +835,8 @@ export default function RMap() {
         return;
       }
 
-      const reportIds = assignments.map(a => a.report_id).filter(Boolean);
-      console.log('📋 Fire report IDs from assignments:', reportIds);
+      const reportIds = notifications.map(n => n.fire_report_id).filter(Boolean);
+      console.log('📋 Fire report IDs from notifications:', reportIds);
 
       if (reportIds.length === 0) {
         setAssignedReports([]);
@@ -681,16 +853,17 @@ export default function RMap() {
       const allReports = await response.json();
       console.log('🔥 All reports from API:', allReports);
       
-      // Filter reports: must be assigned, have coordinates, and NOT be "Fire Out"
+      // Filter reports: must be assigned, have coordinates, and NOT be "Fire Out" or "Under Control"
       const assignedFireReports = allReports.filter(report => {
         const isAssigned = reportIds.includes(String(report.id));
         const hasCoordinates = report.latitude && report.longitude;
-        const isNotFireOut = report.status?.toLowerCase() !== 'fire out';
+        const status = report.status?.toLowerCase();
+        const isActiveStatus = status !== 'fire out' && status !== 'under control';
         
-        return isAssigned && hasCoordinates && isNotFireOut;
+        return isAssigned && hasCoordinates && isActiveStatus;
       }).map(report => {
-        // Find the assignment to get assigned_at timestamp
-        const assignment = assignments.find(a => a.report_id === String(report.id));
+        // Find the notification to get created_at timestamp
+        const notification = notifications.find(n => n.fire_report_id === String(report.id));
         
         // Log the report data
         console.log('📋 Report data for ID', report.id, ':', report);
@@ -705,7 +878,7 @@ export default function RMap() {
         
         return {
           ...report,
-          assigned_at: assignment?.assigned_at || new Date().toISOString(),
+          assigned_at: notification?.created_at || new Date().toISOString(),
           // Add cause from report
           cause: report.cause || 
                  report.possible_cause || 
@@ -726,51 +899,70 @@ export default function RMap() {
       console.log('📅 Reports sorted by assignment date (latest first)');
       setAssignedReports(assignedFireReports);
 
-      // Automatically show route for the LATEST assigned report (first in sorted array)
-      const latestAssignedReport = assignedFireReports.length > 0 ? assignedFireReports[0] : null;
-      
-      if (latestAssignedReport) {
-        console.log('🗺️ Latest assigned report found:', latestAssignedReport.id);
-        console.log('📍 Report status:', latestAssignedReport.status);
-        console.log('📍 Report coordinates:', latestAssignedReport.latitude, latestAssignedReport.longitude);
-        
-        // Only show route if status is NOT "Fire Out"
-        const reportStatus = (latestAssignedReport.status || '').toLowerCase();
-        if (reportStatus !== 'fire out') {
-          setAcceptedAssignment(latestAssignedReport);
-          
-          // Calculate route if location is available
-          if (location?.coords) {
-            console.log('🗺️ Calculating route to latest assigned report...');
-            const lat = parseFloat(latestAssignedReport.latitude);
-            const lng = parseFloat(latestAssignedReport.longitude);
-            
-            if (!isNaN(lat) && !isNaN(lng)) {
-              await calculateRoute(lat, lng, location);
-              
-              // Center map on the route
-              const routeRegion = {
-                latitude: (location.coords.latitude + lat) / 2,
-                longitude: (location.coords.longitude + lng) / 2,
-                latitudeDelta: Math.abs(location.coords.latitude - lat) * 1.5 + 0.01,
-                longitudeDelta: Math.abs(location.coords.longitude - lng) * 1.5 + 0.01,
-              };
-              setRegion(routeRegion);
-            }
-          } else {
-            console.log('⚠️ Location not available yet, route will be calculated when location is ready');
-          }
-        } else {
-          console.log('⚠️ Latest report is "Fire Out", not showing route');
+      // Check if currently displayed acceptedAssignment is still in the assignments list
+      if (acceptedAssignment) {
+        const stillAssigned = assignedFireReports.some(report => String(report.id) === String(acceptedAssignment.id));
+        if (!stillAssigned) {
+          console.log('⚠️ Current accepted assignment is no longer assigned, clearing routes...');
           setAcceptedAssignment(null);
           setRouteCoordinates([]);
           setRouteInfo(null);
+          setAllRoutes([]);
+          return; // Exit early, don't try to set new routes
         }
+      }
+
+      // Calculate routes for ALL assigned reports
+      if (assignedFireReports.length > 0 && location?.coords) {
+        console.log('🗺️ Calculating routes for all assigned reports...');
+        const routes = await calculateRoutesForAllAssignments(assignedFireReports, location);
+        setAllRoutes(routes);
+
+        // Set the latest report as the accepted assignment for display
+        const latestAssignedReport = assignedFireReports[0];
+        setAcceptedAssignment(latestAssignedReport);
+
+        // Set main route info from the latest assignment
+        const latestRoute = routes.find(r => String(r.reportId) === String(latestAssignedReport.id));
+        if (latestRoute) {
+          setRouteCoordinates(latestRoute.coordinates);
+          setRouteInfo(latestRoute.routeInfo);
+
+          // Center map to show all routes
+          if (routes.length > 0) {
+            const allCoords = routes.flatMap(r => r.coordinates);
+            const lats = allCoords.map(c => c.latitude);
+            const lngs = allCoords.map(c => c.longitude);
+            
+            const minLat = Math.min(...lats);
+            const maxLat = Math.max(...lats);
+            const minLng = Math.min(...lngs);
+            const maxLng = Math.max(...lngs);
+
+            const centerLat = (minLat + maxLat) / 2;
+            const centerLng = (minLng + maxLng) / 2;
+            const latDelta = (maxLat - minLat) * 1.3 + 0.01;
+            const lngDelta = (maxLng - minLng) * 1.3 + 0.01;
+
+            setRegion({
+              latitude: centerLat,
+              longitude: centerLng,
+              latitudeDelta: Math.max(latDelta, 0.02),
+              longitudeDelta: Math.max(lngDelta, 0.02),
+            });
+
+            console.log('✅ Map centered to show all routes');
+          }
+        }
+      } else if (assignedFireReports.length > 0) {
+        console.log('⚠️ Location not available yet, routes will be calculated when location is ready');
+        setAcceptedAssignment(assignedFireReports[0]);
       } else {
         console.log('⚠️ No assigned reports found');
         setAcceptedAssignment(null);
         setRouteCoordinates([]);
         setRouteInfo(null);
+        setAllRoutes([]);
       }
 
     } catch (error) {
@@ -890,27 +1082,27 @@ export default function RMap() {
     }
   }, [userData?.id, userData?.stationId, userData?.station_id]);
 
-  // Recalculate route when location becomes available and there's an assigned report
+  // Recalculate routes when location becomes available and there are assigned reports
   useEffect(() => {
-    if (location?.coords && acceptedAssignment && !routeCoordinates.length) {
-      const lat = parseFloat(acceptedAssignment.latitude);
-      const lng = parseFloat(acceptedAssignment.longitude);
-      
-      if (!isNaN(lat) && !isNaN(lng)) {
-        console.log('🗺️ Location available, recalculating route to assigned report...');
-        calculateRoute(lat, lng, location).then(() => {
-          // Center map on the route
-          const routeRegion = {
-            latitude: (location.coords.latitude + lat) / 2,
-            longitude: (location.coords.longitude + lng) / 2,
-            latitudeDelta: Math.abs(location.coords.latitude - lat) * 1.5 + 0.01,
-            longitudeDelta: Math.abs(location.coords.longitude - lng) * 1.5 + 0.01,
-          };
-          setRegion(routeRegion);
-        });
-      }
+    if (location?.coords && assignedReports.length > 0 && allRoutes.length === 0) {
+      console.log('🗺️ Location available, calculating routes for all assigned reports...');
+      (async () => {
+        const routes = await calculateRoutesForAllAssignments(assignedReports, location);
+        setAllRoutes(routes);
+        
+        // Set the first report as accepted assignment
+        if (assignedReports.length > 0) {
+          setAcceptedAssignment(assignedReports[0]);
+          
+          const firstRoute = routes.find(r => String(r.reportId) === String(assignedReports[0].id));
+          if (firstRoute) {
+            setRouteCoordinates(firstRoute.coordinates);
+            setRouteInfo(firstRoute.routeInfo);
+          }
+        }
+      })();
     }
-  }, [location, acceptedAssignment]);
+  }, [location, assignedReports, allRoutes.length]);
 
   // Real-time subscription for new assignments and status changes
   useEffect(() => {
@@ -937,6 +1129,22 @@ export default function RMap() {
         filter: `assignee_type=eq.responder&assignee_id=eq.${userData.id}`
       }, (payload) => {
         console.log('🗑️ Assignment removed:', payload.old);
+        
+        // Remove the route for the deleted assignment
+        if (payload.old?.report_id) {
+          setAllRoutes(prevRoutes => 
+            prevRoutes.filter(route => String(route.reportId) !== String(payload.old.report_id))
+          );
+          
+          // If it's the currently displayed assignment, clear it
+          if (acceptedAssignment && String(payload.old.report_id) === String(acceptedAssignment.id)) {
+            console.log('⚠️ Currently displayed assignment was removed, clearing...');
+            setAcceptedAssignment(null);
+            setRouteCoordinates([]);
+            setRouteInfo(null);
+          }
+        }
+        
         // Refresh assigned reports when assignment is removed
         fetchAssignedReports();
       })
@@ -949,7 +1157,7 @@ export default function RMap() {
     };
   }, [userData?.id]);
 
-  // Poll for report status changes (check if assigned report becomes "Fire Out")
+  // Poll for report status changes (check if assigned report becomes "Fire Out" or "Under Control")
   useEffect(() => {
     if (!acceptedAssignment) return;
 
@@ -965,11 +1173,12 @@ export default function RMap() {
 
         if (currentReport) {
           const reportStatus = (currentReport.status || '').toLowerCase();
-          if (reportStatus === 'fire out') {
-            console.log('🔥 Assigned report is now "Fire Out", clearing route...');
+          if (reportStatus === 'fire out' || reportStatus === 'under control') {
+            console.log(`🔥 Assigned report is now "${currentReport.status}", clearing routes...`);
             setAcceptedAssignment(null);
             setRouteCoordinates([]);
             setRouteInfo(null);
+            setAllRoutes([]);
             // Refresh to get updated list
             fetchAssignedReports();
           }
@@ -984,6 +1193,116 @@ export default function RMap() {
     
     return () => clearInterval(statusInterval);
   }, [acceptedAssignment]);
+
+  // Handle routingInfo from RStatus when responder accepts assignment
+  useEffect(() => {
+    if (!routingInfo) return;
+
+    console.log('🎯 RoutingInfo received:', routingInfo);
+    
+    const handleRouting = async () => {
+      try {
+        const { fireReportId, location: fireLocation, destination } = routingInfo;
+        
+        console.log('🔍 Fetching fire report details for ID:', fireReportId);
+        console.log('📍 Fire location from notification:', fireLocation);
+        console.log('📍 Destination:', destination);
+
+        // Fetch the specific fire report from Railway API
+        const response = await fetch('https://fire-detection-api-production-f55b.up.railway.app/get_reports');
+        if (!response.ok) {
+          console.error('❌ Failed to fetch fire reports from API');
+          Alert.alert('Error', 'Failed to load fire report details');
+          return;
+        }
+
+        const allReports = await response.json();
+        const fireReport = Array.isArray(allReports) 
+          ? allReports.find(r => String(r.id) === String(fireReportId))
+          : null;
+
+        if (!fireReport) {
+          console.error('❌ Fire report not found:', fireReportId);
+          Alert.alert('Error', 'Fire report not found');
+          return;
+        }
+
+        console.log('✅ Fire report found:', fireReport);
+        console.log('📍 Report coordinates:', fireReport.latitude, fireReport.longitude);
+
+        const lat = parseFloat(fireReport.latitude);
+        const lng = parseFloat(fireReport.longitude);
+
+        if (isNaN(lat) || isNaN(lng)) {
+          console.error('❌ Invalid coordinates in fire report:', fireReport);
+          Alert.alert('Error', 'Invalid fire location coordinates');
+          return;
+        }
+
+        // Get current location if not already available
+        let currentLocation = location;
+        if (!currentLocation?.coords) {
+          console.log('📍 Getting current location for routing...');
+          setIsGettingLocation(true);
+          
+          try {
+            const loc = await Location.getCurrentPositionAsync({
+              accuracy: Location.Accuracy.Balanced,
+              maximumAge: 10000,
+              timeout: 5000,
+            });
+            
+            currentLocation = loc;
+            setLocation(loc);
+            console.log('✅ Current location obtained:', loc.coords);
+          } catch (locError) {
+            console.error('❌ Failed to get current location:', locError);
+            Alert.alert('Location Error', 'Unable to get your current location. Please enable location services.');
+            setIsGettingLocation(false);
+            return;
+          } finally {
+            setIsGettingLocation(false);
+          }
+        }
+
+        // Calculate route from current location to fire location
+        console.log('🗺️ Calculating route to fire location...');
+        const routeSuccess = await calculateRoute(lat, lng, currentLocation);
+
+        if (routeSuccess) {
+          // Set as accepted assignment to display on map
+          setAcceptedAssignment({
+            ...fireReport,
+            latitude: lat,
+            longitude: lng,
+          });
+
+          // Center map on the route
+          const midLat = (currentLocation.coords.latitude + lat) / 2;
+          const midLng = (currentLocation.coords.longitude + lng) / 2;
+          const latDelta = Math.abs(currentLocation.coords.latitude - lat) * 1.5 + 0.01;
+          const lngDelta = Math.abs(currentLocation.coords.longitude - lng) * 1.5 + 0.01;
+
+          setRegion({
+            latitude: midLat,
+            longitude: midLng,
+            latitudeDelta: latDelta,
+            longitudeDelta: lngDelta,
+          });
+
+          console.log('✅ Route displayed successfully');
+        } else {
+          console.error('❌ Route calculation failed');
+          Alert.alert('Routing Error', 'Unable to calculate route to fire location');
+        }
+      } catch (error) {
+        console.error('❌ Error handling routing info:', error);
+        Alert.alert('Error', 'Failed to process fire assignment routing');
+      }
+    };
+
+    handleRouting();
+  }, [routingInfo]);
 
   // Always render the map instantly; show a lightweight overlay while loading
 
@@ -1214,23 +1533,27 @@ export default function RMap() {
           />
         )}
 
-        {/* Route polyline for accepted assignment */}
-        {routeCoordinates.length > 0 && (
-          <>
+        {/* Route polylines for all assigned reports */}
+        {allRoutes.map((route, index) => (
+          <React.Fragment key={`route-${route.reportId}`}>
             {/* White outline for better visibility */}
             <Polyline
-              coordinates={routeCoordinates}
+              coordinates={route.coordinates}
               strokeColor="#ffffff"
-              strokeWidth={MAP_CONFIG.ROUTE_STROKE_WIDTH + 2}
+              strokeWidth={6}
+              lineDashPattern={route.routeInfo.isStraightLine ? [10, 10] : null}
+              zIndex={index * 2}
             />
-            {/* Main route line */}
+            {/* Colored route line */}
             <Polyline
-              coordinates={routeCoordinates}
-              strokeColor={MAP_CONFIG.ROUTE_STROKE_COLOR}
-              strokeWidth={MAP_CONFIG.ROUTE_STROKE_WIDTH}
+              coordinates={route.coordinates}
+              strokeColor={route.color}
+              strokeWidth={4}
+              lineDashPattern={route.routeInfo.isStraightLine ? [10, 10] : null}
+              zIndex={index * 2 + 1}
             />
-          </>
-        )}
+          </React.Fragment>
+        ))}
 
         {/* Assigned fire reports markers */}
         {assignedReports.map(report => {
@@ -1290,42 +1613,25 @@ export default function RMap() {
         })}
       </MapView>
 
-      {/* Route Information Panel - Only shown when route is active */}
-      {routeInfo && routeInfo.status !== 'calculating' && routeCoordinates.length > 0 && (
+      {/* Route Information Panel - Shows all active routes */}
+      {allRoutes.length > 0 && (
         <View style={styles.routeInfoPanel}>
           <View style={styles.routeInfoHeader}>
-            <View style={[styles.routeInfoIcon, { 
-              backgroundColor: routeInfo.status === 'success' ? '#10b981' : 
-                              routeInfo.status === 'fallback' ? '#f59e0b' : '#ef4444'
-            }]}>
-              <Text style={styles.routeInfoIconText}>
-                {routeInfo.status === 'success' ? '🗺️' : 
-                 routeInfo.status === 'fallback' ? '📏' : '❌'}
-              </Text>
+            <View style={[styles.routeInfoIcon, { backgroundColor: '#3b82f6' }]}>
+              <Text style={styles.routeInfoIconText}>🗺️</Text>
             </View>
             <View style={styles.routeInfoDetails}>
               <Text style={styles.routeInfoTitle}>
-                {routeInfo.status === 'success' ? 'Route to Fire Report' : 
-                 routeInfo.status === 'fallback' ? 'Estimated Route' : 'Route Error'}
+                {allRoutes.length} Active Route{allRoutes.length > 1 ? 's' : ''}
               </Text>
-              <View style={styles.routeInfoMetrics}>
-                <Text style={styles.routeInfoMetric}>
-                  🕒 {routeInfo.duration || 'Unknown'}
-                  {routeInfo.durationInTraffic && ` (${routeInfo.durationInTraffic} in traffic)`}
-                </Text>
-                <Text style={styles.routeInfoMetric}>
-                  📍 {routeInfo.distance || 'Unknown'}
-                </Text>
-              </View>
-              {routeInfo.isStraightLine && (
-                <Text style={styles.routeInfoWarning}>
-                  ⚠️ Straight-line estimate only
-                </Text>
-              )}
+              <Text style={styles.routeInfoMetric}>
+                📍 Tap markers to view details
+              </Text>
             </View>
             <TouchableOpacity
               style={styles.routeInfoClose}
               onPress={() => {
+                setAllRoutes([]);
                 setRouteCoordinates([]);
                 setRouteInfo(null);
                 setAcceptedAssignment(null);
@@ -1334,14 +1640,37 @@ export default function RMap() {
               <Ionicons name="close" size={18} color="#6b7280" />
             </TouchableOpacity>
           </View>
-          {routeInfo.message && (
-            <Text style={[styles.routeInfoMessage, {
-              color: routeInfo.status === 'success' ? '#10b981' : 
-                     routeInfo.status === 'fallback' ? '#f59e0b' : '#ef4444'
-            }]}>
-              {routeInfo.message}
-            </Text>
-          )}
+          <ScrollView style={{ maxHeight: 200 }} showsVerticalScrollIndicator={false}>
+            {allRoutes.map((route, index) => (
+              <View 
+                key={`route-info-${route.reportId}`}
+                style={{
+                  paddingVertical: 8,
+                  paddingHorizontal: 12,
+                  borderLeftWidth: 4,
+                  borderLeftColor: route.color,
+                  marginBottom: 8,
+                  backgroundColor: '#f9fafb',
+                  borderRadius: 6,
+                }}
+              >
+                <Text style={{ fontSize: 13, fontWeight: '600', color: '#374151', marginBottom: 4 }}>
+                  Route {index + 1}: {route.reportLocation}
+                </Text>
+                <View style={{ flexDirection: 'row', gap: 12 }}>
+                  <Text style={{ fontSize: 12, color: '#6b7280' }}>
+                    🕒 {route.routeInfo.duration}
+                  </Text>
+                  <Text style={{ fontSize: 12, color: '#6b7280' }}>
+                    📍 {route.routeInfo.distance}
+                  </Text>
+                  {route.routeInfo.isStraightLine && (
+                    <Text style={{ fontSize: 11, color: '#f59e0b' }}>⚠️ Est.</Text>
+                  )}
+                </View>
+              </View>
+            ))}
+          </ScrollView>
         </View>
       )}
 

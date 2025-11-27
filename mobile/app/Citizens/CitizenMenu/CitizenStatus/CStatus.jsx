@@ -4,6 +4,7 @@ import MapView, { Marker, PROVIDER_GOOGLE } from 'react-native-maps';
 import { MaterialIcons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
 import * as Location from 'expo-location';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useAuth } from '../../../config/AuthContext';
 import { supabase } from '../../../config/supabase';
 
@@ -44,6 +45,58 @@ const CStatus = () => {
     }
   }, [isAuthenticated, userData?.uid]);
 
+  // Check for Fire Out reports and show Thank You modal
+  const checkForFireOutReports = (reports) => {
+    if (!reports || reports.length === 0 || !modalKeysLoaded) return;
+    
+    // Find the most recent Fire Out report that hasn't been shown yet
+    const fireOutReport = reports.find(report => {
+      const status = (report.status || report.progress || '').toString();
+      const isFireOut = status === 'Fire Out';
+      const reportId = String(report.id || report._id);
+      const modalKey = `${reportId}:Fire Out`;
+      const alreadyShown = shownModalKeys.has(modalKey);
+      console.log(`🔍 Checking Fire Out: ${reportId}, status: ${status}, already shown: ${alreadyShown}`);
+      return isFireOut && !alreadyShown;
+    });
+    
+    if (fireOutReport) {
+      const reportId = String(fireOutReport.id || fireOutReport._id);
+      const modalKey = `${reportId}:Fire Out`;
+      setFireOutReport(fireOutReport);
+      setShowThankYouModal(true);
+      // Mark this report:status combination as shown
+      setShownModalKeys(prev => new Set([...prev, modalKey]));
+      console.log('🎊 Showing Fire Out modal for report:', reportId);
+    }
+  };
+
+  // Check for "Under Control" reports and show Acknowledgment modal
+  const checkForAcknowledgedReports = (reports) => {
+    if (!reports || reports.length === 0 || !modalKeysLoaded) return;
+    
+    // Find the most recent "Under Control" report that hasn't been shown yet
+    const acknowledgedReport = reports.find(report => {
+      const status = (report.status || report.progress || '').toString();
+      const isUnderControl = status === 'Under Control';
+      const reportId = String(report.id || report._id);
+      const modalKey = `${reportId}:Under Control`;
+      const alreadyShown = shownModalKeys.has(modalKey);
+      console.log(`🔍 Checking Under Control: ${reportId}, status: ${status}, already shown: ${alreadyShown}`);
+      return isUnderControl && !alreadyShown;
+    });
+    
+    if (acknowledgedReport) {
+      const reportId = String(acknowledgedReport.id || acknowledgedReport._id);
+      const modalKey = `${reportId}:Under Control`;
+      setAcknowledgedReport(acknowledgedReport);
+      setShowAcknowledgmentModal(true);
+      // Mark this report:status combination as shown
+      setShownModalKeys(prev => new Set([...prev, modalKey]));
+      console.log('🎉 Showing Acknowledgment modal for report:', reportId);
+    }
+  };
+
   // Load reports when user is available
   useEffect(() => {
     if (currentUser?.uid) {
@@ -57,6 +110,226 @@ const CStatus = () => {
       setIsLoading(false);
     }
   }, [currentUser?.uid]);
+
+  // Real-time listener for status changes - DUAL APPROACH for reliability
+  useEffect(() => {
+    if (!currentUser?.uid) return;
+
+    console.log('📡 Setting up DUAL real-time listeners for user:', currentUser.uid);
+    
+    // Approach 1: Listen to notifications table
+    const notifChannel = supabase
+      .channel(`citizen-notifications:${currentUser.uid}`)
+      .on('postgres_changes', {
+        event: 'INSERT',
+        schema: 'public',
+        table: 'notifications',
+        filter: `user_id=eq.${currentUser.uid}`
+      }, async (payload) => {
+        const notification = payload.new;
+        console.log('📱 NEW NOTIFICATION RECEIVED:', {
+          title: notification.title,
+          type: notification.type,
+          user_type: notification.user_type,
+          related_report_id: notification.related_report_id,
+          message: notification.message
+        });
+        
+        // Check if this is a status change notification (check both title and type)
+        const isAcknowledgment = notification.title && (
+          notification.title.includes('Acknowledged') || 
+          notification.title.includes('Under Control')
+        );
+        const isFireOut = notification.title && (
+          notification.title.includes('Resolved') ||
+          notification.title.includes('Fire Out')
+        );
+        const isStatusChange = notification.type === 'status_change';
+        
+        if ((isAcknowledgment || isFireOut || isStatusChange) && notification.related_report_id) {
+          console.log('✅ STATUS CHANGE DETECTED for report:', notification.related_report_id);
+          
+          // Fetch the updated report from API
+          try {
+            console.log('🔄 Fetching updated report from API...');
+            const response = await fetch('https://fire-detection-api-production-f55b.up.railway.app/get_reports', {
+              headers: { 'Accept': 'application/json' }
+            });
+            
+            if (response.ok) {
+              const allReports = await response.json();
+              const updatedReport = allReports.find(r => String(r.id) === String(notification.related_report_id));
+              
+              if (updatedReport) {
+                console.log('✅ Found updated report:', {
+                  id: updatedReport.id,
+                  status: updatedReport.status,
+                  user_id: updatedReport.user_id,
+                  currentUserId: currentUser.uid
+                });
+                
+                // Check if this report belongs to current user
+                if (updatedReport.user_id === currentUser.uid) {
+                  const newStatus = updatedReport.status || updatedReport.progress;
+                  console.log('💫 Updating local state with new status:', newStatus);
+                  
+                  // Update local state immediately
+                  setYourReports(prev => {
+                    const updated = prev.map(report => 
+                      String(report.id) === String(updatedReport.id) 
+                        ? { ...report, status: newStatus, progress: newStatus, ...updatedReport }
+                        : report
+                    );
+                    
+                    // If report not found, add it
+                    if (!updated.find(r => String(r.id) === String(updatedReport.id))) {
+                      updated.unshift(updatedReport);
+                    }
+                    
+                    console.log('✅ Local state updated');
+                    return updated;
+                  });
+                  
+                  // Update all reports list too
+                  setAllReports(prev => {
+                    const updated = prev.map(report => 
+                      String(report.id) === String(updatedReport.id) 
+                        ? { ...report, status: newStatus, progress: newStatus, ...updatedReport }
+                        : report
+                    );
+                    return updated;
+                  });
+                  
+                  // Show appropriate modal based on status
+                  const reportId = String(updatedReport.id);
+                  
+                  if (newStatus === 'Under Control') {
+                    const modalKey = `${reportId}:Under Control`;
+                    console.log('🎯 Checking modal key:', modalKey, 'Already shown?', shownModalKeys.has(modalKey));
+                    
+                    if (!shownModalKeys.has(modalKey)) {
+                      console.log('🎉 SHOWING ACKNOWLEDGMENT MODAL NOW!');
+                      setAcknowledgedReport(updatedReport);
+                      setShowAcknowledgmentModal(true);
+                      setShownModalKeys(prev => new Set([...prev, modalKey]));
+                    }
+                  } else if (newStatus === 'Fire Out') {
+                    const modalKey = `${reportId}:Fire Out`;
+                    console.log('🎯 Checking modal key:', modalKey, 'Already shown?', shownModalKeys.has(modalKey));
+                    
+                    if (!shownModalKeys.has(modalKey)) {
+                      console.log('🎊 SHOWING FIRE OUT MODAL NOW!');
+                      setFireOutReport(updatedReport);
+                      setShowThankYouModal(true);
+                      setShownModalKeys(prev => new Set([...prev, modalKey]));
+                    }
+                  }
+                } else {
+                  console.log('⚠️ Report does not belong to current user');
+                }
+              } else {
+                console.log('⚠️ Report not found in API response');
+              }
+            } else {
+              console.error('❌ API response not OK:', response.status);
+            }
+          } catch (error) {
+            console.error('❌ Error fetching updated report:', error);
+          }
+        } else {
+          console.log('ℹ️ Not a status change notification');
+        }
+      })
+      .subscribe((status) => {
+        console.log('📡 Notification channel status:', status);
+      });
+
+    // Approach 2: Periodic polling as fallback (every 5 seconds)
+    console.log('⏰ Setting up polling fallback (5s interval)');
+    let lastCheckTime = Date.now();
+    
+    const pollInterval = setInterval(async () => {
+      try {
+        // Check for new notifications since last check
+        const { data: newNotifications } = await supabase
+          .from('notifications')
+          .select('*')
+          .eq('user_id', currentUser.uid)
+          .eq('user_type', 'citizen')
+          .eq('type', 'status_change')
+          .gt('created_at', new Date(lastCheckTime).toISOString())
+          .order('created_at', { ascending: false })
+          .limit(5);
+        
+        if (newNotifications && newNotifications.length > 0) {
+          console.log('🔄 Polling found new notifications:', newNotifications.length);
+          lastCheckTime = Date.now();
+          
+          // Process each new notification
+          for (const notification of newNotifications) {
+            if (notification.related_report_id) {
+              console.log('⚡ Processing polled notification for report:', notification.related_report_id);
+              
+              // Fetch updated report
+              const response = await fetch('https://fire-detection-api-production-f55b.up.railway.app/get_reports');
+              if (response.ok) {
+                const allReports = await response.json();
+                const updatedReport = allReports.find(r => String(r.id) === String(notification.related_report_id));
+                
+                if (updatedReport && updatedReport.user_id === currentUser.uid) {
+                  const newStatus = updatedReport.status || updatedReport.progress;
+                  
+                  // Update local state
+                  setYourReports(prev => {
+                    const updated = prev.map(report => 
+                      String(report.id) === String(updatedReport.id) 
+                        ? { ...report, status: newStatus, progress: newStatus, ...updatedReport }
+                        : report
+                    );
+                    
+                    if (!updated.find(r => String(r.id) === String(updatedReport.id))) {
+                      updated.unshift(updatedReport);
+                    }
+                    
+                    return updated;
+                  });
+                  
+                  // Show modal
+                  const reportId = String(updatedReport.id);
+                  
+                  if (newStatus === 'Under Control') {
+                    const modalKey = `${reportId}:Under Control`;
+                    if (!shownModalKeys.has(modalKey)) {
+                      console.log('🎉 SHOWING ACKNOWLEDGMENT MODAL (via polling)');
+                      setAcknowledgedReport(updatedReport);
+                      setShowAcknowledgmentModal(true);
+                      setShownModalKeys(prev => new Set([...prev, modalKey]));
+                    }
+                  } else if (newStatus === 'Fire Out') {
+                    const modalKey = `${reportId}:Fire Out`;
+                    if (!shownModalKeys.has(modalKey)) {
+                      console.log('🎊 SHOWING FIRE OUT MODAL (via polling)');
+                      setFireOutReport(updatedReport);
+                      setShowThankYouModal(true);
+                      setShownModalKeys(prev => new Set([...prev, modalKey]));
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      } catch (pollError) {
+        console.error('❌ Polling error:', pollError);
+      }
+    }, 5000); // Poll every 5 seconds
+
+    return () => {
+      console.log('🔌 Unsubscribing from real-time channels and stopping polling');
+      notifChannel.unsubscribe();
+      clearInterval(pollInterval);
+    };
+  }, [currentUser?.uid, shownModalKeys]);
 
   const loadReportsFromAPI = async (retryCount = 0) => {
     if (!currentUser?.uid) {
@@ -113,12 +386,11 @@ const CStatus = () => {
           return reporterId !== currentUser.uid;
         });
         
-        // Exclude cancelled and fire out to match admin and map
+        // Only exclude cancelled reports - keep Fire Out so citizens can see resolution
         const isActiveReport = (r) => {
           const statusText = (r.status || r.progress || '').toString().toLowerCase();
           const isCancelled = statusText.includes('cancelled') || statusText.includes('canceled');
-          const isFireOut = statusText.includes('fire out');
-          return !isCancelled && !isFireOut;
+          return !isCancelled;
         };
 
         const userReports = userReportsRaw.filter(isActiveReport);
@@ -177,13 +449,23 @@ const CStatus = () => {
           enrichAddresses(otherReports, 6),
         ]);
 
-        setYourReports(enrichedUser);
-        setNearbyReports(enrichedOther);
+        // Sort reports by date (most recent first) before setting state
+        const sortedUserReports = sortReportsByDate(enrichedUser);
+        const sortedOtherReports = sortReportsByDate(enrichedOther);
+        
+        setYourReports(sortedUserReports);
+        setNearbyReports(sortedOtherReports);
         
         // TEMPORARY: Store all active reports for debugging
         const allActiveReports = data.filter(isActiveReport);
-        setAllReports(allActiveReports);
+        setAllReports(sortReportsByDate(allActiveReports));
         console.log('All active reports stored:', allActiveReports.length);
+        
+        // Check for Fire Out reports to show Thank You modal
+        checkForFireOutReports(sortedUserReports);
+        
+        // Check for acknowledged (Under Control) reports to show Acknowledgment modal
+        checkForAcknowledgedReports(sortedUserReports);
       } else {
         throw new Error(`API returned status: ${response.status}`);
       }
@@ -208,6 +490,77 @@ const CStatus = () => {
       const useLoadingUI = !showEmergencyModal && !showLocationPicker && !showModal;
       if (useLoadingUI) setIsLoading(false);
     }
+  };
+
+  // Helper function to get timestamp value for sorting
+  const getTimestampValue = (report) => {
+    // Check all possible timestamp fields in order of preference
+    const timestamp = report.formatted_timestamp || report.created_at || report.timestamp || report.time;
+    
+    if (!timestamp) return 0;
+    
+    // Handle "Just now" case - treat as most recent
+    if (timestamp === 'Just now') {
+      return new Date().getTime();
+    }
+    
+    // Try to parse the timestamp with multiple strategies
+    try {
+      // Strategy 1: Direct Date constructor (handles ISO strings, standard formats)
+      const date = new Date(timestamp);
+      if (!isNaN(date.getTime())) {
+        return date.getTime();
+      }
+      
+      // Strategy 2: Handle readable formats like "October 2, 2025 5:30 pm"
+      if (typeof timestamp === 'string') {
+        const monthNames = {
+          'January': 0, 'February': 1, 'March': 2, 'April': 3, 'May': 4, 'June': 5,
+          'July': 6, 'August': 7, 'September': 8, 'October': 9, 'November': 10, 'December': 11
+        };
+        
+        // Match pattern: "Month Day, Year Hour:Minute am/pm"
+        const match = timestamp.match(/(\w+)\s+(\d+),\s+(\d{4})\s+(\d+):(\d+)\s+(am|pm)/i);
+        if (match) {
+          const [, monthName, day, year, hour, minute, ampm] = match;
+          const month = monthNames[monthName];
+          if (month !== undefined) {
+            let hour24 = parseInt(hour);
+            if (ampm.toLowerCase() === 'pm' && hour24 !== 12) {
+              hour24 += 12;
+            } else if (ampm.toLowerCase() === 'am' && hour24 === 12) {
+              hour24 = 0;
+            }
+            
+            const parsedDate = new Date(parseInt(year), month, parseInt(day), hour24, parseInt(minute));
+            if (!isNaN(parsedDate.getTime())) {
+              return parsedDate.getTime();
+            }
+          }
+        }
+        
+        // Strategy 3: Try parsing with Date.parse (handles more formats)
+        const parsed = Date.parse(timestamp);
+        if (!isNaN(parsed)) {
+          return parsed;
+        }
+      }
+    } catch (e) {
+      // Continue to fallback
+    }
+    
+    // If all parsing fails, return 0 (will be sorted to bottom)
+    return 0;
+  };
+
+  // Helper function to sort reports by timestamp (most recent first)
+  const sortReportsByDate = (reports) => {
+    return [...reports].sort((a, b) => {
+      const timestampA = getTimestampValue(a);
+      const timestampB = getTimestampValue(b);
+      // Sort in descending order (newest first) - larger timestamp values come first
+      return timestampB - timestampA;
+    });
   };
 
   const getProgressColor = (progress) => {
@@ -243,6 +596,54 @@ const CStatus = () => {
 
   const [showEmergencyModal, setShowEmergencyModal] = useState(false);
   const [showSuccessToast, setShowSuccessToast] = useState(false);
+  const [showThankYouModal, setShowThankYouModal] = useState(false);
+  const [fireOutReport, setFireOutReport] = useState(null);
+  
+  // Acknowledgment modal for "Under Control" status
+  const [showAcknowledgmentModal, setShowAcknowledgmentModal] = useState(false);
+  const [acknowledgedReport, setAcknowledgedReport] = useState(null);
+  
+  // Track shown modals by "reportId:status" to show once per status change
+  const [shownModalKeys, setShownModalKeys] = useState(new Set());
+  const [modalKeysLoaded, setModalKeysLoaded] = useState(false);
+  
+  // Load shown modal keys from AsyncStorage on mount
+  useEffect(() => {
+    const loadShownModals = async () => {
+      try {
+        const stored = await AsyncStorage.getItem('shownModalKeys');
+        if (stored) {
+          const parsed = JSON.parse(stored);
+          setShownModalKeys(new Set(parsed));
+          console.log('📦 Loaded shown modals from storage:', parsed.length, 'keys:', parsed);
+        } else {
+          console.log('📦 No stored modal keys found');
+        }
+      } catch (error) {
+        console.error('Error loading shown modals:', error);
+      } finally {
+        setModalKeysLoaded(true);
+      }
+    };
+    loadShownModals();
+  }, []);
+  
+  // Save shown modal keys to AsyncStorage whenever it changes
+  useEffect(() => {
+    const saveShownModals = async () => {
+      try {
+        const array = Array.from(shownModalKeys);
+        await AsyncStorage.setItem('shownModalKeys', JSON.stringify(array));
+        console.log('💾 Saved shown modals to storage:', array.length);
+      } catch (error) {
+        console.error('Error saving shown modals:', error);
+      }
+    };
+    if (shownModalKeys.size > 0) {
+      saveShownModals();
+    }
+  }, [shownModalKeys]);
+  
   const [emergencyData, setEmergencyData] = useState({
     cause: '',
     image: null,
@@ -470,22 +871,76 @@ const CStatus = () => {
 
       console.log('Submitting to API:', API_URL);
       
-      // Add timeout for submission as well
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 second timeout for upload
+      // Retry logic with exponential backoff (Railway API may be sleeping)
+      let response = null;
+      let data = null;
+      let lastError = null;
+      const maxRetries = 3;
       
-      const response = await fetch(API_URL, {
-        method: 'POST',
-        body: formData,
-        signal: controller.signal,
-      });
+      for (let attempt = 1; attempt <= maxRetries; attempt++) {
+        try {
+          console.log(`🔄 Attempt ${attempt}/${maxRetries} - Calling Fire Detection API...`);
+          
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => controller.abort(), 40000); // 40 second timeout
+          
+          response = await fetch(API_URL, {
+            method: 'POST',
+            body: formData,
+            signal: controller.signal,
+          });
 
-      clearTimeout(timeoutId);
-      const data = await response.json();
-      console.log('API response:', data);
+          clearTimeout(timeoutId);
+          
+          // If we got a response (even if error), try to parse it
+          if (response) {
+            try {
+              data = await response.json();
+              console.log('API response:', data);
+            } catch (parseError) {
+              console.log('Could not parse response as JSON');
+              data = null;
+            }
+            
+            // If response is OK, break out of retry loop
+            if (response.ok && data) {
+              console.log('✅ API call successful!');
+              break;
+            }
+            
+            // If 404 or 500 and we have retries left, wait and retry (API might be waking up)
+            if ((response.status === 404 || response.status === 500 || response.status === 503) && attempt < maxRetries) {
+              const waitTime = Math.min(1000 * Math.pow(2, attempt - 1), 5000); // Exponential backoff: 1s, 2s, 4s (max 5s)
+              console.log(`⏳ API returned ${response.status}, waiting ${waitTime}ms before retry...`);
+              await new Promise(resolve => setTimeout(resolve, waitTime));
+              continue; // Try again
+            }
+            
+            // For other errors or last attempt, throw
+            throw new Error(data?.error || `API returned status ${response.status}`);
+          }
+        } catch (error) {
+          lastError = error;
+          console.log(`❌ Attempt ${attempt} failed:`, error.message);
+          
+          // If this is not the last attempt and it's a network error, wait and retry
+          if (attempt < maxRetries && (error.message.includes('Network') || error.message.includes('Failed to fetch') || error.message.includes('aborted'))) {
+            const waitTime = Math.min(1000 * Math.pow(2, attempt - 1), 5000);
+            console.log(`⏳ Network error, waiting ${waitTime}ms before retry...`);
+            await new Promise(resolve => setTimeout(resolve, waitTime));
+            continue; // Try again
+          }
+          
+          // If this is the last attempt or a different error, break
+          if (attempt === maxRetries) {
+            throw new Error(`Failed after ${maxRetries} attempts: ${error.message}`);
+          }
+        }
+      }
       
-      if (!response.ok) {
-        throw new Error(data?.error || 'Failed to submit emergency');
+      // If we got here without valid data, throw error
+      if (!response || !response.ok || !data) {
+        throw new Error(lastError?.message || 'Failed to submit emergency after multiple attempts');
       }
 
       const newReport = {
@@ -590,8 +1045,8 @@ const CStatus = () => {
         // Don't fail the report submission if notification creation fails
       }
 
-      // Add to local state immediately for better UX
-      setYourReports(prevReports => [newReport, ...prevReports]);
+      // Add to local state immediately for better UX, then sort
+      setYourReports(prevReports => sortReportsByDate([newReport, ...prevReports]));
 
       setShowEmergencyModal(false);
       setShowLocationPicker(false);
@@ -608,11 +1063,33 @@ const CStatus = () => {
       
     } catch (err) {
       console.log('Submission error:', err);
+      
+      // Provide helpful error messages based on error type
+      let errorTitle = 'Error';
+      let errorMessage = 'Something went wrong while submitting the report';
+      
       if (err.name === 'AbortError') {
-        Alert.alert('Timeout', 'Submission is taking too long. Please check your internet connection.');
+        errorTitle = 'Request Timeout';
+        errorMessage = 'The submission is taking too long. The Fire Detection API might be starting up. Please try again in 30 seconds.';
+      } else if (err.message.includes('Network') || err.message.includes('Failed to fetch')) {
+        errorTitle = 'Network Error';
+        errorMessage = 'Cannot connect to the Fire Detection service. Please check your internet connection and try again.\n\nIf the problem persists, the API server may be sleeping (Railway free tier). Please wait 30 seconds and try again.';
+      } else if (err.message.includes('404')) {
+        errorTitle = 'Service Unavailable';
+        errorMessage = 'The Fire Detection API is currently unavailable (possibly sleeping). Please wait 30 seconds and try again.';
+      } else if (err.message.includes('500') || err.message.includes('503')) {
+        errorTitle = 'Server Error';
+        errorMessage = 'The Fire Detection service encountered an error. Please try again in a moment.';
+      } else if (err.message.includes('after 3 attempts')) {
+        errorTitle = 'Connection Failed';
+        errorMessage = 'Could not connect to Fire Detection service after multiple attempts. The service may be starting up. Please wait 1 minute and try again.';
       } else {
-        Alert.alert('Error', err?.message || 'Something went wrong while submitting the report');
+        errorMessage = err?.message || errorMessage;
       }
+      
+      Alert.alert(errorTitle, errorMessage, [
+        { text: 'OK', style: 'default' }
+      ]);
     } finally {
       setIsSubmitting(false);
     }
@@ -679,8 +1156,8 @@ const CStatus = () => {
     const displayTimestamp = report.formatted_timestamp || report.created_at || report.timestamp || 'Unknown time';
     const displayCause = report.cause || report.cause_of_fire || 'No cause specified';
     
-    // Determine progress based on prediction
-    const displayProgress = report.progress || 
+    // Determine progress - FIXED: Check 'status' field first (Railway API uses this), then 'progress' as fallback
+    const displayProgress = report.status || report.progress || 
                            (report.prediction === 'Fire' ? 'On Going' : 'Under Control') ||
                            'Unknown';
 
@@ -751,129 +1228,8 @@ const CStatus = () => {
     }
 
     // Sort reports by timestamp (most recent first)
-    const sortedReports = reports.sort((a, b) => {
-      // Helper function to get timestamp for sorting
-      const getTimestamp = (report) => {
-        // Check all possible timestamp fields in order of preference
-        const timestamp = report.formatted_timestamp || report.created_at || report.timestamp || report.time;
-        
-        // Debug logging
-        console.log('Sorting report ID:', report.id, 'timestamp fields:', {
-          formatted_timestamp: report.formatted_timestamp,
-          created_at: report.created_at,
-          timestamp: report.timestamp,
-          time: report.time,
-          selected: timestamp
-        });
-        
-        // Handle "Just now" case - treat as most recent
-        if (timestamp === 'Just now') {
-          console.log('Report ID', report.id, 'has "Just now" timestamp');
-          return new Date().getTime();
-        }
-        
-        // Try to parse the timestamp with multiple strategies
-        try {
-          let date;
-          
-          // Strategy 1: Direct Date constructor
-          date = new Date(timestamp);
-          if (!isNaN(date.getTime())) {
-            console.log('Report ID', report.id, 'parsed timestamp (direct):', date.toISOString(), 'milliseconds:', date.getTime());
-            return date.getTime();
-          }
-          
-          // Strategy 2: Handle readable formats like "October 2, 2025 5:30 pm"
-          if (typeof timestamp === 'string' && timestamp.includes('October')) {
-            // Try to parse readable date format
-            const parsedDate = new Date(timestamp);
-            if (!isNaN(parsedDate.getTime())) {
-              console.log('Report ID', report.id, 'parsed readable timestamp:', parsedDate.toISOString(), 'milliseconds:', parsedDate.getTime());
-              return parsedDate.getTime();
-            }
-            
-            // If direct parsing fails, manually parse the format
-            try {
-              // Parse "October 2, 2025 5:30 pm" format manually
-              const monthNames = {
-                'January': 0, 'February': 1, 'March': 2, 'April': 3, 'May': 4, 'June': 5,
-                'July': 6, 'August': 7, 'September': 8, 'October': 9, 'November': 10, 'December': 11
-              };
-              
-              // Match pattern: "October 2, 2025 5:30 pm"
-              const match = timestamp.match(/(\w+) (\d+), (\d{4}) (\d+):(\d+) (am|pm)/i);
-              if (match) {
-                const [, monthName, day, year, hour, minute, ampm] = match;
-                const month = monthNames[monthName];
-                if (month !== undefined) {
-                  let hour24 = parseInt(hour);
-                  if (ampm.toLowerCase() === 'pm' && hour24 !== 12) {
-                    hour24 += 12;
-                  } else if (ampm.toLowerCase() === 'am' && hour24 === 12) {
-                    hour24 = 0;
-                  }
-                  
-                  const date = new Date(parseInt(year), month, parseInt(day), hour24, parseInt(minute));
-                  if (!isNaN(date.getTime())) {
-                    console.log('Report ID', report.id, 'manually parsed timestamp:', date.toISOString(), 'milliseconds:', date.getTime());
-                    return date.getTime();
-                  }
-                }
-              }
-              
-              // Fallback: try to convert to a more standard format
-              let normalizedTimestamp = timestamp.replace(/(\d+:\d+)\s+(am|pm)/i, '$1 $2'.toUpperCase());
-              normalizedTimestamp = normalizedTimestamp.replace(/(\d{4})\s+(\d+:\d+)/, '$1, $2');
-              
-              const convertedDate = new Date(normalizedTimestamp);
-              if (!isNaN(convertedDate.getTime())) {
-                console.log('Report ID', report.id, 'parsed normalized timestamp:', convertedDate.toISOString(), 'milliseconds:', convertedDate.getTime());
-                return convertedDate.getTime();
-              }
-            } catch (e) {
-              console.log('Report ID', report.id, 'error parsing readable timestamp:', e.message);
-            }
-          }
-          
-          // Strategy 3: Try parsing as ISO string or other common formats
-          if (typeof timestamp === 'string') {
-            // Check if it's already in ISO format or has timezone info
-            if (timestamp.includes('T') || timestamp.includes('Z') || timestamp.includes('+')) {
-              date = new Date(timestamp);
-              if (!isNaN(date.getTime())) {
-                console.log('Report ID', report.id, 'parsed ISO timestamp:', date.toISOString(), 'milliseconds:', date.getTime());
-                return date.getTime();
-              }
-            }
-          }
-          
-          console.log('Report ID', report.id, 'could not parse timestamp:', timestamp);
-        } catch (e) {
-          console.log('Report ID', report.id, 'error parsing timestamp:', timestamp, 'error:', e.message);
-        }
-        
-        // If all parsing fails, return 0 (will be sorted to bottom)
-        console.log('Report ID', report.id, 'using fallback timestamp 0');
-        return 0;
-      };
+    const sortedReports = sortReportsByDate(reports);
 
-      const timestampA = getTimestamp(a);
-      const timestampB = getTimestamp(b);
-      
-      console.log('Comparing report A (ID:', a.id, 'timestamp:', timestampA, ') vs report B (ID:', b.id, 'timestamp:', timestampB, ')');
-      
-      // Sort in descending order (newest first)
-      const result = timestampB - timestampA;
-      console.log('Sort result:', result, result > 0 ? 'B is newer' : result < 0 ? 'A is newer' : 'same time');
-      return result;
-    });
-
-    // Debug: Log final sorted order
-    console.log('Final sorted reports order:');
-    sortedReports.forEach((report, index) => {
-      const timestamp = report.formatted_timestamp || report.created_at || report.timestamp || report.time;
-      console.log(`${index + 1}. Report ID: ${report.id}, Timestamp: ${timestamp}`);
-    });
 
     return (
       <View className="flex-1">
@@ -1254,7 +1610,8 @@ const CStatus = () => {
                 <View className="mb-3">
                   <Text className="text-gray-600 text-sm">Status</Text>
                   {(() => {
-                    const progress = selectedReport.progress ||
+                    // FIXED: Check 'status' field first (Railway API uses this), then 'progress' as fallback
+                    const progress = selectedReport.status || selectedReport.progress ||
                       (selectedReport.prediction === 'Fire' ? 'On Going' : 'Under Control') ||
                       'Unknown';
                     const color = getProgressColor(progress);
@@ -1688,6 +2045,204 @@ const CStatus = () => {
           </View>
         </View>
       )}
+
+      {/* Fire Out Modal - Stylish Success Design */}
+      <Modal
+        visible={showThankYouModal}
+        animationType="slide"
+        transparent={true}
+        onRequestClose={() => setShowThankYouModal(false)}
+      >
+        <View className="flex-1 bg-black/70 justify-center items-center px-4">
+          <View className="bg-white rounded-2xl w-full max-w-sm overflow-hidden shadow-2xl">
+            {/* Green Gradient Header with Icon */}
+            <View className="p-5 items-center" style={{ backgroundColor: '#10b981', background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)' }}>
+              <View className="bg-white/20 rounded-full p-3 mb-2">
+                <MaterialIcons name="check-circle" size={48} color="#ffffff" />
+              </View>
+              <Text className="text-2xl font-bold text-white text-center mb-1">
+                Fire Resolved!
+              </Text>
+              <Text className="text-green-50 text-center text-sm">
+                Your report has been successfully resolved
+              </Text>
+            </View>
+            
+            {/* Content */}
+            <View className="p-4">
+              {/* Status Badge */}
+              <View className="bg-green-50 border-2 border-green-500 rounded-lg p-3 mb-3 items-center">
+                <View className="flex-row items-center mb-1">
+                  <MaterialIcons name="done-all" size={20} color="#10b981" />
+                  <Text className="text-green-600 font-bold text-base ml-2">Fire Out</Text>
+                </View>
+                <Text className="text-green-700 text-xs text-center">
+                  The emergency has been successfully contained
+                </Text>
+              </View>
+
+              {/* Thank You Message */}
+              <Text className="text-gray-700 text-center mb-3 text-sm leading-5">
+                Thank you for your quick action in reporting this emergency! Your vigilance helped emergency responders act swiftly and keep our community safe.
+              </Text>
+              
+              {/* Report Details */}
+              {fireOutReport && (
+                <View className="bg-gray-50 rounded-lg p-3 mb-3 border border-gray-200">
+                  <View className="flex-row items-start mb-2">
+                    <MaterialIcons name="location-on" size={16} color="#6b7280" />
+                    <View className="flex-1 ml-2">
+                      <Text className="text-[10px] text-gray-500 mb-0.5">Location:</Text>
+                      <Text className="text-xs font-semibold text-gray-800">
+                        {fireOutReport.resolved_address || fireOutReport.address || fireOutReport.location || fireOutReport.geotag_location || 'Location unavailable'}
+                      </Text>
+                    </View>
+                  </View>
+                  {fireOutReport.alarm_level && (
+                    <View className="flex-row items-center">
+                      <MaterialIcons name="local-fire-department" size={16} color="#6b7280" />
+                      <View className="flex-1 ml-2">
+                        <Text className="text-[10px] text-gray-500 mb-0.5">Alarm Level:</Text>
+                        <Text className="text-xs font-semibold text-gray-800">
+                          {fireOutReport.alarm_level}
+                        </Text>
+                      </View>
+                    </View>
+                  )}
+                </View>
+              )}
+
+              {/* Appreciation Box */}
+              <View className="bg-green-50 rounded-lg p-2 mb-4 flex-row items-start">
+                <MaterialIcons name="emoji-events" size={16} color="#10b981" />
+                <Text className="text-green-700 text-[10px] flex-1 ml-2 leading-4">
+                  Community heroes like you make a difference! Stay alert and continue keeping our neighborhood safe.
+                </Text>
+              </View>
+              
+              {/* Close Button */}
+              <TouchableOpacity
+                className="rounded-lg py-3 w-full items-center shadow-lg"
+                onPress={() => {
+                  // Ensure the modal key is marked as shown
+                  if (fireOutReport) {
+                    const reportId = String(fireOutReport.id || fireOutReport._id);
+                    const modalKey = `${reportId}:Fire Out`;
+                    setShownModalKeys(prev => new Set([...prev, modalKey]));
+                  }
+                  setShowThankYouModal(false);
+                  setFireOutReport(null);
+                }}
+                activeOpacity={0.8}
+                style={{ backgroundColor: '#10b981', shadowColor: '#10b981', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.3, shadowRadius: 8 }}
+              >
+                <Text className="text-white font-bold text-base">
+                  Continue
+                </Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Acknowledgment Modal for "Under Control" Status */}
+      <Modal
+        visible={showAcknowledgmentModal}
+        animationType="slide"
+        transparent={true}
+        onRequestClose={() => setShowAcknowledgmentModal(false)}
+      >
+        <View className="flex-1 bg-black/70 justify-center items-center px-4">
+          <View className="bg-white rounded-2xl w-full max-w-sm overflow-hidden shadow-2xl">
+            {/* Red to Orange Gradient Header with Icon */}
+            <View className="p-5 items-center" style={{ backgroundColor: '#ef4444', background: 'linear-gradient(135deg, #ef4444 0%, #f97316 100%)' }}>
+              <View className="bg-white/20 rounded-full p-3 mb-2">
+                <MaterialIcons name="verified" size={48} color="#ffffff" />
+              </View>
+              <Text className="text-2xl font-bold text-white text-center mb-1">
+                Report Acknowledged!
+              </Text>
+              <Text className="text-red-50 text-center text-sm">
+                Your report is now under control
+              </Text>
+            </View>
+            
+            {/* Content */}
+            <View className="p-4">
+              {/* Status Badge */}
+              <View className="bg-orange-50 border-2 border-orange-500 rounded-lg p-3 mb-3 items-center">
+                <View className="flex-row items-center mb-1">
+                  <MaterialIcons name="local-fire-department" size={20} color="#f59e0b" />
+                  <Text className="text-orange-600 font-bold text-base ml-2">Under Control</Text>
+                </View>
+                <Text className="text-orange-700 text-xs text-center">
+                  Emergency response teams are managing the situation
+                </Text>
+              </View>
+
+              {/* Message */}
+              <Text className="text-gray-700 text-center mb-3 text-sm leading-5">
+                Great news! Your fire report has been acknowledged by the command center. Emergency responders are actively working to contain the fire.
+              </Text>
+              
+              {/* Report Details */}
+              {acknowledgedReport && (
+                <View className="bg-gray-50 rounded-lg p-3 mb-3 border border-gray-200">
+                  <View className="flex-row items-start mb-2">
+                    <MaterialIcons name="location-on" size={16} color="#6b7280" />
+                    <View className="flex-1 ml-2">
+                      <Text className="text-[10px] text-gray-500 mb-0.5">Location:</Text>
+                      <Text className="text-xs font-semibold text-gray-800">
+                        {acknowledgedReport.resolved_address || acknowledgedReport.address || acknowledgedReport.location || acknowledgedReport.geotag_location || 'Location unavailable'}
+                      </Text>
+                    </View>
+                  </View>
+                  {acknowledgedReport.alarm_level && (
+                    <View className="flex-row items-center">
+                      <MaterialIcons name="warning" size={16} color="#6b7280" />
+                      <View className="flex-1 ml-2">
+                        <Text className="text-[10px] text-gray-500 mb-0.5">Alarm Level:</Text>
+                        <Text className="text-xs font-semibold text-gray-800">
+                          {acknowledgedReport.alarm_level}
+                        </Text>
+                      </View>
+                    </View>
+                  )}
+                </View>
+              )}
+
+              {/* Info Box */}
+              <View className="bg-blue-50 rounded-lg p-2 mb-4 flex-row items-start">
+                <MaterialIcons name="info" size={16} color="#3b82f6" />
+                <Text className="text-blue-700 text-[10px] flex-1 ml-2 leading-4">
+                  You'll receive updates as the situation progresses. Stay safe and follow local emergency protocols.
+                </Text>
+              </View>
+              
+              {/* Close Button */}
+              <TouchableOpacity
+                className="rounded-lg py-3 w-full items-center shadow-lg"
+                onPress={() => {
+                  // Ensure the modal key is marked as shown
+                  if (acknowledgedReport) {
+                    const reportId = String(acknowledgedReport.id || acknowledgedReport._id);
+                    const modalKey = `${reportId}:Under Control`;
+                    setShownModalKeys(prev => new Set([...prev, modalKey]));
+                  }
+                  setShowAcknowledgmentModal(false);
+                  setAcknowledgedReport(null);
+                }}
+                activeOpacity={0.8}
+                style={{ backgroundColor: '#ef4444', shadowColor: '#ef4444', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.3, shadowRadius: 8 }}
+              >
+                <Text className="text-white font-bold text-base">
+                  Continue
+                </Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 };

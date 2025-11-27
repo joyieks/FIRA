@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { View, Text, ScrollView, TouchableOpacity, Image, RefreshControl } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { supabase } from '../../../config/supabase';
 
 const CNotifications = ({ onUnreadCountChange, setActiveTab, setReportIdToFocus }) => {
@@ -9,16 +10,40 @@ const CNotifications = ({ onUnreadCountChange, setActiveTab, setReportIdToFocus 
   const [loading, setLoading] = useState(true);
   const [currentUserId, setCurrentUserId] = useState(null);
 
-  // Get current user ID
+  // Get current user ID from AsyncStorage (custom auth system)
   useEffect(() => {
     const getUser = async () => {
       try {
-        const { data: { user } } = await supabase.auth.getUser();
-        if (user) {
-          setCurrentUserId(user.id);
+        console.log('🔐 Getting current user from AsyncStorage...');
+        
+        // Get user data from AsyncStorage
+        const userDataString = await AsyncStorage.getItem('userData');
+        const userType = await AsyncStorage.getItem('userType');
+        
+        if (!userDataString || userType !== 'citizen') {
+          console.warn('⚠️ No citizen user data found in AsyncStorage');
+          console.log('UserType:', userType);
+          setLoading(false);
+          return;
+        }
+        
+        const userData = JSON.parse(userDataString);
+        console.log('👤 User data from storage:', userData);
+        
+        // Get user ID - could be in different fields
+        const userId = userData.id || userData.uid || userData.user_id;
+        
+        if (userId) {
+          console.log('✅ Current user ID:', userId);
+          console.log('📧 User email:', userData.email);
+          setCurrentUserId(userId);
+        } else {
+          console.warn('⚠️ No user ID found in userData:', userData);
+          setLoading(false);
         }
       } catch (error) {
-        console.error('Error getting user:', error);
+        console.error('💥 Exception getting user:', error);
+        setLoading(false);
       }
     };
     getUser();
@@ -27,6 +52,7 @@ const CNotifications = ({ onUnreadCountChange, setActiveTab, setReportIdToFocus 
   // Load notifications from Supabase
   const loadNotifications = async () => {
     if (!currentUserId) {
+      console.log('⚠️ No current user ID, skipping notification load');
       setLoading(false);
       return;
     }
@@ -34,7 +60,20 @@ const CNotifications = ({ onUnreadCountChange, setActiveTab, setReportIdToFocus 
     try {
       setLoading(true);
       console.log('📱 Loading citizen notifications for user:', currentUserId);
+      console.log('🔍 Query parameters - user_id:', currentUserId, 'user_type: citizen');
 
+      // First, check if ANY notifications exist in the table
+      const { data: allNotifs, error: countError } = await supabase
+        .from('notifications')
+        .select('id, user_id, user_type')
+        .limit(5);
+      
+      console.log('📊 Sample notifications in table:', allNotifs?.length || 0);
+      if (allNotifs && allNotifs.length > 0) {
+        console.log('🔍 Sample from table:', JSON.stringify(allNotifs, null, 2));
+      }
+
+      // Query for citizen notifications (nearby incidents, status changes, etc.)
       const { data, error } = await supabase
         .from('notifications')
         .select('*')
@@ -43,28 +82,62 @@ const CNotifications = ({ onUnreadCountChange, setActiveTab, setReportIdToFocus 
         .order('created_at', { ascending: false });
 
       if (error) {
-        console.error('Error fetching notifications:', error);
+        console.error('❌ Error fetching notifications:', error);
+        console.error('❌ Error code:', error.code);
+        console.error('❌ Error message:', error.message);
+        console.error('❌ Error details:', JSON.stringify(error, null, 2));
+        setNotifications([]);
         return;
       }
 
-      // Transform Supabase notifications to match component format
-      const formattedNotifications = (data || []).map(notif => ({
-        id: notif.id,
-        type: notif.type === 'fire_alert' ? 'emergency' : notif.type,
-        title: notif.title,
-        message: notif.message,
-        time: formatTimeAgo(notif.created_at),
-        read: notif.is_read || false,
-        priority: notif.priority || 'normal',
-        related_report_id: notif.related_report_id,
-        created_at: notif.created_at,
-        is_read: notif.is_read || false // Keep both for compatibility
-      }));
+      console.log('📊 Raw notifications data:', data);
+      console.log(`📊 Found ${data?.length || 0} notifications for citizen user ${currentUserId}`);
+      
+      if (data && data.length > 0) {
+        console.log('🔍 First notification:', JSON.stringify(data[0], null, 2));
+        console.log('🔍 Notification types:', data.map(n => n.type).join(', '));
+      } else {
+        console.warn('⚠️ No notifications found for this user');
+        console.warn('⚠️ Make sure:');
+        console.warn('   1. Notifications exist in the database');
+        console.warn('   2. user_id matches:', currentUserId);
+        console.warn('   3. user_type is "citizen"');
+      }
 
-      console.log(`✅ Loaded ${formattedNotifications.length} notifications`);
+      // Transform Supabase notifications to match component format
+      const formattedNotifications = (data || []).map(notif => {
+        // Determine display type - keep original types for proper icon display
+        // fire_alert -> shows as emergency (nearby fires)
+        // user_action -> shows status changes (acknowledgment, fire out, etc.)
+        let displayType = notif.type;
+        if (notif.type === 'fire_alert' || notif.type === 'emergency') {
+          displayType = 'emergency';
+        }
+        // user_action type is already correct for status change notifications
+
+        return {
+          id: notif.id,
+          type: displayType,
+          title: notif.title,
+          message: notif.message,
+          time: formatTimeAgo(notif.created_at),
+          read: notif.is_read || false,
+          priority: notif.priority || 'normal',
+          related_report_id: notif.related_report_id,
+          created_at: notif.created_at,
+          is_read: notif.is_read || false // Keep both for compatibility
+        };
+      });
+
+      console.log(`✅ Formatted ${formattedNotifications.length} notifications`);
+      if (formattedNotifications.length > 0) {
+        console.log('📋 First formatted notification:', JSON.stringify(formattedNotifications[0], null, 2));
+      }
+      
       setNotifications(formattedNotifications);
     } catch (error) {
-      console.error('Error loading notifications:', error);
+      console.error('💥 Exception loading notifications:', error);
+      setNotifications([]);
     } finally {
       setLoading(false);
     }
@@ -252,6 +325,16 @@ const CNotifications = ({ onUnreadCountChange, setActiveTab, setReportIdToFocus 
         <View className="flex-1 items-center justify-center">
           <Text className="text-gray-500">Loading notifications...</Text>
         </View>
+      ) : notifications.length === 0 ? (
+        <View className="flex-1 items-center justify-center px-8">
+          <MaterialIcons name="notifications-off" size={64} color="#9ca3af" />
+          <Text className="text-xl font-bold text-gray-600 mt-4 mb-2">
+            No Notifications
+          </Text>
+          <Text className="text-gray-500 text-center">
+            You're all caught up! We'll notify you when there are important updates.
+          </Text>
+        </View>
       ) : (
         <ScrollView 
           className="flex-1 px-4 pt-4"
@@ -274,15 +357,21 @@ const CNotifications = ({ onUnreadCountChange, setActiveTab, setReportIdToFocus 
               notification.title.includes('Alarm Level')
             );
             
+            // Special styling for acknowledgment notifications
+            const isAcknowledged = notification.title && notification.title.includes('Acknowledged');
+            
             return (
               <TouchableOpacity
                 key={notification.id}
                 className={`bg-white rounded-xl p-4 mb-3 shadow-sm border-l-4 ${
                   notification.read ? 'opacity-75' : ''
-                }`}
+                } ${isAcknowledged && !notification.read ? 'shadow-lg' : ''}`}
                 style={{ 
                   borderLeftColor: priorityColor,
                   borderLeftWidth: 4,
+                  backgroundColor: isAcknowledged && !notification.read ? '#ecfdf5' : '#ffffff',
+                  borderWidth: isAcknowledged && !notification.read ? 2 : 0,
+                  borderColor: isAcknowledged && !notification.read ? '#10b981' : 'transparent',
                 }}
                 onPress={() => {
                   markAsRead(notification.id);
@@ -295,6 +384,13 @@ const CNotifications = ({ onUnreadCountChange, setActiveTab, setReportIdToFocus 
                 }}
                 activeOpacity={0.7}
               >
+                {/* Special banner for acknowledgment notifications */}
+                {isAcknowledged && !notification.read && (
+                  <View className="absolute top-0 right-0 bg-green-500 px-3 py-1 rounded-bl-lg rounded-tr-xl">
+                    <Text className="text-white text-xs font-bold">✨ NEW</Text>
+                  </View>
+                )}
+                
                 <View className="flex-row items-start">
                   {/* Icon with special styling for nearby incidents and own reports */}
                   <View 
@@ -319,7 +415,12 @@ const CNotifications = ({ onUnreadCountChange, setActiveTab, setReportIdToFocus 
                   <View className="flex-1">
                     <View className="flex-row items-center justify-between mb-1">
                       <View className="flex-1">
-                        <Text className="font-bold text-gray-800 text-base" numberOfLines={2}>
+                        <Text 
+                          className={`font-bold text-base ${
+                            isAcknowledged && !notification.read ? 'text-green-800' : 'text-gray-800'
+                          }`} 
+                          numberOfLines={2}
+                        >
                           {notification.title}
                         </Text>
                         {isNearbyIncident && (
@@ -335,8 +436,8 @@ const CNotifications = ({ onUnreadCountChange, setActiveTab, setReportIdToFocus 
                             {notification.title.includes('Acknowledged') && (
                               <>
                                 <MaterialIcons name="check-circle" size={14} color="#10b981" />
-                                <Text className="text-green-600 text-xs font-semibold ml-1">
-                                  Your Report
+                                <Text className="text-green-600 text-xs font-bold ml-1">
+                                  🎉 Your Report Acknowledged!
                                 </Text>
                               </>
                             )}
@@ -344,7 +445,7 @@ const CNotifications = ({ onUnreadCountChange, setActiveTab, setReportIdToFocus 
                               <>
                                 <MaterialIcons name="check-circle" size={14} color="#10b981" />
                                 <Text className="text-green-600 text-xs font-semibold ml-1">
-                                  Resolved
+                                  ✅ Resolved
                                 </Text>
                               </>
                             )}
@@ -364,7 +465,11 @@ const CNotifications = ({ onUnreadCountChange, setActiveTab, setReportIdToFocus 
                       )}
                     </View>
                     
-                    <Text className="text-gray-600 text-sm mb-2 leading-5">
+                    <Text 
+                      className={`text-sm mb-2 leading-5 ${
+                        isAcknowledged && !notification.read ? 'text-green-700' : 'text-gray-600'
+                      }`}
+                    >
                       {notification.message}
                     </Text>
                     
@@ -401,19 +506,6 @@ const CNotifications = ({ onUnreadCountChange, setActiveTab, setReportIdToFocus 
             );
           })}
         </ScrollView>
-      )}
-
-      {/* Empty State */}
-      {notifications.length === 0 && (
-        <View className="flex-1 items-center justify-center px-8">
-          <MaterialIcons name="notifications-off" size={64} color="#9ca3af" />
-          <Text className="text-xl font-bold text-gray-600 mt-4 mb-2">
-            No Notifications
-          </Text>
-          <Text className="text-gray-500 text-center">
-            You're all caught up! We'll notify you when there are important updates.
-          </Text>
-        </View>
       )}
     </View>
   );

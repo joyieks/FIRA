@@ -13,6 +13,8 @@ export default function AOverview() {
   const [refreshing, setRefreshing] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState('All'); // All | On Going | Under Control
+  const [aiChatSuggestions, setAiChatSuggestions] = useState([]);
+  const [chatAlarmByReport, setChatAlarmByReport] = useState({});
   const [timeRangeFilter, setTimeRangeFilter] = useState('all'); // all | today | week | month
   const [selectedReport, setSelectedReport] = useState(null);
   const [showEditModal, setShowEditModal] = useState(false);
@@ -96,6 +98,89 @@ export default function AOverview() {
       setLoading(false);
     }
   }, []);
+
+  // Load AI suggestions from messages table
+  useEffect(() => {
+    const loadAiSuggestions = async () => {
+      try {
+        const { data, error } = await supabase
+          .from('messages')
+          .select('id, ai_suggested_alarm, suggested_alarm_level, created_at, report_id')
+          .not('ai_suggested_alarm', 'is', null)
+          .order('created_at', { ascending: false })
+          .limit(200);
+        if (!error) setAiChatSuggestions(data || []);
+      } catch (_) {}
+    };
+    loadAiSuggestions();
+    
+    // Faster polling - every 5 seconds
+    const interval = setInterval(loadAiSuggestions, 5000);
+    
+    // Real-time subscription for instant updates
+    const subscription = supabase
+      .channel('ai_suggestions_mobile_admin')
+      .on('postgres_changes', {
+        event: '*',
+        schema: 'public',
+        table: 'messages',
+        filter: 'ai_suggested_alarm=not.is.null'
+      }, () => {
+        console.log('🔔 Real-time: AI suggestion detected, reloading...');
+        loadAiSuggestions();
+      })
+      .subscribe();
+    
+    return () => {
+      clearInterval(interval);
+      subscription.unsubscribe();
+    };
+  }, []);
+
+  // Compute strongest AI alarm per report
+  useEffect(() => {
+    const toStrength = (label) => {
+      const map = {
+        'Under Control': 0, '1st Alarm': 1, '2nd Alarm': 2, '3rd Alarm': 3,
+        '4th Alarm': 4, '5th Alarm': 5, 'TASK FORCE ALPHA': 6,
+        'TASK FORCE BRAVO': 7, 'TASK FORCE CHARLIE': 8,
+        'TASK FORCE DELTA': 9, 'GENERAL ALARM': 10
+      };
+      return map[label] ?? 0;
+    };
+    
+    const normalizeAiLabel = (aiValue, suggestedAlarmLevel) => {
+      if (suggestedAlarmLevel && suggestedAlarmLevel !== 'NONE') {
+        const normalized = suggestedAlarmLevel.toLowerCase().trim();
+        const map = {
+          'none': 'Under Control', 'first': '1st Alarm', 'first_alarm': '1st Alarm',
+          '1st alarm': '1st Alarm', 'second': '2nd Alarm', 'second_alarm': '2nd Alarm',
+          '2nd alarm': '2nd Alarm', 'third': '3rd Alarm', 'third_alarm': '3rd Alarm',
+          '3rd alarm': '3rd Alarm', 'fourth': '4th Alarm', 'fourth_alarm': '4th Alarm',
+          '4th alarm': '4th Alarm', 'fifth': '5th Alarm', 'fifth_alarm': '5th Alarm',
+          '5th alarm': '5th Alarm', 'task_force_alpha': 'TASK FORCE ALPHA',
+          'task_force_bravo': 'TASK FORCE BRAVO', 'task_force_charlie': 'TASK FORCE CHARLIE',
+          'task_force_delta': 'TASK FORCE DELTA', 'general': 'GENERAL ALARM',
+          'general_alarm': 'GENERAL ALARM'
+        };
+        return map[normalized] || suggestedAlarmLevel;
+      }
+      return null;
+    };
+
+    const bestByReport = {};
+    (aiChatSuggestions || []).forEach((m) => {
+      const reportId = m.report_id;
+      if (!reportId) return;
+      const label = normalizeAiLabel(m.ai_suggested_alarm, m.suggested_alarm_level);
+      if (!label) return;
+      const current = bestByReport[reportId];
+      if (!current || toStrength(label) > toStrength(current)) {
+        bestByReport[reportId] = label;
+      }
+    });
+    setChatAlarmByReport(bestByReport);
+  }, [aiChatSuggestions]);
 
   useEffect(() => {
     fetchReports();
@@ -906,7 +991,8 @@ export default function AOverview() {
                         fontSize: 12
                       }}>
                         {(() => {
-                          const s = r.recommended_alarm_level || r.alarm_level || '';
+                          const aiOverride = chatAlarmByReport[String(r.id)];
+                          const s = aiOverride || r.recommended_alarm_level || r.alarm_level || '';
                           return s && s.toLowerCase().startsWith('unknown') ? 'Unknown' : (s || 'Unknown');
                         })()}
                       </Text>
@@ -1011,10 +1097,6 @@ export default function AOverview() {
             </View>
           ))
         )}
-
-        <TouchableOpacity onPress={onRefresh} style={{ marginTop: 8, alignSelf: 'flex-start', backgroundColor: '#ef4444', paddingHorizontal: 16, paddingVertical: 10, borderRadius: 10 }}>
-          <Text style={{ color: 'white', fontWeight: '700' }}>Refresh</Text>
-        </TouchableOpacity>
       </ScrollView>
 
       <Modal visible={!!selectedReport} transparent animationType="fade" onRequestClose={() => setSelectedReport(null)}>
@@ -1304,47 +1386,6 @@ export default function AOverview() {
                 <View style={{ marginBottom: 20, padding: 16, backgroundColor: '#f3f4f6', borderRadius: 8 }}>
                   <Text style={{ fontSize: 16, fontWeight: '600', color: '#374151', marginBottom: 8 }}>Report ID:</Text>
                   <Text style={{ fontSize: 14, color: '#6b7280' }}>{editReport.id}</Text>
-                </View>
-                
-                {/* Status Selection */}
-                <View style={{ marginBottom: 20 }}>
-                  <Text style={{ fontSize: 16, fontWeight: '600', color: '#374151', marginBottom: 8 }}>Status:</Text>
-                  <View style={{ flexDirection: 'row', flexWrap: 'wrap', marginRight: 8, marginBottom: 8, gap: 8 }}>
-                    {['On Going', 'Under Control', 'Fire Out'].map((status) => (
-                      <TouchableOpacity
-                        key={status}
-                        onPress={() => {
-                          console.log('[Status Button] Pressed:', status);
-                          if (status === 'Cancelled') {
-                            // For cancellation, show the cancel modal instead
-                            handleStatusChange(editReport.id, status);
-                          } else {
-                            // For other status changes, show custom confirmation modal
-                            handleStatusChangeClick(status);
-                          }
-                        }}
-                        style={{
-                          paddingHorizontal: 16,
-                          paddingVertical: 8,
-                          borderRadius: 6,
-                          backgroundColor: editReport.status === status ? '#3b82f6' : '#f3f4f6',
-                          borderWidth: 1,
-                          borderColor: editReport.status === status ? '#3b82f6' : '#d1d5db',
-                          marginRight: 8,
-                          marginBottom: 8
-                        }}
-                        disabled={isUpdating}
-                      >
-                        <Text style={{
-                          color: editReport.status === status ? 'white' : '#374151',
-                          fontWeight: '600',
-                          fontSize: 14
-                        }}>
-                          {status}
-                        </Text>
-                      </TouchableOpacity>
-                    ))}
-                  </View>
                 </View>
 
                 {/* Final Alarm Level Selection */}

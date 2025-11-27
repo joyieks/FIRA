@@ -40,14 +40,6 @@ export default function RFiraChat() {
         setIsLoading(true);
         console.log('🔍 Fetching contacts for responder:', currentResponderId, 'station:', currentStationId);
 
-        // Fetch admin users
-        console.log('🔍 Fetching admin users...');
-        const { data: adminUsers, error: adminError } = await supabase
-          .from('admin_users')
-          .select('*');
-
-        console.log('📋 Admin query result:', { adminUsers: adminUsers?.length || 0, adminError });
-
         // Fetch station users (current station)
         console.log('🔍 Fetching station for station ID:', currentStationId);
         const { data: stationUsers, error: stationError } = await supabase
@@ -68,37 +60,6 @@ export default function RFiraChat() {
         console.log('📋 Responders query result:', { responderUsers: responderUsers?.length || 0, responderError });
 
         const allContactsList = [];
-
-        // Add admin users
-        if (adminUsers && !adminError) {
-          adminUsers.forEach(admin => {
-            allContactsList.push({
-              id: admin.id,
-              name: `${admin.first_name || ''} ${admin.last_name || ''}`.trim() || 'Admin',
-              email: admin.email,
-              type: 'admin',
-              avatar: (admin.first_name || admin.last_name || 'A')[0].toUpperCase(),
-              lastMessage: '',
-              lastMessageTime: null,
-              unreadCount: 0,
-              status: 'online'
-            });
-          });
-        } else {
-          console.log('⚠️ Admin users error or empty, adding fallback admin');
-          // Add fallback admin
-          allContactsList.push({
-            id: 'fallback-admin-1',
-            name: 'Command Center',
-            email: 'admin@fira.com',
-            type: 'admin',
-            avatar: 'C',
-            lastMessage: '',
-            lastMessageTime: null,
-            unreadCount: 0,
-            status: 'online'
-          });
-        }
 
         // Add station users
         if (stationUsers && !stationError) {
@@ -150,7 +111,6 @@ export default function RFiraChat() {
 
         console.log('✅ Contacts fetched:', allContactsList);
         console.log('✅ Total contacts count:', allContactsList.length);
-        console.log('✅ Admin contacts:', allContactsList.filter(c => c.type === 'admin').length);
         console.log('✅ Station contacts:', allContactsList.filter(c => c.type === 'station').length);
         console.log('✅ Responder contacts:', allContactsList.filter(c => c.type === 'responder').length);
         

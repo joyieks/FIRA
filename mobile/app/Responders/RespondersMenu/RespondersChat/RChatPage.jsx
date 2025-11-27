@@ -162,15 +162,15 @@ export default function RChatPage({ contact, onBack }) {
       let reportId = null;
       try {
         if (contact.type === 'station') {
-          const { data: assignments, error: assignError } = await supabase
-            .from('report_assignments')
-            .select('report_id, assignee_type, assignee_id, assigned_at')
-            .eq('assignee_type', 'responder')
-            .eq('assignee_id', userData.id)
-            .order('assigned_at', { ascending: false })
+          const { data: notifications, error: notifError } = await supabase
+            .from('responder_notifications')
+            .select('fire_report_id, created_at, status')
+            .eq('responder_id', userData.id)
+            .in('status', ['pending', 'accepted'])
+            .order('created_at', { ascending: false })
             .limit(1);
-          if (!assignError && assignments && assignments.length > 0) {
-            reportId = assignments[0].report_id || null;
+          if (!notifError && notifications && notifications.length > 0) {
+            reportId = notifications[0].fire_report_id || null;
           }
         }
       } catch (_) {

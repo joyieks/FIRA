@@ -16,6 +16,8 @@ export default function SStatus() {
   const [loading, setLoading] = useState(true);
   const [selectedReport, setSelectedReport] = useState(null);
   const [showReportModal, setShowReportModal] = useState(false);
+  const [aiChatSuggestions, setAiChatSuggestions] = useState([]);
+  const [chatAlarmByReport, setChatAlarmByReport] = useState({});
   
   // Statistics
   const [totalReports, setTotalReports] = useState(0);
@@ -95,6 +97,89 @@ export default function SStatus() {
     };
     loadStationData();
   }, []);
+
+  // Load AI suggestions from messages table
+  useEffect(() => {
+    const loadAiSuggestions = async () => {
+      try {
+        const { data, error } = await supabase
+          .from('messages')
+          .select('id, ai_suggested_alarm, suggested_alarm_level, created_at, report_id')
+          .not('ai_suggested_alarm', 'is', null)
+          .order('created_at', { ascending: false })
+          .limit(300);
+        if (!error) setAiChatSuggestions(data || []);
+      } catch (_) {}
+    };
+    loadAiSuggestions();
+    
+    // Faster polling - every 5 seconds
+    const interval = setInterval(loadAiSuggestions, 5000);
+    
+    // Real-time subscription for instant updates
+    const subscription = supabase
+      .channel('ai_suggestions_mobile_station')
+      .on('postgres_changes', {
+        event: '*',
+        schema: 'public',
+        table: 'messages',
+        filter: 'ai_suggested_alarm=not.is.null'
+      }, () => {
+        console.log('🔔 Real-time: AI suggestion detected, reloading...');
+        loadAiSuggestions();
+      })
+      .subscribe();
+    
+    return () => {
+      clearInterval(interval);
+      subscription.unsubscribe();
+    };
+  }, []);
+
+  // Compute strongest AI alarm per report
+  useEffect(() => {
+    const toStrength = (label) => {
+      const map = {
+        'Under Control': 0, '1st Alarm': 1, '2nd Alarm': 2, '3rd Alarm': 3,
+        '4th Alarm': 4, '5th Alarm': 5, 'TASK FORCE ALPHA': 6,
+        'TASK FORCE BRAVO': 7, 'TASK FORCE CHARLIE': 8,
+        'TASK FORCE DELTA': 9, 'GENERAL ALARM': 10
+      };
+      return map[label] ?? 0;
+    };
+    
+    const normalizeAiLabel = (aiValue, suggestedAlarmLevel) => {
+      if (suggestedAlarmLevel && suggestedAlarmLevel !== 'NONE') {
+        const normalized = suggestedAlarmLevel.toLowerCase().trim();
+        const map = {
+          'none': 'Under Control', 'first': '1st Alarm', 'first_alarm': '1st Alarm',
+          '1st alarm': '1st Alarm', 'second': '2nd Alarm', 'second_alarm': '2nd Alarm',
+          '2nd alarm': '2nd Alarm', 'third': '3rd Alarm', 'third_alarm': '3rd Alarm',
+          '3rd alarm': '3rd Alarm', 'fourth': '4th Alarm', 'fourth_alarm': '4th Alarm',
+          '4th alarm': '4th Alarm', 'fifth': '5th Alarm', 'fifth_alarm': '5th Alarm',
+          '5th alarm': '5th Alarm', 'task_force_alpha': 'TASK FORCE ALPHA',
+          'task_force_bravo': 'TASK FORCE BRAVO', 'task_force_charlie': 'TASK FORCE CHARLIE',
+          'task_force_delta': 'TASK FORCE DELTA', 'general': 'GENERAL ALARM',
+          'general_alarm': 'GENERAL ALARM'
+        };
+        return map[normalized] || suggestedAlarmLevel;
+      }
+      return null;
+    };
+
+    const bestByReport = {};
+    (aiChatSuggestions || []).forEach((m) => {
+      const reportId = m.report_id;
+      if (!reportId) return;
+      const label = normalizeAiLabel(m.ai_suggested_alarm, m.suggested_alarm_level);
+      if (!label) return;
+      const current = bestByReport[reportId];
+      if (!current || toStrength(label) > toStrength(current)) {
+        bestByReport[reportId] = label;
+      }
+    });
+    setChatAlarmByReport(bestByReport);
+  }, [aiChatSuggestions]);
 
   // Unified load function - combines both previous loads
   const loadAssignedReports = useCallback(async () => {
@@ -178,7 +263,8 @@ export default function SStatus() {
       const filtered = (data || []).filter(r => ids.has(String(r.id)));
       const mapped = filtered.map(r => {
         const forwardingInfo = forwardedMetadata.get(String(r.id));
-        const suggested = r.recommended_alarm_level || r.alarm_level || '';
+        const aiOverride = chatAlarmByReport[String(r.id)];
+        const suggested = aiOverride || r.recommended_alarm_level || r.alarm_level || '';
         const normalizedSuggested = suggested && suggested.toLowerCase().startsWith('unknown') ? 'Unknown' : (suggested || 'Unknown');
         return {
           id: r.id,
@@ -258,7 +344,7 @@ export default function SStatus() {
     } finally {
       setLoading(false);
     }
-  }, [stationId]);
+  }, [stationId, chatAlarmByReport]);
 
   // Load reports on mount and when stationId changes
   useEffect(() => {

@@ -49,6 +49,7 @@ export const analyzeMessageForFireAlarm = async (messageText) => {
 
 // Update the message row with the AI analysis result. Stores the full analysis object
 // into the ai_suggested_alarm field (as JSON if supported by the column, or as text by fallback).
+// Also updates the fire report's recommended_alarm_level if a report_id is present.
 export const updateMessageWithAIAnalysis = async (messageId, analysis, supabaseClient) => {
   try {
     if (!messageId || !analysis || !supabaseClient) {
@@ -58,17 +59,20 @@ export const updateMessageWithAIAnalysis = async (messageId, analysis, supabaseC
 
     console.log('🤖 AI Update: Updating message', messageId, 'with analysis:', analysis);
 
+    const suggestedAlarmLevel = analysis.suggested_alarm || analysis.original_response?.alarm_level;
+
     // Try to update with the full analysis payload
-    const { error } = await supabaseClient
+    const { data: updatedMessage, error } = await supabaseClient
       .from('messages')
       .update({ 
         ai_suggested_alarm: analysis,
         ai_analysis: analysis,
-        suggested_alarm_level: analysis.suggested_alarm || analysis.original_response?.alarm_level,
+        suggested_alarm_level: suggestedAlarmLevel,
         ai_confidence: analysis.confidence || 0.8,
         analyzed_at: new Date().toISOString()
       })
-      .eq('id', messageId);
+      .eq('id', messageId)
+      .select('report_id');
 
     if (error) {
       console.error('🤖 AI Update: Database error:', error);
@@ -85,6 +89,30 @@ export const updateMessageWithAIAnalysis = async (messageId, analysis, supabaseC
       }
     } else {
       console.log('🤖 AI Update: Successfully updated message with AI analysis');
+      
+      // If message has a report_id, also update the fire report's recommended_alarm_level
+      const reportId = updatedMessage?.[0]?.report_id;
+      if (reportId && suggestedAlarmLevel) {
+        console.log('🤖 AI Update: Message linked to report', reportId, '- updating fire report recommended_alarm_level');
+        try {
+          const response = await fetch('https://fire-detection-api-production-f55b.up.railway.app/update_report_alarm_level', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              report_id: reportId,
+              recommended_alarm_level: suggestedAlarmLevel
+            })
+          });
+
+          if (response.ok) {
+            console.log('🤖 AI Update: Successfully updated fire report recommended_alarm_level');
+          } else {
+            console.error('🤖 AI Update: Failed to update fire report:', response.status, await response.text());
+          }
+        } catch (reportError) {
+          console.error('🤖 AI Update: Error updating fire report:', reportError);
+        }
+      }
     }
   } catch (error) {
     console.error('🤖 AI Update: Unexpected error:', error);

@@ -360,7 +360,14 @@ Please respond immediately to this assignment.`;
             ...report,
             is_forwarded: false
           };
-        }).filter(Boolean).filter(r => !isNaN(parseFloat(r.latitude)) && !isNaN(parseFloat(r.longitude)));
+        }).filter(Boolean).filter(r => {
+          // Filter out reports with invalid coordinates, cancelled reports, or fire out reports
+          const hasValidCoords = !isNaN(parseFloat(r.latitude)) && !isNaN(parseFloat(r.longitude));
+          const statusText = (r.status || '').toString().toLowerCase();
+          const isCancelled = statusText.includes('cancelled') || statusText.includes('canceled');
+          const isFireOut = statusText.includes('fire out');
+          return hasValidCoords && !isCancelled && !isFireOut;
+        });
 
         setAssignedReports(merged);
       } catch (e) {
