@@ -2,6 +2,8 @@ import React, { useEffect, useMemo, useState, useCallback } from 'react';
 import { View, Text, TouchableOpacity, ScrollView, RefreshControl, TextInput, Modal, Image, Platform, Alert } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { supabase } from '../../../config/supabase';
+import { notifyRespondersOnStatusChange, notifyRespondersOnAlarmChange, fetchReportData } from '../../../services/responderNotificationService';
+import { notifyAllUsersOnStatusChange, notifyAllUsersOnAlarmChange } from '../../../services/universalNotificationService';
 
 const API_URL = 'https://fire-detection-api-production-f55b.up.railway.app';
 
@@ -259,6 +261,9 @@ export default function AOverview() {
       clearTimeout(timeoutId);
       
       if (response.ok) {
+        // Get old status before updating
+        const oldStatus = reports.find(r => r.id === reportId)?.status;
+        
         // Update local state
         setReports(prev => prev.map(report => 
           report.id === reportId ? { ...report, status: newStatus } : report
@@ -270,6 +275,41 @@ export default function AOverview() {
         }
         
         console.log(`Status updated for report ${reportId}: ${newStatus}`);
+        
+        // Notify responders of status change
+        try {
+          const report = reports.find(r => r.id === reportId);
+          const reportData = await fetchReportData(reportId);
+          const reportForNotification = reportData || {
+            ...report,
+            status: newStatus,
+            latitude: report?.latitude,
+            longitude: report?.longitude,
+            address: report?.location || report?.geotag_location
+          };
+          
+          // Notify responders (existing service)
+          await notifyRespondersOnStatusChange(
+            reportId,
+            newStatus,
+            oldStatus,
+            reportForNotification
+          );
+          console.log('✅ Responder notifications sent for status change');
+          
+          // Notify all users (admin, station, citizen)
+          await notifyAllUsersOnStatusChange(
+            reportId,
+            newStatus,
+            oldStatus,
+            reportForNotification
+          );
+          console.log('✅ Universal notifications sent for status change');
+        } catch (notifError) {
+          console.error('⚠️ Error sending notifications:', notifError);
+          // Don't fail the status update if notification fails
+        }
+        
         Alert.alert('Success', 'Report status updated successfully.');
 
         // If report is finished/cancelled, clear responder assignments so they can be reassigned elsewhere
@@ -390,6 +430,20 @@ export default function AOverview() {
       clearTimeout(timeoutId);
 
       if (response.ok) {
+        // Get old alarm level BEFORE updating - check both editReport and reports
+        const currentReport = editReport?.id === reportId ? editReport : reports.find(r => r.id === reportId);
+        const oldAlarmLevel = currentReport?.final_alarm_level || 
+                             currentReport?.recommended_alarm_level ||
+                             currentReport?.alarm_level ||
+                             'Unknown';
+        
+        console.log('[updateFinalAlarmLevel] Alarm level change:', { 
+          reportId, 
+          oldAlarmLevel, 
+          newAlarmLevel,
+          currentReport: currentReport ? 'found' : 'not found'
+        });
+        
         // Update local state
         setReports(prev => prev.map(report => 
           report.id === reportId ? { ...report, final_alarm_level: newAlarmLevel } : report
@@ -401,6 +455,70 @@ export default function AOverview() {
         }
         
         console.log(`Final alarm level updated for report ${reportId}: ${newAlarmLevel}`);
+        
+        // Notify responders of alarm level change - ALWAYS notify if there's a change
+        try {
+          const report = currentReport || reports.find(r => r.id === reportId);
+          
+          // Try to fetch fresh report data from API
+          let reportData = null;
+          try {
+            reportData = await fetchReportData(reportId);
+            console.log('[updateFinalAlarmLevel] Fetched report data from API:', reportData ? 'success' : 'not found');
+          } catch (fetchError) {
+            console.log('[updateFinalAlarmLevel] Could not fetch from API, using local data:', fetchError.message);
+          }
+          
+          const reportForNotification = reportData || {
+            ...report,
+            final_alarm_level: newAlarmLevel,
+            recommended_alarm_level: newAlarmLevel,
+            alarm_level: newAlarmLevel,
+            latitude: report?.latitude || reportData?.latitude,
+            longitude: report?.longitude || reportData?.longitude,
+            address: report?.location || report?.geotag_location || reportData?.address || reportData?.geotag_location
+          };
+          
+          console.log('[updateFinalAlarmLevel] Calling notifyRespondersOnAlarmChange with:', {
+            reportId,
+            newAlarmLevel,
+            oldAlarmLevel,
+            hasReportData: !!reportForNotification
+          });
+          
+          // Notify responders (existing service)
+          const notifResult = await notifyRespondersOnAlarmChange(
+            reportId,
+            newAlarmLevel,
+            oldAlarmLevel,
+            reportForNotification
+          );
+          
+          if (notifResult.success) {
+            console.log('✅ Responder notifications sent for alarm level change:', notifResult);
+          } else {
+            console.warn('⚠️ Responder notification service returned:', notifResult);
+          }
+          
+          // Notify all users (admin, station, citizen)
+          const universalResult = await notifyAllUsersOnAlarmChange(
+            reportId,
+            newAlarmLevel,
+            oldAlarmLevel,
+            reportForNotification
+          );
+          
+          if (universalResult.success) {
+            console.log('✅ Universal notifications sent for alarm level change:', universalResult);
+          } else {
+            console.warn('⚠️ Universal notification service returned:', universalResult);
+          }
+        } catch (notifError) {
+          console.error('⚠️ Error sending responder notifications:', notifError);
+          console.error('⚠️ Error stack:', notifError.stack);
+          // Don't fail the alarm update if notification fails
+        }
+        
         Alert.alert('Success', 'Final alarm level updated successfully.');
       } else {
         let errorText = '';

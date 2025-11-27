@@ -14,8 +14,6 @@ const Overview = () => {
   const [isLoading, setIsLoading] = useState(true);
   const [lastRefresh, setLastRefresh] = useState(new Date());
   const [editingFinalAlarm, setEditingFinalAlarm] = useState({});
-  const [showAlarmConfirmModal, setShowAlarmConfirmModal] = useState(false);
-  const [pendingAlarmChange, setPendingAlarmChange] = useState(null); // { reportId, newAlarmLevel, currentAlarm }
   const [aiChatSuggestions, setAiChatSuggestions] = useState([]);
   const [chatAlarmByReport, setChatAlarmByReport] = useState({});
   const [assignedResponders, setAssignedResponders] = useState([]);
@@ -36,69 +34,42 @@ const Overview = () => {
   // API endpoint for fetching reports
   const API_URL = 'https://fire-detection-api-production-f55b.up.railway.app';
 
-  // Fetch reports (API first, fallback to Supabase)
+  // Fetch reports from Railway API
   const fetchReports = async () => {
     try {
       setIsLoading(true);
-      // 1) Try the Flask API (same source Stations consume)
-      try {
-        const apiRes = await fetch(`${API_URL}/get_reports`);
-        if (apiRes.ok) {
-          const apiData = await apiRes.json();
-          const transformedFromApi = (apiData || []).map(report => ({
-            id: report.id,
-            time: formatTime(report.formatted_timestamp || report.created_at || report.timestamp),
-            reporter: report.reporter || report.user_name || report.reporter_name || 'Unknown Reporter',
-            location: report.address || report.geotag_location || 'Location unavailable',
-            status: report.status || determineStatus(report.prediction),
-            suggestedAlarmLevel: chatAlarmByReport[report.id] || normalizeAiLabel(report.recommended_alarm_level || report.alarm_level) || 'Unknown',
-            finalAlarmLevel: report.final_fire_alarm_level || '1st Alarm',
-            description: report.cause_of_fire || report.cause || 'No cause specified',
-            picture: report.image_url,
-            minutesAgo: calculateMinutesAgo(report.created_at || report.timestamp),
-            prediction: report.prediction,
-            confidence: report.confidence,
-            structure: report.structure,
-            smokeIntensity: report.smoke_intensity,
-            smokeConfidence: report.smoke_confidence,
-            numberOfStructures: report.number_of_structures_on_fire,
-            reporterId: report.reporterId || report.user_id,
-            timestamp: report.created_at || report.timestamp,
-            latitude: report.latitude,
-            longitude: report.longitude,
-            address: report.address,
-            geotag_location: report.geotag_location,
-            cancelled_by: report.cancelled_by,
-            cancellation_reason: report.cancellation_reason
-          }));
-          setReports(transformedFromApi);
-          setLastRefresh(new Date());
-          setIsLoading(false);
-          return;
-        }
-        console.warn('API get_reports failed, status:', apiRes.status);
-      } catch (apiErr) {
-        console.warn('API get_reports error:', apiErr);
-      }
-
-      // 2) Fallback: read directly from Supabase
-      const { data, error } = await supabase
-        .from('fire_reports')
-        .select('*')
-        .order('created_at', { ascending: false });
-      if (error) {
-        console.error('Supabase error:', error);
+      console.log('Fetching reports from Railway API...');
+      
+      // Fetch from Railway API
+      const response = await fetch(`${API_URL}/get_reports`);
+      
+      if (!response.ok) {
+        console.error('Railway API error:', response.status, response.statusText);
         setReports([]);
         setIsLoading(false);
         return;
       }
-      const transformedReports = (data || []).map(report => ({
+      
+      const data = await response.json();
+      console.log('Railway API data received:', data);
+      console.log('Total reports received:', data?.length || 0);
+      
+      if (!data || data.length === 0) {
+        console.log('No reports found from Railway API');
+        setReports([]);
+        setLastRefresh(new Date());
+        setIsLoading(false);
+        return;
+      }
+      
+      // Transform Railway API data to match the expected format
+      const transformedReports = data.map(report => ({
         id: report.id,
         time: formatTime(report.formatted_timestamp || report.created_at || report.timestamp),
-        reporter: report.reporter || report.user_name || report.reporter_name || 'Unknown Reporter',
+        reporter: report.reporter || 'Unknown Reporter',
         location: report.address || report.geotag_location || 'Location unavailable',
         status: report.status || determineStatus(report.prediction),
-        suggestedAlarmLevel: chatAlarmByReport[report.id] || normalizeAiLabel(report.recommended_alarm_level || report.alarm_level) || 'Unknown',
+        suggestedAlarmLevel: chatAlarmByReport[report.id] || report.recommended_alarm_level || report.alarm_level || determineSuggestedAlarm(report.number_of_structures_on_fire),
         finalAlarmLevel: report.final_fire_alarm_level || '1st Alarm',
         description: report.cause_of_fire || 'No cause specified',
         picture: report.image_url,
@@ -110,7 +81,7 @@ const Overview = () => {
         smokeIntensity: report.smoke_intensity,
         smokeConfidence: report.smoke_confidence,
         numberOfStructures: report.number_of_structures_on_fire,
-        reporterId: report.reporterId || report.user_id,
+        reporterId: report.reporterId,
         timestamp: report.created_at || report.timestamp,
         // Location data
         latitude: report.latitude,
@@ -121,6 +92,8 @@ const Overview = () => {
         cancelled_by: report.cancelled_by,
         cancellation_reason: report.cancellation_reason
       }));
+      
+      console.log('Transformed reports:', transformedReports);
       setReports(transformedReports);
       setLastRefresh(new Date());
     } catch (error) {
@@ -672,8 +645,22 @@ const Overview = () => {
   const handleFinalAlarmChange = (reportId, newAlarmLevel) => {
     const currentReport = reports.find(r => r.id === reportId);
     const currentAlarmLevel = currentReport?.finalAlarmLevel || 'Unknown';
-    setPendingAlarmChange({ reportId, newAlarmLevel, currentAlarm: currentAlarmLevel, report: currentReport });
-    setShowAlarmConfirmModal(true);
+    
+    // Show confirmation dialog
+    const confirmed = window.confirm(
+      `Are you sure you want to change the final alarm level from "${currentAlarmLevel}" to "${newAlarmLevel}"?\n\n` +
+      `Report ID: ${reportId}\n` +
+      `Location: ${currentReport?.location || 'Unknown'}\n\n` +
+      `This action will update the emergency response level and may trigger additional resource deployment.`
+    );
+    
+    if (confirmed) {
+      setEditingFinalAlarm(prev => ({ ...prev, [reportId]: false }));
+      updateFinalAlarmLevel(reportId, newAlarmLevel);
+    } else {
+      // If user cancels, just close the editing mode without saving
+      setEditingFinalAlarm(prev => ({ ...prev, [reportId]: false }));
+    }
   };
 
   // Cancel report with reason
@@ -1080,47 +1067,6 @@ const Overview = () => {
                   )}
                 </tbody>
               </table>
-            </div>
-          </div>
-        )}
-
-        {/* Final Alarm Change Confirmation Modal */}
-        {showAlarmConfirmModal && pendingAlarmChange && (
-          <div className="fixed inset-0 backdrop-blur-sm bg-black bg-opacity-30 flex items-center justify-center p-4 z-50">
-            <div className="bg-white rounded-xl shadow-xl max-w-md w-full">
-              <div className="p-6">
-                <div className="mb-4">
-                  <h3 className="text-xl font-bold text-gray-900">Confirm Alarm Level Change</h3>
-                  <p className="mt-2 text-gray-600">
-                    Change final alarm level from <span className="font-semibold">{pendingAlarmChange.currentAlarm}</span> to
-                    <span className="font-semibold"> {pendingAlarmChange.newAlarmLevel}</span>?
-                  </p>
-                  <p className="mt-2 text-sm text-gray-500">
-                    Report ID: {pendingAlarmChange.reportId}<br/>
-                    Location: {pendingAlarmChange.report?.location || 'Unknown'}
-                  </p>
-                </div>
-                <div className="flex justify-end gap-3 mt-6">
-                  <button
-                    onClick={() => { setShowAlarmConfirmModal(false); setEditingFinalAlarm(prev => ({ ...prev, [pendingAlarmChange.reportId]: false })); setPendingAlarmChange(null); }}
-                    className="px-4 py-2 bg-gray-200 text-gray-800 rounded-md hover:bg-gray-300"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    onClick={() => {
-                      setShowAlarmConfirmModal(false);
-                      const { reportId, newAlarmLevel } = pendingAlarmChange;
-                      setEditingFinalAlarm(prev => ({ ...prev, [reportId]: false }));
-                      updateFinalAlarmLevel(reportId, newAlarmLevel);
-                      setPendingAlarmChange(null);
-                    }}
-                    className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700"
-                  >
-                    Confirm
-                  </button>
-                </div>
-              </div>
             </div>
           </div>
         )}

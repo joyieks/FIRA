@@ -291,11 +291,7 @@ export default function SChatPage({ contact, onBack, currentStationId }) {
               <Text className={`text-base ${(msg.sender_type === 'station' || msg.sender === 'station') ? 'text-white' : 'text-gray-800'} ${msg.isDeleted ? 'italic text-gray-500' : ''}`}>
                 {msg.text}
               </Text>
-              {msg.ai_suggested_alarm && (
-                <View className="mt-2 self-start bg-blue-100 border border-blue-200 rounded px-2 py-1">
-                  <Text className="text-[10px] text-blue-800 font-semibold">AI Suggested: {String(msg.ai_suggested_alarm?.suggested_alarm || msg.ai_suggested_alarm)}</Text>
-                </View>
-              )}
+              {/* AI suggestion JSON display hidden - functionality still works in background */}
                              <View className={`flex-row items-center mt-2 ${msg.sender === 'station' ? 'justify-end' : 'justify-start'}`}>
                 <Text className={`text-xs ${(msg.sender_type === 'station' || msg.sender === 'station') ? 'text-gray-300' : 'text-gray-500'}`}>
                   {msg.created_at ? new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : (msg.timestamp || '')}

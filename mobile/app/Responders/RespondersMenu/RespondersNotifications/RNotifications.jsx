@@ -1,4 +1,4 @@
-import { View, Text, ScrollView, TouchableOpacity, RefreshControl, AppState } from 'react-native';
+import { View, Text, ScrollView, TouchableOpacity, RefreshControl, AppState, ActivityIndicator } from 'react-native';
 import React, { useState, useEffect, useRef } from 'react';
 import { MaterialIcons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -12,62 +12,7 @@ export default function RNotifications({ onUnreadCountChange }) {
   const appState = useRef(AppState.currentState);
 
   const [refreshing, setRefreshing] = useState(false);
-  const [notifications, setNotifications] = useState([
-    {
-      id: 1,
-      type: 'emergency',
-      title: 'Emergency Call - Fire Incident',
-      message: 'Fire reported at 123 Main Street. All available units respond immediately. Code 3 response required.',
-      time: '3 minutes ago',
-      read: false,
-      priority: 'high'
-    },
-    {
-      id: 2,
-      type: 'dispatch',
-      title: 'Dispatch Assignment',
-      message: 'You have been assigned to Station 1, Truck 2. Report to duty within 15 minutes.',
-      time: '10 minutes ago',
-      read: false,
-      priority: 'high'
-    },
-    {
-      id: 3,
-      type: 'equipment',
-      title: 'Equipment Check Required',
-      message: 'SCBA inspection due. Complete equipment check before next shift.',
-      time: '1 hour ago',
-      read: false,
-      priority: 'medium'
-    },
-    {
-      id: 4,
-      type: 'training',
-      title: 'Training Session',
-      message: 'Mandatory safety training scheduled for tomorrow at 9:00 AM. All responders must attend.',
-      time: '2 hours ago',
-      read: true,
-      priority: 'medium'
-    },
-    {
-      id: 5,
-      type: 'team',
-      title: 'Team Update',
-      message: 'New team member John Smith assigned to your shift. Welcome briefing at 7:00 AM.',
-      time: '4 hours ago',
-      read: true,
-      priority: 'low'
-    },
-    {
-      id: 6,
-      type: 'alert',
-      title: 'Weather Alert',
-      message: 'High winds expected today. Exercise caution during emergency responses.',
-      time: '1 day ago',
-      read: true,
-      priority: 'medium'
-    }
-  ]);
+  const [notifications, setNotifications] = useState([]);
 
   // NOTE: Sound/alarm management is handled by RAlertsWorker component
   // which is mounted at the app level for consistent playback across all screens
@@ -83,9 +28,71 @@ export default function RNotifications({ onUnreadCountChange }) {
           const userData = JSON.parse(userDataStr);
           console.log('📱 Responder: Parsed userData:', userData);
           
-          const resolvedId = userData?.id || userData?.uid;
-          console.log('📱 Responder: Resolved ID:', resolvedId);
-          setCurrentResponderId(resolvedId);
+          // Try multiple ID fields to match responder_id in database
+          let resolvedId = userData?.id || userData?.uid || userData?.responder_id;
+          console.log('📱 Responder: Initial resolved ID:', resolvedId);
+          console.log('📱 Responder: All available userData fields:', Object.keys(userData));
+          
+          // If we have an ID, verify it exists in responders table
+          if (resolvedId) {
+            try {
+              const { data: responderData, error: responderError } = await supabase
+                .from('responders')
+                .select('id, first_name, last_name, email')
+                .eq('id', resolvedId)
+                .single();
+              
+              if (responderError || !responderData) {
+                console.log('⚠️ Responder ID not found in responders table, trying to find by email...');
+                // Try to find by email if ID doesn't match
+                if (userData?.email) {
+                  const { data: responderByEmail } = await supabase
+                    .from('responders')
+                    .select('id, first_name, last_name, email')
+                    .eq('email', userData.email)
+                    .single();
+                  
+                  if (responderByEmail) {
+                    resolvedId = responderByEmail.id;
+                    console.log('✅ Found responder by email, using ID:', resolvedId);
+                  }
+                }
+              } else {
+                console.log('✅ Responder ID verified in database:', responderData);
+              }
+            } catch (verifyError) {
+              console.error('❌ Error verifying responder ID:', verifyError);
+            }
+          }
+          
+          if (resolvedId) {
+            setCurrentResponderId(resolvedId);
+            console.log('✅ Responder ID set:', resolvedId);
+          } else {
+            console.error('❌ No responder ID found in userData');
+            // Try to get from Supabase Auth as fallback
+            try {
+              const { data: { user } } = await supabase.auth.getUser();
+              if (user?.id) {
+                console.log('📱 Using Supabase Auth user ID:', user.id);
+                // Try to find responder by user_id
+                const { data: responderByUserId } = await supabase
+                  .from('responders')
+                  .select('id')
+                  .eq('user_id', user.id)
+                  .single();
+                
+                if (responderByUserId) {
+                  setCurrentResponderId(responderByUserId.id);
+                  console.log('✅ Found responder by user_id, using ID:', responderByUserId.id);
+                } else {
+                  setCurrentResponderId(user.id);
+                }
+              }
+            } catch (authError) {
+              console.error('❌ Error getting Supabase Auth user:', authError);
+            }
+          }
         }
       } catch (err) {
         console.error('📱 Responder: Error loading user data:', err);
@@ -112,10 +119,37 @@ export default function RNotifications({ onUnreadCountChange }) {
   }, [currentResponderId]);
 
   const loadNotifications = async () => {
-    if (!currentResponderId) return;
+    if (!currentResponderId) {
+      console.log('⚠️ No responder ID available, cannot load notifications');
+      return;
+    }
     
     try {
       setLoading(true);
+      console.log('📱 Loading notifications for responder_id:', currentResponderId);
+      console.log('📱 Responder ID type:', typeof currentResponderId);
+      
+      // First, let's verify the responder exists
+      const { data: responderCheck, error: responderCheckError } = await supabase
+        .from('responders')
+        .select('id, first_name, last_name, email')
+        .eq('id', currentResponderId)
+        .single();
+      
+      if (responderCheckError || !responderCheck) {
+        console.error('❌ Responder not found with ID:', currentResponderId);
+        console.error('❌ Error:', responderCheckError);
+        // Try to find all responders to see what IDs exist
+        const { data: allResponders } = await supabase
+          .from('responders')
+          .select('id, first_name, last_name, email')
+          .limit(5);
+        console.log('📋 Sample responder IDs in database:', allResponders?.map(r => r.id));
+      } else {
+        console.log('✅ Responder verified:', responderCheck);
+      }
+      
+      // Now query notifications
       const { data, error } = await supabase
         .from('responder_notifications')
         .select('*')
@@ -124,12 +158,48 @@ export default function RNotifications({ onUnreadCountChange }) {
 
       if (error) {
         console.error('📱 Responder: Error fetching notifications:', error);
+        console.error('📱 Responder: Error details:', JSON.stringify(error, null, 2));
+        // Try querying all notifications to see if any exist
+        const { data: allNotifs } = await supabase
+          .from('responder_notifications')
+          .select('id, responder_id, title, created_at')
+          .limit(10)
+          .order('created_at', { ascending: false });
+        console.log('📋 Sample notifications in database (any responder):', allNotifs);
         return;
       }
 
+      console.log(`✅ Loaded ${data?.length || 0} notifications for responder ${currentResponderId}`);
+      if (data && data.length > 0) {
+        console.log('📱 Sample notification:', {
+          id: data[0].id,
+          title: data[0].title,
+          responder_id: data[0].responder_id,
+          responder_id_type: typeof data[0].responder_id,
+          current_responder_id: currentResponderId,
+          current_responder_id_type: typeof currentResponderId,
+          ids_match: String(data[0].responder_id) === String(currentResponderId),
+          created_at: data[0].created_at
+        });
+      } else {
+        console.log('⚠️ No notifications found. Checking if any notifications exist in database...');
+        const { data: anyNotifs } = await supabase
+          .from('responder_notifications')
+          .select('id, responder_id, title, created_at')
+          .limit(5)
+          .order('created_at', { ascending: false });
+        console.log('📋 Any notifications in database:', anyNotifs);
+        if (anyNotifs && anyNotifs.length > 0) {
+          console.log('⚠️ Notifications exist but responder_id mismatch!');
+          console.log('⚠️ Looking for:', currentResponderId, typeof currentResponderId);
+          console.log('⚠️ Found responder_ids:', anyNotifs.map(n => ({ id: n.responder_id, type: typeof n.responder_id })));
+        }
+      }
+      
       setNotifications(data || []);
     } catch (err) {
       console.error('📱 Responder: Error loading notifications:', err);
+      console.error('📱 Responder: Error stack:', err.stack);
     } finally {
       setLoading(false);
     }
@@ -289,13 +359,25 @@ export default function RNotifications({ onUnreadCountChange }) {
   }, [unreadCount, onUnreadCountChange]);
 
   // Pull to refresh handler
-  const onRefresh = () => {
+  const onRefresh = async () => {
     setRefreshing(true);
-    // Simulate refresh - in real app, fetch from Supabase
-    setTimeout(() => {
+    try {
+      await loadNotifications();
+    } catch (error) {
+      console.error('📱 Responder: Error refreshing notifications:', error);
+    } finally {
       setRefreshing(false);
-    }, 1000);
+    }
   };
+
+  // Debug: Show current responder ID and notification count
+  useEffect(() => {
+    if (currentResponderId) {
+      console.log('📊 DEBUG: Current responder ID:', currentResponderId);
+      console.log('📊 DEBUG: Notification count:', notifications.length);
+      console.log('📊 DEBUG: Unread count:', unreadCount);
+    }
+  }, [currentResponderId, notifications.length, unreadCount]);
 
   return (
     <View className="flex-1 bg-gray-50">
@@ -303,7 +385,18 @@ export default function RNotifications({ onUnreadCountChange }) {
       <View className="bg-white pt-16 pb-4 px-4 border-b border-gray-200">
         <View className="flex-row items-center justify-center">
           <Text className="text-fire font-bold text-lg">Notification</Text>
+          {currentResponderId && (
+            <Text className="text-xs text-gray-500 ml-2">
+              ({notifications.length} notifications)
+            </Text>
+          )}
         </View>
+        {/* Debug Info - Remove in production */}
+        {__DEV__ && currentResponderId && (
+          <Text className="text-xs text-gray-400 text-center mt-1">
+            Responder ID: {currentResponderId.substring(0, 8)}...
+          </Text>
+        )}
       </View>
 
       {/* Filter Tabs */}
@@ -410,15 +503,32 @@ export default function RNotifications({ onUnreadCountChange }) {
       </ScrollView>
 
       {/* Empty State */}
-      {notifications.length === 0 && (
+      {notifications.length === 0 && !loading && (
         <View className="flex-1 items-center justify-center px-8">
           <MaterialIcons name="notifications-off" size={64} color="#9ca3af" />
           <Text className="text-xl font-bold text-gray-600 mt-4 mb-2">
             No Notifications
           </Text>
-          <Text className="text-gray-500 text-center">
+          <Text className="text-gray-500 text-center mb-4">
             Stay alert! We&apos;ll notify you when emergency calls come in.
           </Text>
+          {__DEV__ && currentResponderId && (
+            <View className="bg-blue-50 p-4 rounded-lg mt-4">
+              <Text className="text-xs text-blue-800 font-semibold mb-2">Debug Info:</Text>
+              <Text className="text-xs text-blue-700">Responder ID: {currentResponderId}</Text>
+              <Text className="text-xs text-blue-700 mt-1">
+                Check console logs for notification loading details
+              </Text>
+            </View>
+          )}
+        </View>
+      )}
+
+      {/* Loading State */}
+      {loading && notifications.length === 0 && (
+        <View className="flex-1 items-center justify-center">
+          <ActivityIndicator size="large" color="#ff512f" />
+          <Text className="text-gray-500 mt-4">Loading notifications...</Text>
         </View>
       )}
     </View>
