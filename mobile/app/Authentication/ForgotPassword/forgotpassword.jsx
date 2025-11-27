@@ -254,35 +254,57 @@ const ForgotPasswordScreen = () => {
         return;
       }
 
-      // Call the Edge Function to reset password
-      const { data: resetData, error: resetError } = await supabase.functions.invoke('reset-password', {
-        body: {
-          email: email,
-          newPassword: newPassword,
-          verificationCode: codeData.code,
-          userTable: codeData.user_table
+      const userTable = codeData.user_table;
+
+      // Try to call the Edge Function to reset password
+      try {
+        const { data: resetData, error: resetError } = await supabase.functions.invoke('reset-password', {
+          body: {
+            email: email,
+            newPassword: newPassword,
+            verificationCode: codeData.code,
+            userTable: userTable
+          }
+        });
+
+        if (resetError) {
+          console.error('Error calling reset function:', resetError);
+          console.log('⚠️ Edge Function error. Please contact support or ensure the reset-password function is deployed.');
+          throw new Error('Edge Function not available');
         }
-      });
 
-      if (resetError) {
-        console.error('Error calling reset function:', resetError);
-        setError('Failed to reset password. Please try again.');
+        console.log('✅ Password reset via Edge Function:', resetData);
+
+        // Delete the verification code
+        await supabase
+          .from('password_reset_codes')
+          .delete()
+          .eq('email', email);
+
+        console.log(`✅ Password reset completed for ${email}`);
+
         setIsLoading(false);
-        return;
+        setStep(4);
+        displayToast('Password updated successfully!', 'success');
+
+        setTimeout(() => {
+          router.replace('/Authentication/login');
+        }, 2000);
+      } catch (edgeFunctionError) {
+        console.error('Edge Function not available:', edgeFunctionError);
+        
+        // Clean up the reset code
+        await supabase
+          .from('password_reset_codes')
+          .delete()
+          .eq('email', email);
+
+        setIsLoading(false);
+        setError('Password reset service is currently unavailable. Please contact support or try again later.');
       }
-
-      console.log('✅ Password reset successful:', resetData);
-
-      setIsLoading(false);
-      setStep(4);
-      displayToast('Password updated successfully!', 'success');
-
-      setTimeout(() => {
-        router.replace('/Authentication/login');
-      }, 2000);
     } catch (error) {
       console.error('Error resetting password:', error);
-      setError('An error occurred. Please try again.');
+      setError('An error occurred during password reset. Please try again.');
       setIsLoading(false);
     }
   };

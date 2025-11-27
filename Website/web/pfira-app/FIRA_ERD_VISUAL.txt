@@ -1,0 +1,292 @@
+═══════════════════════════════════════════════════════════════════════════════
+                    FIRA PROJECT - ENTITY RELATIONSHIP DIAGRAM
+                          Database Schema Visualization
+═══════════════════════════════════════════════════════════════════════════════
+
+
+                    ┌──────────────────────────────────────┐
+                    │       auth.users                     │
+                    │    (Supabase Auth)                   │
+                    ├──────────────────────────────────────┤
+                    │  id (PK)                             │
+                    │  email                               │
+                    │  encrypted_password                  │
+                    │  email_confirmed                     │
+                    │  created_at                          │
+                    └──────────────────────────────────────┘
+                              │
+                              │
+                ┌─────────────┼─────────────┐
+                │             │             │
+                │             │             │
+    ┌───────────▼──────┐     │      ┌──────▼──────────────┐
+    │  admin_users     │     │      │  station_users      │
+    ├──────────────────┤     │      ├─────────────────────┤
+    │  id (PK)         │     │      │  id (PK)            │
+    │  email (UNIQUE)  │     │      │  user_id (FK)       │◄──┐
+    │  first_name      │     │      │  email (UNIQUE)     │   │
+    │  last_name       │     │      │  station_name       │   │
+    │  role            │     │      │  address            │   │
+    │  active          │     │      │  phone              │   │
+    │  status          │     │      │  position           │   │
+    │  created_at      │     │      │  role               │   │
+    │  updated_at      │     │      │  active             │   │
+    └──────────────────┘     │      │  status             │   │
+                             │      │  is_online          │   │
+                             │      │  created_at         │   │
+                             │      │  updated_at         │   │
+                             │      └─────────────────────┘   │
+                             │              │                 │
+                             │              │ (Many-to-One)   │
+                             │              │                 │
+                    ┌────────▼──────────────▼──────────┐     │
+                    │   responder_users                │     │
+                    ├──────────────────────────────────┤     │
+                    │  id (PK)                         │     │
+                    │  user_id (FK)                    │─────┘
+                    │  email (UNIQUE)                  │
+                    │  first_name                      │
+                    │  last_name                       │
+                    │  phone                           │
+                    │  station_id (FK)                 │◄──┐
+                    │  station_name                    │   │
+                    │  position                        │   │
+                    │  role                            │   │
+                    │  active                          │   │
+                    │  status                          │   │
+                    │  is_online                       │   │
+                    │  created_at                      │   │
+                    │  updated_at                      │   │
+                    └──────────────────────────────────┘   │
+                                                           │
+                    ┌──────────────────────────────────────┘
+                    │  (One-to-Many)
+                    │
+    ┌───────────────▼──────────────────┐
+    │  citizen_users                   │
+    ├──────────────────────────────────┤
+    │  id (PK)                         │
+    │  email (UNIQUE)                  │
+    │  first_name                      │
+    │  last_name                       │
+    │  phone                           │
+    │  phone_number                    │
+    │  display_name                    │
+    │  status                          │
+    │  reports                         │
+    │  last_activity                   │
+    │  created_at                      │
+    │  updated_at                      │
+    └──────────────────────────────────┘
+
+
+═══════════════════════════════════════════════════════════════════════════════
+
+                         REPORT MANAGEMENT SYSTEM
+
+    ┌────────────────────────────────────────────────────────────────┐
+    │                     report_assignments                          │
+    │              (Junction Table - Many-to-Many)                    │
+    ├────────────────────────────────────────────────────────────────┤
+    │  id (PK)                                                        │
+    │  report_id (TEXT) - Firebase Report ID                         │
+    │  assignee_type (ENUM: 'station' | 'responder')                 │
+    │  assignee_id (UUID) - Polymorphic FK                           │
+    │  assigned_at                                                    │
+    │  created_at                                                     │
+    │  updated_at                                                     │
+    └────────────────────────────────────────────────────────────────┘
+           │                                    │
+           │                                    │
+           │ (Many-to-One)                      │ (Many-to-One)
+           │                                    │
+    ┌──────▼──────────┐                ┌────────▼────────────────┐
+    │ station_users   │                │ responder_users         │
+    │                 │                │                         │
+    │ (see above)     │                │ (see above)             │
+    └─────────────────┘                └─────────────────────────┘
+
+
+    ┌────────────────────────────────────────────────────────────────┐
+    │                  assigned_report_snapshots                      │
+    ├────────────────────────────────────────────────────────────────┤
+    │  report_id (PK) - Firebase Report ID                          │
+    │  lat (DOUBLE PRECISION)                                        │
+    │  lng (DOUBLE PRECISION)                                        │
+    │  address (TEXT)                                                │
+    │  snapshot_json (JSONB)                                         │
+    │  created_at                                                    │
+    │  updated_at                                                    │
+    └────────────────────────────────────────────────────────────────┘
+
+
+    ┌────────────────────────────────────────────────────────────────┐
+    │                      report_routes                              │
+    │            (Forwarding/Redirection History)                     │
+    ├────────────────────────────────────────────────────────────────┤
+    │  id (PK)                                                        │
+    │  report_id (TEXT) - Firebase Report ID                         │
+    │  target (TEXT) - Format: 'station:<id>' or 'agency:police'    │
+    │  note (TEXT)                                                    │
+    │  forwarded_at                                                   │
+    │  created_at                                                     │
+    └────────────────────────────────────────────────────────────────┘
+
+
+═══════════════════════════════════════════════════════════════════════════════
+
+                         COMMUNICATION SYSTEM
+
+    ┌────────────────────────────────────────────────────────────────┐
+    │                          messages                               │
+    │                    (Chat System - Many-to-Many)                 │
+    ├────────────────────────────────────────────────────────────────┤
+    │  id (PK)                                                        │
+    │  sender_id (UUID) - Polymorphic                                │
+    │  receiver_id (UUID) - Polymorphic                              │
+    │  sender_type (ENUM: 'admin'|'station'|'responder'|'citizen')  │
+    │  receiver_type (ENUM: 'admin'|'station'|'responder'|'citizen')│
+    │  text (TEXT)                                                    │
+    │  image_url (TEXT)                                               │
+    │  is_emergency (BOOLEAN)                                         │
+    │  is_read (BOOLEAN)                                              │
+    │  created_at                                                     │
+    │  updated_at                                                     │
+    └────────────────────────────────────────────────────────────────┘
+           │                                    │
+           │  (Polymorphic References)          │
+           │                                    │
+    ┌──────┴────────────────────────────────────┴──────┐
+    │                                                 │
+    │  Can reference any of:                          │
+    │  • admin_users.id                               │
+    │  • station_users.id                             │
+    │  • responder_users.id                           │
+    │  • citizen_users.id                             │
+    └─────────────────────────────────────────────────┘
+
+
+    ┌────────────────────────────────────────────────────────────────┐
+    │                      notifications                              │
+    │            (Unified Notification System - One-to-Many)          │
+    ├────────────────────────────────────────────────────────────────┤
+    │  id (PK)                                                        │
+    │  user_id (UUID) - Polymorphic                                  │
+    │  user_type (ENUM: 'admin'|'station'|'responder'|'citizen')    │
+    │  title (TEXT)                                                   │
+    │  message (TEXT)                                                 │
+    │  type (ENUM: 'fire_alert'|'assignment'|'system'|...)          │
+    │  priority (ENUM: 'low'|'normal'|'high'|'urgent')              │
+    │  is_read (BOOLEAN)                                              │
+    │  related_report_id (TEXT)                                       │
+    │  action_url (TEXT)                                              │
+    │  created_at                                                     │
+    │  updated_at                                                     │
+    └────────────────────────────────────────────────────────────────┘
+           │
+           │ (Many-to-One)
+           │
+    ┌──────┴─────────────────────────────────────┐
+    │                                            │
+    │  Can reference any of:                     │
+    │  • admin_users.id                          │
+    │  • station_users.id                        │
+    │  • responder_users.id                      │
+    │  • citizen_users.id                        │
+    └────────────────────────────────────────────┘
+
+
+    ┌────────────────────────────────────────────────────────────────┐
+    │                 responder_notifications                         │
+    │         (Responder-Specific Notifications - Many-to-One)       │
+    ├────────────────────────────────────────────────────────────────┤
+    │  id (PK)                                                        │
+    │  responder_id (FK) ─────────────────┐                          │
+    │  station_id (FK) ───────────────────┼──┐                       │
+    │  fire_report_id (TEXT)              │  │                       │
+    │  title (TEXT)                       │  │                       │
+    │  message (TEXT)                     │  │                       │
+    │  priority (ENUM)                    │  │                       │
+    │  status (ENUM: 'pending'|...)       │  │                       │
+    │  is_read (BOOLEAN)                  │  │                       │
+    │  accepted_at                        │  │                       │
+    │  created_at                         │  │                       │
+    │  updated_at                         │  │                       │
+    └─────────────────────────────────────┼──┼───────────────────────┘
+                                          │  │
+                    ┌─────────────────────┘  │
+                    │                        │
+                    │                        │
+            ┌───────▼────────┐      ┌────────▼──────────┐
+            │ responders     │      │  station_users    │
+            │ (legacy table) │      │  (see above)      │
+            └────────────────┘      └───────────────────┘
+
+
+═══════════════════════════════════════════════════════════════════════════════
+
+                         AUTHENTICATION & SECURITY
+
+    ┌────────────────────────────────────────────────────────────────┐
+    │                  password_reset_codes                           │
+    ├────────────────────────────────────────────────────────────────┤
+    │  id (PK)                                                        │
+    │  email (UNIQUE)                                                 │
+    │  code (TEXT) - 6-digit verification code                       │
+    │  user_table (TEXT) - Which table user belongs to               │
+    │  expires_at (TIMESTAMP)                                        │
+    │  created_at                                                    │
+    └────────────────────────────────────────────────────────────────┘
+
+
+    ┌────────────────────────────────────────────────────────────────┐
+    │                pending_password_resets                          │
+    ├────────────────────────────────────────────────────────────────┤
+    │  id (PK)                                                        │
+    │  email (UNIQUE)                                                 │
+    │  new_password_hash (TEXT)                                       │
+    │  user_table (TEXT)                                              │
+    │  user_id (UUID) - Optional                                     │
+    │  verification_code (TEXT)                                       │
+    │  expires_at (TIMESTAMP)                                        │
+    │  created_at                                                    │
+    └────────────────────────────────────────────────────────────────┘
+
+
+═══════════════════════════════════════════════════════════════════════════════
+                              LEGEND
+
+Relationship Notation:
+  │     One (required)
+  │◄──── One (optional)
+  ├─►    Many (one or more)
+  │<     Many (one or more)
+  └──┐   One-to-Many
+  ┌──┘   Many-to-One
+
+Entity Types:
+  (PK) = Primary Key
+  (FK) = Foreign Key
+  (UNIQUE) = Unique Constraint
+  (ENUM) = Enumerated Type
+  (TEXT) = Text/VARCHAR
+  (UUID) = Universally Unique Identifier
+  (BOOLEAN) = True/False
+  (TIMESTAMP) = Date/Time with Timezone
+  (JSONB) = JSON Binary Format
+
+═══════════════════════════════════════════════════════════════════════════════
+
+                        RELATIONSHIP SUMMARY
+
+1. auth.users → station_users (One-to-One via user_id)
+2. auth.users → responder_users (One-to-One via user_id)
+3. station_users → responder_users (One-to-Many via station_id)
+4. station_users → responder_notifications (One-to-Many)
+5. report_assignments → station_users (Many-to-One via assignee_id)
+6. report_assignments → responder_users (Many-to-One via assignee_id)
+7. messages → All user tables (Polymorphic Many-to-Many)
+8. notifications → All user tables (Polymorphic One-to-Many)
+
+═══════════════════════════════════════════════════════════════════════════════
+
