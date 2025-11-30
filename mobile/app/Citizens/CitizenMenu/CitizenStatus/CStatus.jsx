@@ -655,14 +655,16 @@ const CStatus = () => {
   const [mapRegion, setMapRegion] = useState({
     latitude: 14.5995,
     longitude: 120.9842,
-    latitudeDelta: 0.05,
-    longitudeDelta: 0.05,
+    latitudeDelta: 0.0015,
+    longitudeDelta: 0.0015,
   });
   const [isGettingLocation, setIsGettingLocation] = useState(false);
   const [pickedAddress, setPickedAddress] = useState('');
   const [tempPickedAddress, setTempPickedAddress] = useState('');
   const [isResolvingAddress, setIsResolvingAddress] = useState(false);
+  const [isDraggingMarker, setIsDraggingMarker] = useState(false);
   const mapRef = useRef(null);
+  const editMapRef = useRef(null);
 
   // Edit state
   const [editData, setEditData] = useState({
@@ -678,6 +680,7 @@ const CStatus = () => {
   const [editTempAddress, setEditTempAddress] = useState('');
   const [editMapRegion, setEditMapRegion] = useState(null);
   const [isGettingEditLocation, setIsGettingEditLocation] = useState(false);
+  const [isDraggingEditMarker, setIsDraggingEditMarker] = useState(false);
   const [cancelReason, setCancelReason] = useState('');
 
   const handleReportEmergency = () => {
@@ -702,8 +705,8 @@ const CStatus = () => {
         const region = {
           latitude: location.coords.latitude,
           longitude: location.coords.longitude,
-          latitudeDelta: 0.01,
-          longitudeDelta: 0.01,
+          latitudeDelta: 0.0015,
+          longitudeDelta: 0.0015,
         };
         setMapRegion(region);
         // Default pin to current location if none picked yet
@@ -1472,8 +1475,12 @@ const CStatus = () => {
       >
         <View className="flex-1 bg-white">
           <View className="h-16 flex-row items-center justify-between px-4 border-b border-gray-200 bg-white">
-            <TouchableOpacity onPress={() => setShowLocationPicker(false)}>
-              <Text className="text-red-600 font-semibold">Cancel</Text>
+            <TouchableOpacity 
+              onPress={() => setShowLocationPicker(false)}
+              className="px-4 py-3"
+              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+            >
+              <Text className="text-red-600 font-semibold text-xl">Cancel</Text>
             </TouchableOpacity>
             <Text className="text-gray-800 font-bold">Pick Location</Text>
             <TouchableOpacity
@@ -1498,11 +1505,13 @@ const CStatus = () => {
                   setShowLocationPicker(false);
                   setTimeout(() => setShowEmergencyModal(true), 200);
                 } else {
-                  Alert.alert('Select a location', 'Tap on the map to place a pin.');
+                  Alert.alert('Select a location', 'Tap on the map to place a pin, then drag it to adjust.');
                 }
               }}
+              className="px-4 py-3"
+              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
             >
-              <Text className="text-green-600 font-semibold">Use</Text>
+              <Text className="text-green-600 font-semibold text-xl">Use</Text>
             </TouchableOpacity>
           </View>
           {isGettingLocation && (
@@ -1520,6 +1529,8 @@ const CStatus = () => {
             showsUserLocation={true}
             showsMyLocationButton={true}
             toolbarEnabled={true}
+            scrollEnabled={true}
+            zoomEnabled={true}
             onPress={(e) => {
               const { latitude, longitude } = e.nativeEvent.coordinate;
               setTempPickedLocation({ latitude, longitude });
@@ -1547,15 +1558,98 @@ const CStatus = () => {
             key={`picker-${showLocationPicker}-${mapRegion.latitude}-${mapRegion.longitude}`}
           >
             {tempPickedLocation?.latitude && (
-              <Marker coordinate={tempPickedLocation} />
+              <Marker
+                coordinate={tempPickedLocation}
+                draggable={true}
+                onDragStart={() => {
+                  setIsDraggingMarker(true);
+                }}
+                onDrag={(e) => {
+                  const { latitude, longitude } = e.nativeEvent.coordinate;
+                  setTempPickedLocation({ latitude, longitude });
+                  
+                  // Smooth edge panning - pure pan without zoom changes
+                  if (mapRef.current) {
+                    mapRef.current.getCamera().then((camera) => {
+                      const centerLat = camera.center.latitude;
+                      const centerLng = camera.center.longitude;
+                      const zoom = camera.zoom || 15;
+                      
+                      // Calculate visible area based on zoom (for threshold only)
+                      const latDelta = 180 / Math.pow(2, zoom);
+                      const lngDelta = 360 / Math.pow(2, zoom);
+                      
+                      // Threshold: trigger when 25% from edge
+                      const latThreshold = latDelta * 0.25;
+                      const lngThreshold = lngDelta * 0.25;
+                      
+                      // Check distance from center to marker
+                      const distTop = latitude - centerLat;
+                      const distBottom = centerLat - latitude;
+                      const distRight = longitude - centerLng;
+                      const distLeft = centerLng - longitude;
+                      
+                      // Determine pan direction - pan 40% of visible area
+                      let panLat = 0;
+                      let panLng = 0;
+                      
+                      if (distTop > latThreshold) panLat = latDelta * 0.4;
+                      if (distBottom > latThreshold) panLat = -latDelta * 0.4;
+                      if (distRight > lngThreshold) panLng = lngDelta * 0.4;
+                      if (distLeft > lngThreshold) panLng = -lngDelta * 0.4;
+                      
+                      // Use animateCamera to pan without any zoom changes
+                      if (panLat !== 0 || panLng !== 0) {
+                        mapRef.current.animateCamera({
+                          center: {
+                            latitude: centerLat + panLat,
+                            longitude: centerLng + panLng,
+                          },
+                        }, { duration: 100 });
+                      }
+                    }).catch(() => {});
+                  }
+                }}
+                onDragEnd={(e) => {
+                  setIsDraggingMarker(false);
+                  const { latitude, longitude } = e.nativeEvent.coordinate;
+                  setTempPickedLocation({ latitude, longitude });
+                  // Don't adjust map after drag - keep user's zoom level
+                  // Reverse-geocode dragged location
+                  (async () => {
+                    try {
+                      setIsResolvingAddress(true);
+                      const res = await Location.reverseGeocodeAsync({ latitude, longitude });
+                      if (res && res[0]) {
+                        const r = res[0];
+                        const label = [r.name, r.street, r.subregion, r.city || r.region, r.postalCode, r.country]
+                          .filter(Boolean)
+                          .join(', ');
+                        setTempPickedAddress(label);
+                      } else {
+                        setTempPickedAddress('');
+                      }
+                    } catch (err) {
+                      setTempPickedAddress('');
+                    } finally {
+                      setIsResolvingAddress(false);
+                    }
+                  })();
+                }}
+              />
             )}
           </MapView>
           <View className="p-4 border-t border-gray-200">
             <Text className="text-gray-600 text-sm">
               {tempPickedLocation
                 ? `${tempPickedAddress ? tempPickedAddress + ' • ' : ''}${tempPickedLocation.latitude.toFixed(6)}, ${tempPickedLocation.longitude.toFixed(6)}`
-                : 'Tap anywhere on the map to place a pin'}
+                : 'Tap anywhere on the map to place a pin, then drag it to adjust'}
             </Text>
+            {tempPickedLocation && (
+              <Text className="text-gray-500 text-xs mt-1">
+                Drag the pin to adjust the location
+              </Text>
+            )}
           </View>
         </View>
       </Modal>
@@ -1973,8 +2067,12 @@ const CStatus = () => {
       >
         <View className="flex-1 bg-white">
           <View className="h-16 flex-row items-center justify-between px-4 border-b border-gray-200 bg-white">
-            <TouchableOpacity onPress={() => setShowEditLocationPicker(false)}>
-              <Text className="text-red-600 font-semibold">Cancel</Text>
+            <TouchableOpacity 
+              onPress={() => setShowEditLocationPicker(false)}
+              className="px-4 py-3"
+              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+            >
+              <Text className="text-red-600 font-semibold text-xl">Cancel</Text>
             </TouchableOpacity>
             <Text className="text-gray-800 font-bold">Pick New Location</Text>
             <TouchableOpacity
@@ -1990,11 +2088,13 @@ const CStatus = () => {
                   // Reopen the edit modal so the user can finish editing
                   setTimeout(() => setShowEditModal(true), 200);
                 } else {
-                  Alert.alert('Select a location', 'Tap on the map to place a pin.');
+                  Alert.alert('Select a location', 'Tap on the map to place a pin, then drag it to adjust.');
                 }
               }}
+              className="px-4 py-3"
+              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
             >
-              <Text className="text-green-600 font-semibold">Use</Text>
+              <Text className="text-green-600 font-semibold text-xl">Use</Text>
             </TouchableOpacity>
           </View>
           {isGettingEditLocation && (
@@ -2006,9 +2106,12 @@ const CStatus = () => {
             style={{ flex: 1 }}
             provider={PROVIDER_GOOGLE}
             initialRegion={editMapRegion || mapRegion}
+            ref={editMapRef}
             showsUserLocation={true}
             showsMyLocationButton={true}
             toolbarEnabled={true}
+            scrollEnabled={true}
+            zoomEnabled={true}
             onPress={(e) => {
               const { latitude, longitude } = e.nativeEvent.coordinate;
               setEditTempLocation({ latitude, longitude });
@@ -2024,12 +2127,94 @@ const CStatus = () => {
               })();
             }}
           >
-            {editTempLocation?.latitude && <Marker coordinate={editTempLocation} />}
+            {editTempLocation?.latitude && (
+              <Marker
+                coordinate={editTempLocation}
+                draggable={true}
+                onDragStart={() => {
+                  setIsDraggingEditMarker(true);
+                }}
+                onDrag={(e) => {
+                  const { latitude, longitude } = e.nativeEvent.coordinate;
+                  setEditTempLocation({ latitude, longitude });
+                  
+                  // Smooth edge panning - pure pan without zoom changes
+                  if (editMapRef.current) {
+                    editMapRef.current.getCamera().then((camera) => {
+                      const centerLat = camera.center.latitude;
+                      const centerLng = camera.center.longitude;
+                      const zoom = camera.zoom || 15;
+                      
+                      // Calculate visible area based on zoom (for threshold only)
+                      const latDelta = 180 / Math.pow(2, zoom);
+                      const lngDelta = 360 / Math.pow(2, zoom);
+                      
+                      // Threshold: trigger when 25% from edge
+                      const latThreshold = latDelta * 0.25;
+                      const lngThreshold = lngDelta * 0.25;
+                      
+                      // Check distance from center to marker
+                      const distTop = latitude - centerLat;
+                      const distBottom = centerLat - latitude;
+                      const distRight = longitude - centerLng;
+                      const distLeft = centerLng - longitude;
+                      
+                      // Determine pan direction - pan 40% of visible area
+                      let panLat = 0;
+                      let panLng = 0;
+                      
+                      if (distTop > latThreshold) panLat = latDelta * 0.4;
+                      if (distBottom > latThreshold) panLat = -latDelta * 0.4;
+                      if (distRight > lngThreshold) panLng = lngDelta * 0.4;
+                      if (distLeft > lngThreshold) panLng = -lngDelta * 0.4;
+                      
+                      // Use animateCamera to pan without any zoom changes
+                      if (panLat !== 0 || panLng !== 0) {
+                        editMapRef.current.animateCamera({
+                          center: {
+                            latitude: centerLat + panLat,
+                            longitude: centerLng + panLng,
+                          },
+                        }, { duration: 100 });
+                      }
+                    }).catch(() => {});
+                  }
+                }}
+                onDragEnd={(e) => {
+                  setIsDraggingEditMarker(false);
+                  const { latitude, longitude } = e.nativeEvent.coordinate;
+                  setEditTempLocation({ latitude, longitude });
+                  // Don't adjust map after drag - keep user's zoom level
+                  // Reverse-geocode dragged location
+                  (async () => {
+                    try {
+                      const res = await Location.reverseGeocodeAsync({ latitude, longitude });
+                      if (res && res[0]) {
+                        const r = res[0];
+                        const label = [r.name, r.street, r.subregion, r.city || r.region, r.postalCode, r.country]
+                          .filter(Boolean)
+                          .join(', ');
+                        setEditTempAddress(label);
+                      } else {
+                        setEditTempAddress('');
+                      }
+                    } catch (err) {
+                      setEditTempAddress('');
+                    }
+                  })();
+                }}
+              />
+            )}
           </MapView>
           <View className="p-4 border-t border-gray-200">
             <Text className="text-gray-600 text-sm">
-              {editTempLocation ? `${editTempAddress ? editTempAddress + ' • ' : ''}${editTempLocation.latitude.toFixed(6)}, ${editTempLocation.longitude.toFixed(6)}` : 'Tap anywhere on the map to place a pin'}
+              {editTempLocation ? `${editTempAddress ? editTempAddress + ' • ' : ''}${editTempLocation.latitude.toFixed(6)}, ${editTempLocation.longitude.toFixed(6)}` : 'Tap anywhere on the map to place a pin, then drag it to adjust'}
             </Text>
+            {editTempLocation && (
+              <Text className="text-gray-500 text-xs mt-1">
+                Drag the pin to adjust the location
+              </Text>
+            )}
           </View>
         </View>
       </Modal>
