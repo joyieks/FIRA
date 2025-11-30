@@ -278,8 +278,8 @@ export default function RAlertsWorker() {
 
       const list = data || [];
       
-      // Check if there are any unread high priority notifications
-      const hasUnreadAlert = list.some(n => n.priority === 'high' && !n.is_read);
+      // Check if there are any unread high or urgent priority notifications
+      const hasUnreadAlert = list.some(n => (n.priority === 'high' || n.priority === 'urgent') && !n.is_read);
       
       // If NO unread alerts, stop the alarm
       if (!hasUnreadAlert && shouldBePlayingRef.current) {
@@ -288,8 +288,8 @@ export default function RAlertsWorker() {
         return;
       }
       
-      // Check for NEW high priority alerts
-      const newAlerts = list.filter(n => n.priority === 'high' && !n.is_read && !processedNotificationIdsRef.current.has(n.id));
+      // Check for NEW high or urgent priority alerts
+      const newAlerts = list.filter(n => (n.priority === 'high' || n.priority === 'urgent') && !n.is_read && !processedNotificationIdsRef.current.has(n.id));
       if (newAlerts.length > 0 && !isAlertingRef.current) {
         console.log('🔊 New fire alerts found for responder, playing alarm...');
         newAlerts.forEach(n => processedNotificationIdsRef.current.add(n.id));
@@ -327,8 +327,8 @@ export default function RAlertsWorker() {
         filter: `responder_id=eq.${responderId}`
       }, (payload) => {
         console.log('🔥 Real-time: New responder notification inserted:', payload.new);
-        if (payload.new?.priority === 'high') {
-          console.log('🔊 High priority alert received, playing alarm...');
+        if (payload.new?.priority === 'high' || payload.new?.priority === 'urgent') {
+          console.log('🔊 High/urgent priority alert received, playing alarm...');
           playAlert();
         }
       })
@@ -338,9 +338,17 @@ export default function RAlertsWorker() {
         table: 'responder_notifications',
         filter: `responder_id=eq.${responderId}`
       }, (payload) => {
-        if (payload.new?.is_read && payload.new?.priority === 'high') {
+        const isHighOrUrgent = payload.new?.priority === 'high' || payload.new?.priority === 'urgent';
+        
+        // If updated to unread with high/urgent priority, play alarm
+        if (!payload.new?.is_read && isHighOrUrgent) {
+          console.log('🔊 Real-time: Notification updated to unread with high/urgent priority, playing alarm...');
+          playAlert();
+        }
+        
+        // If marked as read, check if any other unread alerts remain
+        if (payload.new?.is_read && isHighOrUrgent) {
           console.log('✅ Real-time: Alert marked as read, checking all notifications...');
-          // Check all notifications to see if ANY alerts remain unread
           loadNotifications();
         }
       })

@@ -650,7 +650,7 @@ const Station_Overview = () => {
           .update({
             title: responderTitle,
             message: responderMessage,
-            priority: newStatus === 'Fire Out' ? 'normal' : 'high',
+            priority: 'high', // Always high priority to trigger alarm for status updates
             status: 'completed', // Mark as completed for Fire Out/Under Control
             is_read: false // Reset is_read so responder sees the update
           })

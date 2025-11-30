@@ -1181,36 +1181,6 @@ const Sdashboard = () => {
                       <img src={selectedAssignedReport.image_url} alt="Fire report" className="w-full h-32 object-cover rounded" />
                     </div>
                   )}
-                  
-                  {/* Notify Responders Button */}
-                  <div className="mt-4 pt-3 border-t border-gray-200">
-                    <button
-                      onClick={() => handleNotifyResponders(selectedAssignedReport)}
-                      disabled={isNotifying || !responders.length}
-                      className={`w-full px-4 py-2 rounded-lg transition-colors duration-200 flex items-center justify-center space-x-2 ${
-                        isNotifying || !responders.length
-                          ? 'bg-gray-400 text-gray-200 cursor-not-allowed'
-                          : 'bg-red-600 text-white hover:bg-red-700'
-                      }`}
-                    >
-                      {isNotifying ? (
-                        <>
-                          <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
-                          <span>Notifying...</span>
-                        </>
-                      ) : (
-                        <>
-                          <span>🚨</span>
-                          <span>Notify Responders ({responders.length})</span>
-                        </>
-                      )}
-                    </button>
-                    {!responders.length && (
-                      <p className="text-xs text-gray-500 mt-1 text-center">
-                        No responders assigned to this station
-                      </p>
-                    )}
-                  </div>
                 </div>
               </div>
             </InfoWindow>
