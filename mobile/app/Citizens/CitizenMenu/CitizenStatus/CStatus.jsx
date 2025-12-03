@@ -740,12 +740,17 @@ const CStatus = () => {
             setTempPickedAddress(label);
           }
         } catch (e) {
-          // ignore reverse geocode failure
+          // Silently ignore reverse geocode failure - not critical
         } finally {
           setIsResolvingAddress(false);
         }
       } else {
-        // If permission denied, still open picker with default region
+        // If permission denied, show helpful message
+        Alert.alert(
+          '📍 Location Permission',
+          'Location access was denied. You can still manually select a location on the map.',
+          [{ text: 'OK' }]
+        );
         setShowLocationPicker(true);
       }
     } catch (e) {
@@ -836,6 +841,96 @@ const CStatus = () => {
     try {
       setIsSubmitting(true);
       console.log('Starting emergency submission for user:', currentUser.uid);
+      
+      // 🚫 SPAM PREVENTION: Check local cache first (immediate), then database
+      try {
+        // Get local submission cache
+        const cacheKey = `reportSubmissions_${currentUser.uid}`;
+        const cachedData = await AsyncStorage.getItem(cacheKey);
+        let localSubmissions = cachedData ? JSON.parse(cachedData) : [];
+        
+        // Clean up old entries (older than 24 hours)
+        const now = Date.now();
+        localSubmissions = localSubmissions.filter(timestamp => now - timestamp < 24 * 60 * 60 * 1000);
+        
+        // Check local cache limits (IMMEDIATE CHECK)
+        const last5Minutes = now - 5 * 60 * 1000;
+        const recentSubmissions = localSubmissions.filter(timestamp => timestamp > last5Minutes);
+        
+        if (recentSubmissions.length >= 1) {
+          const lastSubmission = Math.max(...recentSubmissions);
+          const minutesLeft = Math.ceil((lastSubmission + 5 * 60 * 1000 - now) / 60000);
+          setIsSubmitting(false);
+          Alert.alert(
+            '⚠️ Please Wait',
+            `You just submitted a report ${Math.floor((now - lastSubmission) / 1000)} seconds ago.\n\nPlease wait ${minutesLeft} minute${minutesLeft !== 1 ? 's' : ''} before submitting another report. This helps prevent duplicate reports.`,
+            [{ text: 'OK' }]
+          );
+          return;
+        }
+        
+        // Check hour limit
+        const lastHour = now - 60 * 60 * 1000;
+        const submissionsLastHour = localSubmissions.filter(timestamp => timestamp > lastHour);
+        
+        if (submissionsLastHour.length >= 2) {
+          const oldestInHour = Math.min(...submissionsLastHour);
+          const minutesLeft = Math.ceil((oldestInHour + 60 * 60 * 1000 - now) / 60000);
+          setIsSubmitting(false);
+          Alert.alert(
+            '⚠️ Report Limit Reached',
+            `You have submitted 2 reports in the last hour.\n\nPlease wait ${minutesLeft} minute${minutesLeft !== 1 ? 's' : ''} before submitting another report.`,
+            [{ text: 'OK' }]
+          );
+          return;
+        }
+        
+        // Check 24 hour limit
+        if (localSubmissions.length >= 5) {
+          const oldestSubmission = Math.min(...localSubmissions);
+          const hoursLeft = Math.ceil((oldestSubmission + 24 * 60 * 60 * 1000 - now) / (60 * 60 * 1000));
+          setIsSubmitting(false);
+          Alert.alert(
+            '⚠️ Daily Limit Reached',
+            `You have reached the maximum of 5 reports per 24 hours.\n\nPlease wait ${hoursLeft} hour${hoursLeft !== 1 ? 's' : ''} before submitting another report.\n\nThis limit helps prevent spam and ensures quality reports.`,
+            [{ text: 'OK' }]
+          );
+          return;
+        }
+        
+        // Also check database as backup (check both reporterId and user_id fields)
+        const { data: recentReports, error: checkError } = await supabase
+          .from('fire_reports')
+          .select('id, created_at')
+          .or(`reporterId.eq.${currentUser.uid},user_id.eq.${currentUser.uid}`)
+          .order('created_at', { ascending: false })
+          .limit(10);
+
+        if (!checkError && recentReports && recentReports.length > 0) {
+          const last5MinutesDate = new Date(now - 5 * 60 * 1000);
+          const dbReportsLast5Min = recentReports.filter(r => new Date(r.created_at) > last5MinutesDate);
+          
+          if (dbReportsLast5Min.length >= 1) {
+            const lastReportTime = new Date(dbReportsLast5Min[0].created_at).getTime();
+            const minutesLeft = Math.ceil((lastReportTime + 5 * 60 * 1000 - now) / 60000);
+            setIsSubmitting(false);
+            Alert.alert(
+              '⚠️ Please Wait',
+              `Please wait ${minutesLeft} minute${minutesLeft !== 1 ? 's' : ''} before submitting another report.`,
+              [{ text: 'OK' }]
+            );
+            return;
+          }
+        }
+        
+        // Record this submission attempt in local cache
+        localSubmissions.push(now);
+        await AsyncStorage.setItem(cacheKey, JSON.stringify(localSubmissions));
+        
+      } catch (spamCheckError) {
+        console.error('❌ Error checking spam limit:', spamCheckError);
+        // Continue with submission if check fails (don't block legitimate emergencies)
+      }
       
       // Determine location: prioritize manually picked location
       let currentLocation = 'Location unavailable';
