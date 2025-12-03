@@ -262,7 +262,10 @@ export async function notifyAllUsersOnStatusChange(reportId, newStatus, oldStatu
       { from: 'On Going', to: 'Fire Out' }
     ];
 
-    const isSignificantChange = !oldStatus || statusTransitions.some(
+    // Always notify if status changes to "Fire Out" (important milestone)
+    const isFireOutStatus = newStatus === 'Fire Out' || newStatus === 'fire out' || newStatus.toLowerCase().includes('fire out');
+    
+    const isSignificantChange = !oldStatus || isFireOutStatus || statusTransitions.some(
       transition => transition.from === oldStatus && transition.to === newStatus
     );
 

@@ -187,7 +187,8 @@ const AdminLayout = ({ children }) => {
                               };
                               localStorage.setItem('lastNotificationClick', JSON.stringify(debugInfo));
                               
-                              markAsRead(notification.id);
+                              // DON'T mark as read here - only mark as read when user clicks checkmark on notification page
+                              // This keeps the alarm sounding until explicitly dismissed
                               
                               // If notification has related_report_id, navigate to map with that report
                               if (notification.related_report_id) {

@@ -460,6 +460,20 @@ const Station_Overview = () => {
     const supabase = createClient(supabaseUrl, supabaseKey);
     console.log('✅ Supabase client created');
 
+    // Get current station name
+    let stationName = 'Station';
+    if (currentStationId) {
+      const { data: stationData } = await supabase
+        .from('station_users')
+        .select('station_name')
+        .eq('id', currentStationId)
+        .single();
+      if (stationData?.station_name) {
+        stationName = stationData.station_name;
+      }
+    }
+    console.log('🏢 Station name:', stationName);
+
     // Check if this is a significant status change for citizen notifications
     const significantChanges = [
       { from: 'On Going', to: 'Under Control' },
@@ -471,10 +485,10 @@ const Station_Overview = () => {
       change => change.from === oldStatus && change.to === newStatus
     );
 
-    // ALWAYS notify responders when status becomes "Fire Out" or "Under Control"
-    const shouldNotifyResponders = newStatus === 'Fire Out' || newStatus === 'Under Control';
+    // ALWAYS notify responders and admins when status becomes "Fire Out" or "Under Control"
+    const shouldNotifyAll = newStatus === 'Fire Out' || newStatus === 'Under Control';
 
-    if (!isSignificantForCitizen && !shouldNotifyResponders && oldStatus) {
+    if (!isSignificantForCitizen && !shouldNotifyAll && oldStatus) {
       console.log('ℹ️ Status change not significant for notifications');
       return;
     }
@@ -484,7 +498,7 @@ const Station_Overview = () => {
     const alarmLevel = reportData?.alarm_level || reportData?.recommended_alarm_level || 'Unknown';
     const reporter = reportData?.reporter || reportData?.reporter_name || 'Unknown Reporter';
     
-    const message = `📍 Location: ${locationInfo}\n🔥 Alarm Level: ${alarmLevel}\n👤 Reporter: ${reporter}\n\nStatus changed from "${oldStatus}" to "${newStatus}"`;
+    const message = `📍 Location: ${locationInfo}\n🔥 Alarm Level: ${alarmLevel}\n👤 Reporter: ${reporter}\n🏢 Changed by: ${stationName}\n\nStatus changed from "${oldStatus}" to "${newStatus}"`;
 
     // 1. Get citizen who created the report
     let citizenId = null;
@@ -686,24 +700,45 @@ const Station_Overview = () => {
     }
 
     // 3. Get all admins and create notifications
-    const { data: admins } = await supabase
+    console.log('🔍 Fetching admin users...');
+    const { data: admins, error: adminFetchError } = await supabase
       .from('admin_users')
-      .select('id')
-      .eq('active', true);
+      .select('id, email');
+
+    if (adminFetchError) {
+      console.error('❌ Error fetching admins:', adminFetchError);
+    }
+
+    console.log('📊 Found admins:', admins?.length || 0, admins);
 
     if (admins && admins.length > 0) {
       const adminNotifications = admins.map(admin => ({
         user_id: admin.id,
         user_type: 'admin',
-        title: `Report Status Changed to ${newStatus}`,
+        title: `🔄 Report Status Changed to ${newStatus}`,
         message: message,
         type: 'fire_alert',
         priority: 'high',
         related_report_id: String(reportId),
         is_read: false
       }));
-      await supabase.from('notifications').insert(adminNotifications);
-      console.log(`✅ Created ${admins.length} admin notification(s)`);
+
+      console.log('📝 Inserting admin notifications:', adminNotifications);
+      
+      const { data: insertedAdminNotifs, error: adminInsertError } = await supabase
+        .from('notifications')
+        .insert(adminNotifications)
+        .select();
+
+      if (adminInsertError) {
+        console.error('❌ Error creating admin notifications:', adminInsertError);
+        console.error('❌ Error details:', JSON.stringify(adminInsertError, null, 2));
+      } else {
+        console.log(`✅ Created ${admins.length} admin notification(s)`);
+        console.log('✅ Inserted notifications:', insertedAdminNotifs);
+      }
+    } else {
+      console.warn('⚠️ No admins found to notify');
     }
   };
 

@@ -5,12 +5,12 @@ import { TouchableOpacity, StatusBar, View, LogBox } from 'react-native';
 import { AuthProvider } from './config/AuthContext';
 import BackButtonHandler from './components/BackButtonHandler';
 
-// Disable all console logs and warnings in the UI (they still log to console)
-if (!__DEV__) {
-  console.log = () => {};
-  console.warn = () => {};
-  console.error = () => {};
-}
+// Disable all console logs and warnings to enhance performance
+console.log = () => {};
+console.warn = () => {};
+console.error = () => {};
+console.info = () => {};
+console.debug = () => {};
 
 // Ignore specific warnings that appear in yellow boxes
 LogBox.ignoreLogs([

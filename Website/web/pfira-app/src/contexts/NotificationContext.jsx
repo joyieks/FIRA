@@ -544,13 +544,22 @@ export const NotificationProvider = ({ children }) => {
           // Update unread count
           setUnreadCount(prev => prev + 1);
           
-          // Also play sound immediately on realtime fire_alert (guard against duplicates with cooldown flag)
+          // Play sound for fire_alert notifications, but NOT for status change notifications
           if (payload?.new?.type === 'fire_alert') {
-            console.log('🔥 Global: Fire alert notification received via real-time subscription - attempting to play sound');
-            if (!isAlertingRef.current) {
-              playAlert();
-              isAlertingRef.current = true;
-              setTimeout(() => { isAlertingRef.current = false; }, 2000);
+            // Check if this is a status change notification (title contains "Status Changed")
+            const isStatusChange = payload?.new?.title?.includes('Status Changed') || 
+                                   payload?.new?.title?.includes('status') ||
+                                   payload?.new?.message?.includes('Status changed from');
+            
+            if (!isStatusChange) {
+              console.log('🔥 Global: Fire alert notification received via real-time subscription - attempting to play sound');
+              if (!isAlertingRef.current) {
+                playAlert();
+                isAlertingRef.current = true;
+                setTimeout(() => { isAlertingRef.current = false; }, 2000);
+              }
+            } else {
+              console.log('📢 Global: Status change notification - NOT playing sound');
             }
           } else {
             console.log('📢 Global: Non-fire alert notification:', payload?.new?.type);
