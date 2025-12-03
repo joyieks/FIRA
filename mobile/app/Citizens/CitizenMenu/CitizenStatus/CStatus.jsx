@@ -1,9 +1,10 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { View, Text, ScrollView, TouchableOpacity, Image, Modal, Alert, TextInput, RefreshControl } from 'react-native';
+import { View, Text, ScrollView, TouchableOpacity, Image, Modal, Alert, TextInput, RefreshControl, Animated } from 'react-native';
 import MapView, { Marker, PROVIDER_GOOGLE } from 'react-native-maps';
 import { MaterialIcons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
 import * as Location from 'expo-location';
+import { LinearGradient } from 'expo-linear-gradient';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useAuth } from '../../../config/AuthContext';
 import { supabase } from '../../../config/supabase';
@@ -650,21 +651,33 @@ const CStatus = () => {
     numberOfStructures: ''
   });
   const [showLocationPicker, setShowLocationPicker] = useState(false);
+  const [isLocationPickerForEdit, setIsLocationPickerForEdit] = useState(false);
   const [pickedLocation, setPickedLocation] = useState(null); // { latitude, longitude }
   const [tempPickedLocation, setTempPickedLocation] = useState(null);
   const [mapRegion, setMapRegion] = useState({
     latitude: 14.5995,
     longitude: 120.9842,
-    latitudeDelta: 0.0015,
-    longitudeDelta: 0.0015,
+    latitudeDelta: 0.002, // More zoomed in (smaller value = more zoom)
+    longitudeDelta: 0.002,
   });
   const [isGettingLocation, setIsGettingLocation] = useState(false);
   const [pickedAddress, setPickedAddress] = useState('');
   const [tempPickedAddress, setTempPickedAddress] = useState('');
   const [isResolvingAddress, setIsResolvingAddress] = useState(false);
   const [isDraggingMarker, setIsDraggingMarker] = useState(false);
+  const [isMapInteracting, setIsMapInteracting] = useState(false);
   const mapRef = useRef(null);
-  const editMapRef = useRef(null);
+  const buttonSlideAnim = useRef(new Animated.Value(0)).current;
+
+  // Animate buttons when interacting with map
+  useEffect(() => {
+    const shouldHide = isDraggingMarker || isMapInteracting;
+    Animated.timing(buttonSlideAnim, {
+      toValue: shouldHide ? 1 : 0,
+      duration: 300,
+      useNativeDriver: true,
+    }).start();
+  }, [isDraggingMarker, isMapInteracting, buttonSlideAnim]);
 
   // Edit state
   const [editData, setEditData] = useState({
@@ -675,12 +688,6 @@ const CStatus = () => {
     longitude: null,
     address: '',
   });
-  const [showEditLocationPicker, setShowEditLocationPicker] = useState(false);
-  const [editTempLocation, setEditTempLocation] = useState(null);
-  const [editTempAddress, setEditTempAddress] = useState('');
-  const [editMapRegion, setEditMapRegion] = useState(null);
-  const [isGettingEditLocation, setIsGettingEditLocation] = useState(false);
-  const [isDraggingEditMarker, setIsDraggingEditMarker] = useState(false);
   const [cancelReason, setCancelReason] = useState('');
 
   const handleReportEmergency = () => {
@@ -693,7 +700,7 @@ const CStatus = () => {
 
   const openLocationPicker = async () => {
     setIsGettingLocation(true);
-    setShowLocationPicker(true);
+    setIsLocationPickerForEdit(false); // Reset edit flag for emergency modal
     setShowEmergencyModal(false);
     try {
       const { status } = await Location.requestForegroundPermissionsAsync();
@@ -705,16 +712,25 @@ const CStatus = () => {
         const region = {
           latitude: location.coords.latitude,
           longitude: location.coords.longitude,
-          latitudeDelta: 0.0015,
-          longitudeDelta: 0.0015,
+          latitudeDelta: 0.003, // Balanced zoom level
+          longitudeDelta: 0.003,
         };
         setMapRegion(region);
-        // Default pin to current location if none picked yet
-        setTempPickedLocation((prev) => prev || { latitude: region.latitude, longitude: region.longitude });
-        // Animate map to user's current region when available
-        if (mapRef.current) {
-          try { mapRef.current.animateToRegion(region, 500); } catch {}
-        }
+        // Reset temp location to current location
+        setTempPickedLocation({ latitude: region.latitude, longitude: region.longitude });
+        setTempPickedAddress(''); // Reset address to get fresh one
+        // Open picker after region is set
+        setShowLocationPicker(true);
+        // Animate map to user's current region after a small delay to ensure map is mounted
+        setTimeout(() => {
+          if (mapRef.current) {
+            try { 
+              mapRef.current.animateToRegion(region, 500); 
+            } catch (e) {
+              console.log('Map animation error:', e);
+            }
+          }
+        }, 100);
         try {
           setIsResolvingAddress(true);
           const results = await Location.reverseGeocodeAsync({ latitude: region.latitude, longitude: region.longitude });
@@ -728,9 +744,13 @@ const CStatus = () => {
         } finally {
           setIsResolvingAddress(false);
         }
+      } else {
+        // If permission denied, still open picker with default region
+        setShowLocationPicker(true);
       }
     } catch (e) {
-      // keep defaults
+      // If location fails, still open picker
+      setShowLocationPicker(true);
     } finally {
       setIsGettingLocation(false);
     }
@@ -1360,82 +1380,176 @@ const CStatus = () => {
         animationType="slide"
         transparent={true}
       >
-        <View className="flex-1 bg-black/50 justify-center items-center">
-          <View className="bg-white rounded-lg w-11/12 max-h-[80%]">
-            <View className="items-center px-6 pt-6 pb-2">
-              <Text className="text-xl font-bold text-gray-800">Report Emergency</Text>
-            </View>
-            <ScrollView className="px-6 pb-6" showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
-
-            {/* Upload Picture Button */}
-            <TouchableOpacity
-              className="bg-red-600 rounded-lg p-4 mb-6 items-center shadow-sm"
-              onPress={handleImagePicker}
-              activeOpacity={0.8}
+        <View className="flex-1 bg-black/60 justify-center items-center">
+          <View className="bg-white rounded-3xl w-11/12 max-h-[85%] shadow-2xl overflow-hidden" style={{
+            shadowColor: '#000',
+            shadowOffset: { width: 0, height: 10 },
+            shadowOpacity: 0.3,
+            shadowRadius: 20,
+            elevation: 15,
+          }}>
+            {/* Enhanced Header with Gradient */}
+            <LinearGradient
+              colors={['#ff6b35', '#ff512f', '#dc2626']}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 0 }}
+              style={{
+                borderTopLeftRadius: 24,
+                borderTopRightRadius: 24,
+                paddingHorizontal: 24,
+                paddingTop: 32,
+                paddingBottom: 24,
+                alignItems: 'center',
+              }}
             >
-              <MaterialIcons name="camera-alt" size={24} color="#ffffff" />
-              <Text className="text-white font-semibold text-base mt-2">
+              <View className="bg-white/20 rounded-full p-3 mb-3" style={{
+                backgroundColor: 'rgba(255, 255, 255, 0.25)',
+                shadowColor: '#000',
+                shadowOffset: { width: 0, height: 2 },
+                shadowOpacity: 0.2,
+                shadowRadius: 4,
+                elevation: 4,
+              }}>
+                <MaterialIcons name="emergency" size={32} color="#ffffff" />
+              </View>
+              <Text className="text-white text-2xl font-bold mb-1" style={{
+                textShadowColor: 'rgba(0, 0, 0, 0.2)',
+                textShadowOffset: { width: 0, height: 1 },
+                textShadowRadius: 3,
+              }}>Report Emergency</Text>
+              <Text className="text-sm" style={{ 
+                color: 'rgba(255, 255, 255, 0.95)',
+                textShadowColor: 'rgba(0, 0, 0, 0.15)',
+                textShadowOffset: { width: 0, height: 1 },
+                textShadowRadius: 2,
+              }}>Please provide details about the incident</Text>
+            </LinearGradient>
+            <ScrollView className="px-6 pb-6 pt-4" showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
+
+            {/* Enhanced Upload Picture Button */}
+            <TouchableOpacity
+              className="bg-[#ff512f] rounded-2xl p-5 mb-4 items-center shadow-lg"
+              onPress={handleImagePicker}
+              activeOpacity={0.85}
+              style={{
+                shadowColor: '#ff512f',
+                shadowOffset: { width: 0, height: 4 },
+                shadowOpacity: 0.3,
+                shadowRadius: 8,
+                elevation: 6,
+                borderWidth: 2,
+                borderColor: 'rgba(239, 68, 68, 0.3)',
+              }}
+            >
+              <View className="rounded-full p-2 mb-2" style={{ backgroundColor: 'rgba(255, 255, 255, 0.2)' }}>
+                <MaterialIcons name="camera-alt" size={28} color="#ffffff" />
+              </View>
+              <Text className="text-white font-bold text-base">
                 {emergencyData.image ? 'Change Picture' : 'Upload a Picture'}
               </Text>
+              {emergencyData.image && (
+                <Text className="text-xs mt-1" style={{ color: 'rgba(255, 255, 255, 0.8)' }}>Tap to change</Text>
+              )}
             </TouchableOpacity>
 
-            {/* Choose Location Button */}
+            {/* Enhanced Choose Location Button */}
             <TouchableOpacity
-              className="bg-gray-800 rounded-lg p-4 mb-6 items-center shadow-sm"
+              className="bg-gray-800 rounded-2xl p-5 mb-6 items-center shadow-lg"
               onPress={openLocationPicker}
-              activeOpacity={0.8}
+              activeOpacity={0.85}
+              style={{
+                shadowColor: '#000',
+                shadowOffset: { width: 0, height: 4 },
+                shadowOpacity: 0.3,
+                shadowRadius: 8,
+                elevation: 6,
+                borderWidth: 2,
+                borderColor: 'rgba(55, 65, 81, 0.3)',
+              }}
             >
-              <MaterialIcons name="place" size={24} color="#ffffff" />
-              <Text className="text-white font-semibold text-base mt-2">
+              <View className="rounded-full p-2 mb-2" style={{ backgroundColor: 'rgba(255, 255, 255, 0.2)' }}>
+                <MaterialIcons name="place" size={28} color="#ffffff" />
+              </View>
+              <Text className="text-white font-bold text-base">
                 {pickedLocation ? 'Change Location' : 'Choose Location on Map'}
               </Text>
+              {pickedLocation && (
+                <Text className="text-xs mt-1" style={{ color: 'rgba(255, 255, 255, 0.8)' }}>Tap to change</Text>
+              )}
             </TouchableOpacity>
 
-            {/* Show Selected Image */}
+            {/* Enhanced Selected Image */}
             {emergencyData.image && (
-              <View className="mb-6">
+              <View className="mb-6 relative">
                 <Image
                   source={{ uri: emergencyData.image }}
-                  className="w-full h-40 rounded-lg"
+                  className="w-full h-48 rounded-2xl"
                   resizeMode="cover"
                 />
+                <View className="absolute inset-0 rounded-2xl" style={{ backgroundColor: 'rgba(0, 0, 0, 0.1)' }} />
                 <TouchableOpacity
-                  className="absolute top-2 right-2 bg-red-600 rounded-full p-1"
+                  className="absolute top-3 right-3 bg-red-600 rounded-full p-2 shadow-lg"
                   onPress={() => setEmergencyData({...emergencyData, image: null})}
+                  style={{
+                    shadowColor: '#000',
+                    shadowOffset: { width: 0, height: 2 },
+                    shadowOpacity: 0.3,
+                    shadowRadius: 4,
+                    elevation: 5,
+                  }}
                 >
-                  <MaterialIcons name="close" size={16} color="#ffffff" />
+                  <MaterialIcons name="close" size={20} color="#ffffff" />
                 </TouchableOpacity>
+                <View className="absolute bottom-3 left-3 rounded-lg px-3 py-1" style={{ backgroundColor: 'rgba(255, 255, 255, 0.9)' }}>
+                  <Text className="text-gray-800 text-xs font-semibold">Image Selected</Text>
+                </View>
               </View>
             )}
 
-            {/* Cause of Fire Input */}
-            <View className="mb-6">
-              <TextInput
-                className="border border-gray-300 rounded-lg p-4 text-gray-800"
-                placeholder="Write cause of fire..."
-                value={emergencyData.cause}
-                onChangeText={(text) => setEmergencyData({...emergencyData, cause: text})}
-                multiline
-                numberOfLines={4}
-                textAlignVertical="top"
-              />
-            </View>
-
-            {/* Selected Location Preview */}
+            {/* Enhanced Selected Location Preview */}
             {pickedLocation && (
-              <View className="mb-6">
-                <Text className="text-gray-600 text-sm mb-1">Selected Location</Text>
-                <Text className="text-gray-800 font-semibold">
+              <View className="mb-6 bg-blue-50 rounded-2xl p-4 border-2 border-blue-200">
+                <View className="flex-row items-center mb-2">
+                  <MaterialIcons name="place" size={20} color="#3b82f6" />
+                  <Text className="text-blue-700 font-semibold text-sm ml-2">Selected Location</Text>
+                </View>
+                <Text className="text-gray-800 font-medium text-base">
                   {pickedAddress || `${pickedLocation.latitude.toFixed(6)}, ${pickedLocation.longitude.toFixed(6)}`}
                 </Text>
               </View>
             )}
 
-            {/* Number of Structures on Fire Input */}
-            <View className="mb-6">
+            {/* Enhanced Cause of Fire Input */}
+            <View className="mb-4">
+              <View className="flex-row items-center mb-2">
+                <MaterialIcons name="description" size={20} color="#6b7280" />
+                <Text className="text-gray-700 font-semibold text-sm ml-2">Cause of Fire</Text>
+              </View>
               <TextInput
-                className="border border-gray-300 rounded-lg p-4 text-gray-800"
-                placeholder="Number of structures on fire (optional)"
+                className="bg-gray-50 border-2 border-gray-200 rounded-2xl p-4 text-gray-800 text-base"
+                placeholder="Write cause of fire..."
+                placeholderTextColor="#9ca3af"
+                value={emergencyData.cause}
+                onChangeText={(text) => setEmergencyData({...emergencyData, cause: text})}
+                multiline
+                numberOfLines={4}
+                textAlignVertical="top"
+                style={{
+                  minHeight: 100,
+                }}
+              />
+            </View>
+
+            {/* Enhanced Number of Structures Input */}
+            <View className="mb-6">
+              <View className="flex-row items-center mb-2">
+                <MaterialIcons name="business" size={20} color="#6b7280" />
+                <Text className="text-gray-700 font-semibold text-sm ml-2">Number of Structures (Optional)</Text>
+              </View>
+              <TextInput
+                className="bg-gray-50 border-2 border-gray-200 rounded-2xl p-4 text-gray-800 text-base"
+                placeholder="Enter number of structures..."
+                placeholderTextColor="#9ca3af"
                 value={emergencyData.numberOfStructures}
                 onChangeText={(text) => setEmergencyData({...emergencyData, numberOfStructures: text})}
                 keyboardType="numeric"
@@ -1443,22 +1557,51 @@ const CStatus = () => {
               />
             </View>
 
-            {/* Action Buttons */}
-            <View className="flex-row space-x-3">
+            {/* Enhanced Action Buttons */}
+            <View className="flex-row gap-4 mt-4 mb-2">
               <TouchableOpacity
-                className="flex-1 bg-gray-300 rounded-lg p-3"
+                className="flex-1 bg-gray-100 rounded-2xl py-4 px-4 border-2 border-gray-200 shadow-md"
                 onPress={() => setShowEmergencyModal(false)}
+                activeOpacity={0.7}
+                style={{
+                  shadowColor: '#000',
+                  shadowOffset: { width: 0, height: 2 },
+                  shadowOpacity: 0.1,
+                  shadowRadius: 4,
+                  elevation: 3,
+                }}
               >
-                <Text className="text-center font-semibold text-gray-700">Cancel</Text>
+                <View className="flex-row items-center justify-center">
+                  <MaterialIcons name="close" size={20} color="#6b7280" />
+                  <Text className="text-center font-bold text-gray-700 text-base ml-2">Cancel</Text>
+                </View>
               </TouchableOpacity>
               <TouchableOpacity
-                className={`flex-1 rounded-lg p-3 ${isSubmitting ? 'bg-gray-400' : 'bg-red-600'}`}
+                className={`flex-1 rounded-2xl py-4 px-4 shadow-xl ${isSubmitting ? 'bg-gray-400' : 'bg-[#ff512f]'}`}
                 onPress={handleSubmitEmergency}
                 disabled={isSubmitting}
+                activeOpacity={0.85}
+                style={{
+                  shadowColor: isSubmitting ? '#000' : '#ff512f',
+                  shadowOffset: { width: 0, height: 6 },
+                  shadowOpacity: 0.4,
+                  shadowRadius: 10,
+                  elevation: 8,
+                }}
               >
-                <Text className="text-center font-semibold text-white">
-                  {isSubmitting ? 'Submitting...' : 'Submit'}
-                </Text>
+                <View className="flex-row items-center justify-center">
+                  {isSubmitting ? (
+                    <>
+                      <MaterialIcons name="hourglass-empty" size={20} color="#ffffff" />
+                      <Text className="text-center font-bold text-white text-base ml-2">Submitting...</Text>
+                    </>
+                  ) : (
+                    <>
+                      <MaterialIcons name="send" size={20} color="#ffffff" />
+                      <Text className="text-center font-bold text-white text-base ml-2">Submit</Text>
+                    </>
+                  )}
+                </View>
               </TouchableOpacity>
             </View>
             </ScrollView>
@@ -1474,57 +1617,113 @@ const CStatus = () => {
         onRequestClose={() => setShowLocationPicker(false)}
       >
         <View className="flex-1 bg-white">
-          <View className="h-16 flex-row items-center justify-between px-4 border-b border-gray-200 bg-white">
-            <TouchableOpacity 
-              onPress={() => setShowLocationPicker(false)}
-              className="px-4 py-3"
-              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-            >
-              <Text className="text-red-600 font-semibold text-xl">Cancel</Text>
-            </TouchableOpacity>
-            <Text className="text-gray-800 font-bold">Pick Location</Text>
-            <TouchableOpacity
-              onPress={async () => {
-                if (tempPickedLocation?.latitude && tempPickedLocation?.longitude) {
-                  try {
-                    setIsResolvingAddress(true);
-                    if (!tempPickedAddress) {
-                      const res = await Location.reverseGeocodeAsync(tempPickedLocation);
-                      if (res && res[0]) {
-                        const r = res[0];
-                        const label = [r.name, r.street, r.subregion, r.city || r.region, r.postalCode, r.country].filter(Boolean).join(', ');
-                        setTempPickedAddress(label);
-                      }
-                    }
-                  } catch (e) {
-                  } finally {
-                    setIsResolvingAddress(false);
-                  }
-                  setPickedLocation(tempPickedLocation);
-                  setPickedAddress(tempPickedAddress || pickedAddress || '');
-                  setShowLocationPicker(false);
-                  setTimeout(() => setShowEmergencyModal(true), 200);
-                } else {
-                  Alert.alert('Select a location', 'Tap on the map to place a pin, then drag it to adjust.');
-                }
-              }}
-              className="px-4 py-3"
-              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-            >
-              <Text className="text-green-600 font-semibold text-xl">Use</Text>
-            </TouchableOpacity>
-          </View>
+          {/* Compact Header */}
+          <LinearGradient
+            colors={['#ff6b35', '#ff512f', '#dc2626']}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 0 }}
+            style={{
+              paddingTop: 48,
+              paddingBottom: 8,
+              paddingHorizontal: 16,
+              alignItems: 'center',
+            }}
+          >
+            <View className="flex-row items-center justify-center mb-1">
+              <MaterialIcons name="place" size={18} color="#ffffff" />
+              <Text className="text-white text-base font-bold ml-2" style={{
+                textShadowColor: 'rgba(0, 0, 0, 0.2)',
+                textShadowOffset: { width: 0, height: 1 },
+                textShadowRadius: 2,
+              }}>Pick Location</Text>
+            </View>
+            <Text className="text-white/90 text-xs" style={{
+              textShadowColor: 'rgba(0, 0, 0, 0.15)',
+              textShadowOffset: { width: 0, height: 1 },
+              textShadowRadius: 2,
+            }}>Tap on the map or drag the pin to select</Text>
+          </LinearGradient>
           {isGettingLocation && (
-            <View className="absolute top-16 left-0 right-0 z-10 items-center p-2">
-              <View className="bg-black/60 px-3 py-1 rounded-full">
-                <Text className="text-white text-xs">Getting current location…</Text>
+            <View className="absolute top-20 left-0 right-0 z-10 items-center p-2">
+              <View className="bg-black/80 px-4 py-2 rounded-full flex-row items-center" style={{
+                shadowColor: '#000',
+                shadowOffset: { width: 0, height: 2 },
+                shadowOpacity: 0.3,
+                shadowRadius: 4,
+                elevation: 5,
+              }}>
+                <MaterialIcons name="my-location" size={16} color="#ffffff" />
+                <Text className="text-white text-xs ml-2 font-semibold">Getting current location…</Text>
               </View>
             </View>
+          )}
+          {isResolvingAddress && (
+            <View className="absolute top-20 left-0 right-0 z-10 items-center p-2">
+              <View className="bg-blue-600/90 px-4 py-2 rounded-full flex-row items-center" style={{
+                shadowColor: '#3b82f6',
+                shadowOffset: { width: 0, height: 2 },
+                shadowOpacity: 0.3,
+                shadowRadius: 4,
+                elevation: 5,
+              }}>
+                <MaterialIcons name="search" size={16} color="#ffffff" />
+                <Text className="text-white text-xs ml-2 font-semibold">Resolving address…</Text>
+              </View>
+            </View>
+          )}
+
+          {/* Animated Location Info Card - Below Header */}
+          {tempPickedLocation && (
+            <Animated.View
+              className="absolute left-4 right-4 z-10"
+              style={{
+                top: 90, // Below header (48 paddingTop + 8 paddingBottom + ~34 for content)
+                transform: [{
+                  translateY: buttonSlideAnim.interpolate({
+                    inputRange: [0, 1],
+                    outputRange: [0, -70], // Slide up into header
+                  }),
+                }],
+                opacity: buttonSlideAnim.interpolate({
+                  inputRange: [0, 1],
+                  outputRange: [1, 0],
+                }),
+              }}
+            >
+              <View className="bg-white/95 rounded-2xl p-3 border-2 border-white/50" style={{
+                shadowColor: '#000',
+                shadowOffset: { width: 0, height: 4 },
+                shadowOpacity: 0.2,
+                shadowRadius: 8,
+                elevation: 8,
+                backgroundColor: 'rgba(255, 255, 255, 0.95)',
+              }}>
+                <View className="flex-row items-start">
+                  <View className="bg-[#ff512f] rounded-full p-2 mr-3" style={{
+                    shadowColor: '#ff512f',
+                    shadowOffset: { width: 0, height: 2 },
+                    shadowOpacity: 0.3,
+                    shadowRadius: 4,
+                    elevation: 4,
+                  }}>
+                    <MaterialIcons name="place" size={18} color="#ffffff" />
+                  </View>
+                  <View className="flex-1">
+                    <Text className="text-gray-800 font-bold text-sm mb-1" numberOfLines={2}>
+                      {tempPickedAddress || 'Location selected'}
+                    </Text>
+                    <Text className="text-gray-500 text-xs">
+                      {tempPickedLocation.latitude.toFixed(6)}, {tempPickedLocation.longitude.toFixed(6)}
+                    </Text>
+                  </View>
+                </View>
+              </View>
+            </Animated.View>
           )}
           <MapView
             style={{ flex: 1 }}
             provider={PROVIDER_GOOGLE}
-            initialRegion={mapRegion}
+            region={mapRegion}
             ref={mapRef}
             showsUserLocation={true}
             showsMyLocationButton={true}
@@ -1555,6 +1754,9 @@ const CStatus = () => {
                 }
               })();
             }}
+            onRegionChangeStart={() => setIsMapInteracting(true)}
+            onRegionChangeComplete={() => setIsMapInteracting(false)}
+            onPanDrag={() => setIsMapInteracting(true)}
             key={`picker-${showLocationPicker}-${mapRegion.latitude}-${mapRegion.longitude}`}
           >
             {tempPickedLocation?.latitude && (
@@ -1563,6 +1765,7 @@ const CStatus = () => {
                 draggable={true}
                 onDragStart={() => {
                   setIsDraggingMarker(true);
+                  setIsMapInteracting(true);
                 }}
                 onDrag={(e) => {
                   const { latitude, longitude } = e.nativeEvent.coordinate;
@@ -1612,6 +1815,7 @@ const CStatus = () => {
                 }}
                 onDragEnd={(e) => {
                   setIsDraggingMarker(false);
+                  setIsMapInteracting(false);
                   const { latitude, longitude } = e.nativeEvent.coordinate;
                   setTempPickedLocation({ latitude, longitude });
                   // Don't adjust map after drag - keep user's zoom level
@@ -1639,18 +1843,116 @@ const CStatus = () => {
               />
             )}
           </MapView>
-          <View className="p-4 border-t border-gray-200">
-            <Text className="text-gray-600 text-sm">
-              {tempPickedLocation
-                ? `${tempPickedAddress ? tempPickedAddress + ' • ' : ''}${tempPickedLocation.latitude.toFixed(6)}, ${tempPickedLocation.longitude.toFixed(6)}`
-                : 'Tap anywhere on the map to place a pin, then drag it to adjust'}
-            </Text>
-            {tempPickedLocation && (
-              <Text className="text-gray-500 text-xs mt-1">
-                Drag the pin to adjust the location
+
+          {/* Animated Bottom Buttons */}
+          <Animated.View
+            className="absolute bottom-0 left-0 right-0"
+            style={{
+              transform: [{
+                translateY: buttonSlideAnim.interpolate({
+                  inputRange: [0, 1],
+                  outputRange: [0, 120],
+                }),
+              }],
+              opacity: buttonSlideAnim.interpolate({
+                inputRange: [0, 1],
+                outputRange: [1, 0],
+              }),
+              paddingBottom: 20,
+              paddingTop: 12,
+              paddingHorizontal: 16,
+              backgroundColor: 'transparent',
+            }}
+          >
+            <View className="flex-row gap-3">
+              <TouchableOpacity
+                className="flex-1 bg-gray-100 rounded-2xl py-4 px-4 border-2 border-gray-200"
+                onPress={() => {
+                  if (isLocationPickerForEdit) {
+                    setIsLocationPickerForEdit(false);
+                    setTimeout(() => setShowEditModal(true), 200);
+                  }
+                  setShowLocationPicker(false);
+                }}
+                activeOpacity={0.7}
+                style={{
+                  shadowColor: '#000',
+                  shadowOffset: { width: 0, height: 2 },
+                  shadowOpacity: 0.1,
+                  shadowRadius: 4,
+                  elevation: 3,
+                }}
+              >
+                <View className="flex-row items-center justify-center">
+                  <MaterialIcons name="close" size={20} color="#6b7280" />
+                  <Text className="text-center font-bold text-gray-700 text-base ml-2">Cancel</Text>
+                </View>
+              </TouchableOpacity>
+              <TouchableOpacity
+                className={`flex-1 rounded-2xl py-4 px-4 ${tempPickedLocation?.latitude ? 'bg-[#ff512f]' : 'bg-gray-300'}`}
+                onPress={async () => {
+                  if (tempPickedLocation?.latitude && tempPickedLocation?.longitude) {
+                    try {
+                      setIsResolvingAddress(true);
+                      let finalAddress = tempPickedAddress;
+                      if (!finalAddress) {
+                        const res = await Location.reverseGeocodeAsync(tempPickedLocation);
+                        if (res && res[0]) {
+                          const r = res[0];
+                          const label = [r.name, r.street, r.subregion, r.city || r.region, r.postalCode, r.country].filter(Boolean).join(', ');
+                          finalAddress = label;
+                        }
+                      }
+                      
+                      if (isLocationPickerForEdit) {
+                        // Update edit data
+                        setEditData({
+                          ...editData,
+                          latitude: tempPickedLocation.latitude,
+                          longitude: tempPickedLocation.longitude,
+                          address: finalAddress || editData.address || '',
+                        });
+                        setIsLocationPickerForEdit(false);
+                        setShowLocationPicker(false);
+                        // Reopen edit modal
+                        setTimeout(() => setShowEditModal(true), 200);
+                      } else {
+                        // Update emergency data (original behavior)
+                        setPickedLocation(tempPickedLocation);
+                        setPickedAddress(finalAddress || pickedAddress || '');
+                        setShowLocationPicker(false);
+                        setTimeout(() => setShowEmergencyModal(true), 200);
+                      }
+                    } catch (e) {
+                    } finally {
+                      setIsResolvingAddress(false);
+                    }
+                  } else {
+                    Alert.alert('Select a location', 'Tap on the map to place a pin, then drag it to adjust.');
+                  }
+                }}
+                disabled={!tempPickedLocation?.latitude}
+                activeOpacity={0.85}
+                style={{
+                  shadowColor: tempPickedLocation?.latitude ? '#ff512f' : '#000',
+                  shadowOffset: { width: 0, height: 4 },
+                  shadowOpacity: 0.3,
+                  shadowRadius: 8,
+                  elevation: 6,
+                }}
+              >
+                <View className="flex-row items-center justify-center">
+                  <MaterialIcons name="check-circle" size={20} color="#ffffff" />
+                  <Text className="text-center font-bold text-white text-base ml-2">Use Location</Text>
+                </View>
+              </TouchableOpacity>
+            </View>
+            {!tempPickedLocation && (
+              <Text className="text-center text-gray-500 text-xs mt-2">
+                Tap anywhere on the map to place a pin
               </Text>
             )}
-          </View>
+          </Animated.View>
         </View>
       </Modal>
 
@@ -1660,156 +1962,288 @@ const CStatus = () => {
         animationType="slide"
         transparent={true}
       >
-        <View className="flex-1 bg-black/50 justify-center items-center">
-          <View className="bg-white rounded-lg p-6 w-11/12 max-h-[80%]">
+        <View className="flex-1 bg-black/60 justify-center items-center">
+          <View className="bg-white rounded-3xl w-11/12 max-h-[85%] overflow-hidden" style={{
+            shadowColor: '#000',
+            shadowOffset: { width: 0, height: 10 },
+            shadowOpacity: 0.3,
+            shadowRadius: 20,
+            elevation: 15,
+          }}>
             {selectedReport && (
               <ScrollView showsVerticalScrollIndicator={false}>
-                <View className="flex-row items-center justify-between mb-4">
-                  <Text className="text-xl font-bold text-gray-800">Report Details</Text>
+                {/* Enhanced Header */}
+                <LinearGradient
+                  colors={['#ff6b35', '#ff512f', '#dc2626']}
+                  start={{ x: 0, y: 0 }}
+                  end={{ x: 1, y: 0 }}
+                  style={{
+                    paddingTop: 16,
+                    paddingBottom: 16,
+                    paddingHorizontal: 20,
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                  }}
+                >
+                  <View className="flex-row items-center">
+                    <MaterialIcons name="description" size={24} color="#ffffff" />
+                    <Text className="text-white text-xl font-bold ml-2" style={{
+                      textShadowColor: 'rgba(0, 0, 0, 0.2)',
+                      textShadowOffset: { width: 0, height: 1 },
+                      textShadowRadius: 3,
+                    }}>Report Details</Text>
+                  </View>
                   <TouchableOpacity
                     onPress={() => setShowModal(false)}
-                    className="p-2"
+                    className="bg-white/20 rounded-full p-2"
+                    style={{
+                      backgroundColor: 'rgba(255, 255, 255, 0.2)',
+                    }}
                   >
-                    <Text className="text-2xl font-bold text-gray-500">×</Text>
+                    <MaterialIcons name="close" size={20} color="#ffffff" />
                   </TouchableOpacity>
-                </View>
+                </LinearGradient>
 
-                <Image
-                  source={(() => {
-                    // Prefer URLs coming from DB/API
-                    if (selectedReport.image_url) return { uri: selectedReport.image_url };
-                    if (selectedReport.photo_url) return { uri: selectedReport.photo_url };
-                    if (selectedReport.image?.uri) return selectedReport.image;
-                    if (typeof selectedReport.image === 'string') return { uri: selectedReport.image };
-                    return require('../../../../assets/images/burnhouse.jpg');
-                  })()}
-                  className="w-full h-56 rounded-lg mb-4"
-                  resizeMode="contain"
-                />
+                <View className="px-5 pt-5 pb-6">
+                  {/* Fire Image */}
+                  <View className="mb-5">
+                    <Image
+                      source={(() => {
+                        if (selectedReport.image_url) return { uri: selectedReport.image_url };
+                        if (selectedReport.photo_url) return { uri: selectedReport.photo_url };
+                        if (selectedReport.image?.uri) return selectedReport.image;
+                        if (typeof selectedReport.image === 'string') return { uri: selectedReport.image };
+                        return require('../../../../assets/images/burnhouse.jpg');
+                      })()}
+                      className="w-full h-64 rounded-2xl"
+                      resizeMode="cover"
+                      style={{
+                        shadowColor: '#000',
+                        shadowOffset: { width: 0, height: 4 },
+                        shadowOpacity: 0.2,
+                        shadowRadius: 8,
+                        elevation: 8,
+                      }}
+                    />
+                  </View>
 
-                <View className="mb-3">
-                  <Text className="text-gray-600 text-sm">Reporter</Text>
-                  <Text className="text-gray-800 font-semibold">
-                    {selectedReport.reporter || selectedReport.user_name || 'Unknown Reporter'}
-                  </Text>
-                </View>
-
-                <View className="mb-3">
-                  <Text className="text-gray-600 text-sm">Location</Text>
-                  <Text className="text-gray-800 font-semibold">
-                    {selectedReport.resolved_address || selectedReport.address || selectedReport.location || selectedReport.geotag_location || 'Location unavailable'}
-                  </Text>
-                </View>
-
-                <View className="mb-3">
-                  <Text className="text-gray-600 text-sm">Status</Text>
+                  {/* Status Badge - Prominent */}
                   {(() => {
-                    // FIXED: Check 'status' field first (Railway API uses this), then 'progress' as fallback
                     const progress = selectedReport.status || selectedReport.progress ||
                       (selectedReport.prediction === 'Fire' ? 'On Going' : 'Under Control') ||
                       'Unknown';
                     const color = getProgressColor(progress);
                     return (
-                      <View
-                        className="px-3 py-1 rounded-full self-start mt-1"
-                        style={{ backgroundColor: color + '20' }}
-                      >
-                        <Text
-                          className="text-sm font-medium"
-                          style={{ color }}
+                      <View className="mb-5 items-center">
+                        <View
+                          className="px-5 py-2 rounded-full"
+                          style={{ 
+                            backgroundColor: color + '20',
+                            borderWidth: 2,
+                            borderColor: color,
+                          }}
                         >
-                          {progress}
-                        </Text>
+                          <Text
+                            className="text-base font-bold"
+                            style={{ color }}
+                          >
+                            {progress}
+                          </Text>
+                        </View>
                       </View>
                     );
                   })()}
+
+                  {/* Basic Information Section */}
+                  <View className="mb-5">
+                    <Text className="text-gray-500 text-xs font-semibold uppercase mb-3 tracking-wider">Basic Information</Text>
+                    <View className="bg-gray-50 rounded-2xl p-4">
+                      <View className="flex-row items-start mb-3">
+                        <MaterialIcons name="person" size={18} color="#6b7280" />
+                        <View className="flex-1 ml-3">
+                          <Text className="text-gray-500 text-xs mb-1">Reporter</Text>
+                          <Text className="text-gray-800 font-semibold text-base">
+                            {selectedReport.reporter || selectedReport.user_name || 'Unknown Reporter'}
+                          </Text>
+                        </View>
+                      </View>
+                      <View className="h-px bg-gray-200 mb-3" />
+                      <View className="flex-row items-start mb-3">
+                        <MaterialIcons name="place" size={18} color="#6b7280" />
+                        <View className="flex-1 ml-3">
+                          <Text className="text-gray-500 text-xs mb-1">Location</Text>
+                          <Text className="text-gray-800 font-semibold text-base">
+                            {selectedReport.resolved_address || selectedReport.address || selectedReport.location || selectedReport.geotag_location || 'Location unavailable'}
+                          </Text>
+                        </View>
+                      </View>
+                      <View className="h-px bg-gray-200 mb-3" />
+                      <View className="flex-row items-start">
+                        <MaterialIcons name="schedule" size={18} color="#6b7280" />
+                        <View className="flex-1 ml-3">
+                          <Text className="text-gray-500 text-xs mb-1">Reported</Text>
+                          <Text className="text-gray-800 font-semibold text-base">
+                            {formatTimestamp(selectedReport.formatted_timestamp || selectedReport.created_at || selectedReport.timestamp)}
+                          </Text>
+                        </View>
+                      </View>
+                    </View>
+                  </View>
+
+                  {/* Fire Details Section */}
+                  {(selectedReport.cause || selectedReport.cause_of_fire || selectedReport.number_of_structures_on_fire) && (
+                    <View className="mb-5">
+                      <Text className="text-gray-500 text-xs font-semibold uppercase mb-3 tracking-wider">Fire Details</Text>
+                      <View className="rounded-2xl p-4" style={{ backgroundColor: 'rgba(255, 81, 47, 0.05)' }}>
+                        {selectedReport.cause || selectedReport.cause_of_fire ? (
+                          <>
+                            <View className="flex-row items-start mb-3">
+                              <MaterialIcons name="warning" size={18} color="#ff512f" />
+                              <View className="flex-1 ml-3">
+                                <Text className="text-gray-500 text-xs mb-1">Cause of Fire</Text>
+                                <Text className="text-gray-800 font-semibold text-base">
+                                  {selectedReport.cause || selectedReport.cause_of_fire || 'No cause specified'}
+                                </Text>
+                              </View>
+                            </View>
+                            {selectedReport.number_of_structures_on_fire && <View className="h-px mb-3" style={{ backgroundColor: 'rgba(255, 81, 47, 0.2)' }} />}
+                          </>
+                        ) : null}
+                        {selectedReport.number_of_structures_on_fire && (
+                          <View className="flex-row items-start">
+                            <MaterialIcons name="business" size={18} color="#ff512f" />
+                            <View className="flex-1 ml-3">
+                              <Text className="text-gray-500 text-xs mb-1">Structures Affected</Text>
+                              <Text className="text-gray-800 font-semibold text-base">
+                                {selectedReport.number_of_structures_on_fire} structure(s)
+                              </Text>
+                            </View>
+                          </View>
+                        )}
+                      </View>
+                    </View>
+                  )}
+
+                  {/* AI Analysis Section */}
+                  {(selectedReport.prediction || selectedReport.structure || selectedReport.smoke_intensity || selectedReport.alarm_level) && (
+                    <View className="mb-5">
+                      <Text className="text-gray-500 text-xs font-semibold uppercase mb-3 tracking-wider">AI Analysis</Text>
+                      <View className="rounded-2xl p-4" style={{ backgroundColor: 'rgba(59, 130, 246, 0.05)' }}>
+                        {selectedReport.prediction && (
+                          <>
+                            <View className="flex-row items-start mb-3">
+                              <MaterialIcons name="psychology" size={18} color="#3b82f6" />
+                              <View className="flex-1 ml-3">
+                                <Text className="text-gray-500 text-xs mb-1">AI Prediction</Text>
+                                <Text className="text-gray-800 font-semibold text-base">
+                                  {selectedReport.prediction} {selectedReport.confidence ? `(${selectedReport.confidence})` : ''}
+                                </Text>
+                              </View>
+                            </View>
+                            {(selectedReport.structure || selectedReport.smoke_intensity || selectedReport.alarm_level) && <View className="h-px mb-3" style={{ backgroundColor: 'rgba(59, 130, 246, 0.2)' }} />}
+                          </>
+                        )}
+                        {selectedReport.structure && (
+                          <>
+                            <View className="flex-row items-start mb-3">
+                              <MaterialIcons name="domain" size={18} color="#3b82f6" />
+                              <View className="flex-1 ml-3">
+                                <Text className="text-gray-500 text-xs mb-1">Structure Type</Text>
+                                <Text className="text-gray-800 font-semibold text-base">
+                                  {selectedReport.structure}
+                                  {selectedReport.structure_confidence ? ` (${selectedReport.structure_confidence})` : ''}
+                                </Text>
+                              </View>
+                            </View>
+                            {(selectedReport.smoke_intensity || selectedReport.alarm_level) && <View className="h-px mb-3" style={{ backgroundColor: 'rgba(59, 130, 246, 0.2)' }} />}
+                          </>
+                        )}
+                        {selectedReport.smoke_intensity && (
+                          <>
+                            <View className="flex-row items-start mb-3">
+                              <MaterialIcons name="cloud" size={18} color="#3b82f6" />
+                              <View className="flex-1 ml-3">
+                                <Text className="text-gray-500 text-xs mb-1">Smoke Intensity</Text>
+                                <Text className="text-gray-800 font-semibold text-base">
+                                  {selectedReport.smoke_intensity} {selectedReport.smoke_confidence ? `(${selectedReport.smoke_confidence})` : ''}
+                                </Text>
+                              </View>
+                            </View>
+                            {selectedReport.alarm_level && <View className="h-px mb-3" style={{ backgroundColor: 'rgba(59, 130, 246, 0.2)' }} />}
+                          </>
+                        )}
+                        {selectedReport.alarm_level && (
+                          <View className="flex-row items-start">
+                            <MaterialIcons name="notifications-active" size={18} color="#3b82f6" />
+                            <View className="flex-1 ml-3">
+                              <Text className="text-gray-500 text-xs mb-1">Alarm Level</Text>
+                              <Text className="text-gray-800 font-semibold text-base">
+                                {selectedReport.alarm_level}
+                              </Text>
+                            </View>
+                          </View>
+                        )}
+                      </View>
+                    </View>
+                  )}
+
+                  {/* Description Section */}
+                  {selectedReport.description && selectedReport.description !== 'Emergency report submitted' && (
+                    <View className="mb-5">
+                      <Text className="text-gray-500 text-xs font-semibold uppercase mb-3 tracking-wider">Description</Text>
+                      <View className="bg-gray-50 rounded-2xl p-4">
+                        <Text className="text-gray-800 text-base leading-6">
+                          {selectedReport.description}
+                        </Text>
+                      </View>
+                    </View>
+                  )}
+
+                  {/* Action Buttons */}
+                  {selectedReport && (
+                    <View className="flex-row gap-3 mt-2">
+                      <TouchableOpacity
+                        className="flex-1 bg-gray-100 rounded-2xl py-4 px-4 border-2 border-gray-200"
+                        onPress={() => openEditFromReport(selectedReport)}
+                        activeOpacity={0.7}
+                        style={{
+                          shadowColor: '#000',
+                          shadowOffset: { width: 0, height: 2 },
+                          shadowOpacity: 0.1,
+                          shadowRadius: 4,
+                          elevation: 3,
+                        }}
+                      >
+                        <View className="flex-row items-center justify-center">
+                          <MaterialIcons name="edit" size={20} color="#6b7280" />
+                          <Text className="text-center font-bold text-gray-700 text-base ml-2">Edit</Text>
+                        </View>
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        className="flex-1 bg-[#ff512f] rounded-2xl py-4 px-4"
+                        onPress={() => {
+                          setShowModal(false);
+                          setCancelReason('');
+                          setShowCancelModal(true);
+                        }}
+                        activeOpacity={0.85}
+                        style={{
+                          shadowColor: '#ff512f',
+                          shadowOffset: { width: 0, height: 4 },
+                          shadowOpacity: 0.3,
+                          shadowRadius: 8,
+                          elevation: 6,
+                        }}
+                      >
+                        <View className="flex-row items-center justify-center">
+                          <MaterialIcons name="cancel" size={20} color="#ffffff" />
+                          <Text className="text-center font-bold text-white text-base ml-2">Cancel</Text>
+                        </View>
+                      </TouchableOpacity>
+                    </View>
+                  )}
                 </View>
-
-                <View className="mb-3">
-                  <Text className="text-gray-600 text-sm">Cause of Fire</Text>
-                  <Text className="text-gray-800 font-semibold">
-                    {selectedReport.cause || selectedReport.cause_of_fire || 'No cause specified'}
-                  </Text>
-                </View>
-
-                {/* CNN Model Results */}
-                {selectedReport.prediction && (
-                  <View className="mb-3">
-                    <Text className="text-gray-600 text-sm">AI Prediction</Text>
-                    <Text className="text-gray-800 font-semibold">
-                      {selectedReport.prediction} ({selectedReport.confidence || 'N/A'})
-                    </Text>
-                  </View>
-                )}
-
-                {selectedReport.structure && (
-                  <View className="mb-3">
-                    <Text className="text-gray-600 text-sm">Structure Type</Text>
-                    <Text className="text-gray-800 font-semibold">
-                      {selectedReport.structure}
-                      {selectedReport.structure_confidence ? ` (${selectedReport.structure_confidence})` : ''}
-                    </Text>
-                  </View>
-                )}
-
-                {selectedReport.smoke_intensity && (
-                  <View className="mb-3">
-                    <Text className="text-gray-600 text-sm">Smoke Intensity</Text>
-                    <Text className="text-gray-800 font-semibold">
-                      {selectedReport.smoke_intensity} ({selectedReport.smoke_confidence || 'N/A'})
-                    </Text>
-                  </View>
-                )}
-
-                {selectedReport.alarm_level && (
-                  <View className="mb-3">
-                    <Text className="text-gray-600 text-sm">Alarm Level</Text>
-                    <Text className="text-gray-800 font-semibold">{selectedReport.alarm_level}</Text>
-                  </View>
-                )}
-
-                {selectedReport.number_of_structures_on_fire && (
-                  <View className="mb-3">
-                    <Text className="text-gray-600 text-sm">Estimated Structures Affected</Text>
-                    <Text className="text-gray-800 font-semibold">{selectedReport.number_of_structures_on_fire} structure(s)</Text>
-                  </View>
-                )}
-
-                <View className="mb-4">
-                  <Text className="text-gray-600 text-sm">Description</Text>
-                  <Text className="text-gray-800">
-                    {selectedReport.description || 'Emergency report submitted'}
-                  </Text>
-                </View>
-
-                <View className="mb-4">
-                  <Text className="text-gray-600 text-sm">Reported</Text>
-                  <Text className="text-gray-800">
-                    {formatTimestamp(selectedReport.formatted_timestamp || selectedReport.created_at || selectedReport.timestamp)}
-                  </Text>
-                </View>
-
-                {/* Action Buttons: Edit and Cancel */}
-                {selectedReport && (
-                  <View className="flex-row mt-3 gap-3">
-                    <TouchableOpacity
-                      className="flex-1 bg-blue-600 rounded-lg p-3"
-                      onPress={() => openEditFromReport(selectedReport)}
-                    >
-                      <Text className="text-center font-semibold text-white">Edit</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                      className="flex-1 bg-red-600 rounded-lg p-3"
-                      onPress={() => {
-                        setShowModal(false);
-                        setCancelReason('');
-                        setShowCancelModal(true);
-                      }}
-                    >
-                      <Text className="text-center font-semibold text-white">Cancel</Text>
-                    </TouchableOpacity>
-                  </View>
-                )}
               </ScrollView>
             )}
           </View>
@@ -1905,82 +2339,248 @@ const CStatus = () => {
         transparent={true}
         onRequestClose={() => setShowEditModal(false)}
       >
-        <View className="flex-1 bg-black/50 justify-center items-center">
-          <View className="bg-white rounded-lg w-11/12 max-h-[85%]">
-            <View className="items-center px-6 pt-6 pb-2">
-              <Text className="text-xl font-bold text-gray-800">Edit Report</Text>
-            </View>
-            <ScrollView className="px-6 pb-6" showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
+        <View className="flex-1 bg-black/60 justify-center items-center">
+          <View className="bg-white rounded-3xl w-11/12 max-h-[85%] overflow-hidden" style={{
+            shadowColor: '#000',
+            shadowOffset: { width: 0, height: 10 },
+            shadowOpacity: 0.3,
+            shadowRadius: 20,
+            elevation: 15,
+          }}>
+            {/* Enhanced Header */}
+            <LinearGradient
+              colors={['#ff6b35', '#ff512f', '#dc2626']}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 0 }}
+              style={{
+                paddingTop: 16,
+                paddingBottom: 16,
+                paddingHorizontal: 20,
+                flexDirection: 'row',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+              }}
+            >
+              <View className="flex-row items-center">
+                <MaterialIcons name="edit" size={24} color="#ffffff" />
+                <Text className="text-white text-xl font-bold ml-2" style={{
+                  textShadowColor: 'rgba(0, 0, 0, 0.2)',
+                  textShadowOffset: { width: 0, height: 1 },
+                  textShadowRadius: 3,
+                }}>Edit Report</Text>
+              </View>
+              <TouchableOpacity
+                onPress={() => setShowEditModal(false)}
+                className="bg-white/20 rounded-full p-2"
+                style={{
+                  backgroundColor: 'rgba(255, 255, 255, 0.2)',
+                }}
+              >
+                <MaterialIcons name="close" size={20} color="#ffffff" />
+              </TouchableOpacity>
+            </LinearGradient>
+
+            <ScrollView className="px-5 pt-5 pb-6" showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
               {/* Preview Image */}
               {editData.imageUri && (
-                <Image source={{ uri: editData.imageUri }} className="w-full h-40 rounded-lg mb-3" resizeMode="cover" />
+                <View className="mb-5">
+                  <Image 
+                    source={{ uri: editData.imageUri }} 
+                    className="w-full h-64 rounded-2xl" 
+                    resizeMode="cover"
+                    style={{
+                      shadowColor: '#000',
+                      shadowOffset: { width: 0, height: 4 },
+                      shadowOpacity: 0.2,
+                      shadowRadius: 8,
+                      elevation: 8,
+                    }}
+                  />
+                  <TouchableOpacity
+                    className="absolute top-3 right-3 bg-red-600 rounded-full p-2"
+                    onPress={() => setEditData({...editData, imageUri: null})}
+                    style={{
+                      shadowColor: '#000',
+                      shadowOffset: { width: 0, height: 2 },
+                      shadowOpacity: 0.3,
+                      shadowRadius: 4,
+                      elevation: 5,
+                    }}
+                  >
+                    <MaterialIcons name="close" size={20} color="#ffffff" />
+                  </TouchableOpacity>
+                </View>
               )}
-              <View className="flex-row space-x-3 mb-6">
+
+              {/* Enhanced Action Buttons */}
+              <View className="flex-row gap-4 mb-6">
                 <TouchableOpacity
-                  className="flex-1 bg-gray-800 rounded-lg p-3 items-center"
-                  onPress={async () => {
-                    const hasPermission = await requestMediaLibraryPermission();
-                    if (!hasPermission) return Alert.alert('Permission Denied', 'Gallery permission is required');
-                    const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ImagePicker.MediaTypeOptions.Images, allowsEditing: true, aspect: [4,3], quality: 0.8 });
-                    if (!result.canceled && result.assets[0]) {
-                      setEditData({ ...editData, imageUri: result.assets[0].uri });
-                    }
+                  className="flex-1 bg-[#ff512f] rounded-2xl p-5 items-center shadow-lg"
+                  onPress={() => {
+                    Alert.alert(
+                      'Change Picture',
+                      'Choose an option',
+                      [
+                        {
+                          text: 'Camera',
+                          onPress: async () => {
+                            const hasPermission = await requestCameraPermission();
+                            if (!hasPermission) {
+                              Alert.alert('Permission Denied', 'Camera permission is required to take a photo');
+                              return;
+                            }
+                            
+                            const result = await ImagePicker.launchCameraAsync({
+                              mediaTypes: ImagePicker.MediaTypeOptions.Images,
+                              allowsEditing: true,
+                              aspect: [4, 3],
+                              quality: 0.8,
+                            });
+
+                            if (!result.canceled && result.assets[0]) {
+                              setEditData({
+                                ...editData,
+                                imageUri: result.assets[0].uri
+                              });
+                            }
+                          }
+                        },
+                        {
+                          text: 'Gallery',
+                          onPress: async () => {
+                            const hasPermission = await requestMediaLibraryPermission();
+                            if (!hasPermission) {
+                              Alert.alert('Permission Denied', 'Gallery permission is required to select a photo');
+                              return;
+                            }
+                            
+                            const result = await ImagePicker.launchImageLibraryAsync({
+                              mediaTypes: ImagePicker.MediaTypeOptions.Images,
+                              allowsEditing: true,
+                              aspect: [4, 3],
+                              quality: 0.8,
+                            });
+
+                            if (!result.canceled && result.assets[0]) {
+                              setEditData({
+                                ...editData,
+                                imageUri: result.assets[0].uri
+                              });
+                            }
+                          }
+                        },
+                        {
+                          text: 'Cancel',
+                          style: 'cancel'
+                        }
+                      ]
+                    );
+                  }}
+                  activeOpacity={0.85}
+                  style={{
+                    shadowColor: '#ff512f',
+                    shadowOffset: { width: 0, height: 4 },
+                    shadowOpacity: 0.3,
+                    shadowRadius: 8,
+                    elevation: 6,
+                    borderWidth: 2,
+                    borderColor: 'rgba(239, 68, 68, 0.3)',
                   }}
                 >
-                  <Text className="text-white font-semibold">Change Picture</Text>
+                  <View className="rounded-full p-2 mb-2" style={{ backgroundColor: 'rgba(255, 255, 255, 0.2)' }}>
+                    <MaterialIcons name="camera-alt" size={24} color="#ffffff" />
+                  </View>
+                  <Text className="text-white font-bold text-base text-center">Change Picture</Text>
                 </TouchableOpacity>
                 <TouchableOpacity
-                  className="flex-1 bg-gray-800 rounded-lg p-3 items-center"
+                  className="flex-1 bg-gray-800 rounded-2xl p-5 items-center shadow-lg"
                   onPress={async () => {
-                    // Close edit modal so the map is visible on top
+                    // Set current edit location as temp location for the picker
+                    if (editData.latitude && editData.longitude) {
+                      setTempPickedLocation({ latitude: editData.latitude, longitude: editData.longitude });
+                      setTempPickedAddress(editData.address || '');
+                      // Set map region to current edit location
+                      setMapRegion({
+                        latitude: editData.latitude,
+                        longitude: editData.longitude,
+                        latitudeDelta: 0.003,
+                        longitudeDelta: 0.003,
+                      });
+                    } else {
+                      // If no current location, get user's current location
+                      try {
+                        const { status } = await Location.requestForegroundPermissionsAsync();
+                        if (status === 'granted') {
+                          const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced, timeout: 10000 });
+                          setTempPickedLocation({ latitude: loc.coords.latitude, longitude: loc.coords.longitude });
+                          setMapRegion({
+                            latitude: loc.coords.latitude,
+                            longitude: loc.coords.longitude,
+                            latitudeDelta: 0.003,
+                            longitudeDelta: 0.003,
+                          });
+                          try {
+                            const res = await Location.reverseGeocodeAsync({ latitude: loc.coords.latitude, longitude: loc.coords.longitude });
+                            if (res && res[0]) {
+                              const r = res[0];
+                              const label = [r.name, r.street, r.subregion, r.city || r.region, r.postalCode, r.country].filter(Boolean).join(', ');
+                              setTempPickedAddress(label);
+                            }
+                          } catch {}
+                        }
+                      } catch {}
+                    }
+                    setIsLocationPickerForEdit(true);
                     setShowEditModal(false);
-                    setShowEditLocationPicker(true);
-                    setIsGettingEditLocation(true);
-                    try {
-                      const { status } = await Location.requestForegroundPermissionsAsync();
-                      if (status === 'granted') {
-                        const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced, timeout: 10000 });
-                        const region = {
-                          latitude: editData.latitude || loc.coords.latitude,
-                          longitude: editData.longitude || loc.coords.longitude,
-                          latitudeDelta: 0.01,
-                          longitudeDelta: 0.01,
-                        };
-                        setEditMapRegion(region);
-                        setEditTempLocation({ latitude: region.latitude, longitude: region.longitude });
-                        try {
-                          const res = await Location.reverseGeocodeAsync({ latitude: region.latitude, longitude: region.longitude });
-                          if (res && res[0]) {
-                            const r = res[0];
-                            const label = [r.name, r.street, r.subregion, r.city || r.region, r.postalCode, r.country].filter(Boolean).join(', ');
-                            setEditTempAddress(label);
-                          }
-                        } catch {}
-                      }
-                    } catch {}
-                    finally { setIsGettingEditLocation(false); }
+                    // Use the same location picker we improved
+                    setTimeout(() => setShowLocationPicker(true), 200);
+                  }}
+                  activeOpacity={0.85}
+                  style={{
+                    shadowColor: '#000',
+                    shadowOffset: { width: 0, height: 4 },
+                    shadowOpacity: 0.3,
+                    shadowRadius: 8,
+                    elevation: 6,
+                    borderWidth: 2,
+                    borderColor: 'rgba(55, 65, 81, 0.3)',
                   }}
                 >
-                  <Text className="text-white font-semibold">Change Location</Text>
+                  <View className="rounded-full p-2 mb-2" style={{ backgroundColor: 'rgba(255, 255, 255, 0.2)' }}>
+                    <MaterialIcons name="place" size={24} color="#ffffff" />
+                  </View>
+                  <Text className="text-white font-bold text-base text-center">Change Location</Text>
                 </TouchableOpacity>
               </View>
 
-              {/* Cause of Fire */}
+              {/* Enhanced Input Fields */}
               <View className="mb-4">
+                <View className="flex-row items-center mb-2">
+                  <MaterialIcons name="description" size={18} color="#6b7280" />
+                  <Text className="text-gray-700 font-semibold text-sm ml-2">Cause of Fire</Text>
+                </View>
                 <TextInput
-                  className="border border-gray-300 rounded-lg p-4 text-gray-800"
+                  className="bg-gray-50 border-2 border-gray-200 rounded-2xl p-4 text-gray-800 text-base"
                   placeholder="Cause of fire"
+                  placeholderTextColor="#9ca3af"
                   value={editData.cause}
                   onChangeText={(t) => setEditData({ ...editData, cause: t })}
                   multiline
+                  style={{
+                    minHeight: 80,
+                  }}
                 />
               </View>
 
-              {/* Number of Structures */}
-              <View className="mb-6">
+              <View className="mb-5">
+                <View className="flex-row items-center mb-2">
+                  <MaterialIcons name="business" size={18} color="#6b7280" />
+                  <Text className="text-gray-700 font-semibold text-sm ml-2">Number of Structures (Optional)</Text>
+                </View>
                 <TextInput
-                  className="border border-gray-300 rounded-lg p-4 text-gray-800"
+                  className="bg-gray-50 border-2 border-gray-200 rounded-2xl p-4 text-gray-800 text-base"
                   placeholder="Number of structures affected"
+                  placeholderTextColor="#9ca3af"
                   value={editData.numberOfStructures}
                   onChangeText={(t) => setEditData({ ...editData, numberOfStructures: t })}
                   keyboardType="numeric"
@@ -1988,21 +2588,42 @@ const CStatus = () => {
                 />
               </View>
 
-              {/* Selected Location */}
+              {/* Enhanced Selected Location Display */}
               {(editData.latitude && editData.longitude) || editData.address ? (
-                <View className="mb-6">
-                  <Text className="text-gray-600 text-sm mb-1">Selected Location</Text>
-                  <Text className="text-gray-800 font-semibold">{editData.address || `${editData.latitude?.toFixed(6)}, ${editData.longitude?.toFixed(6)}`}</Text>
+                <View className="mb-6 bg-blue-50 rounded-2xl p-4 border-2 border-blue-200" style={{ backgroundColor: 'rgba(59, 130, 246, 0.05)' }}>
+                  <View className="flex-row items-start">
+                    <MaterialIcons name="place" size={20} color="#3b82f6" />
+                    <View className="flex-1 ml-3">
+                      <Text className="text-blue-700 font-semibold text-sm mb-1">Selected Location</Text>
+                      <Text className="text-gray-800 font-medium text-base">
+                        {editData.address || `${editData.latitude?.toFixed(6)}, ${editData.longitude?.toFixed(6)}`}
+                      </Text>
+                    </View>
+                  </View>
                 </View>
               ) : null}
 
-              {/* Save/Close */}
-              <View className="flex-row space-x-3">
-                <TouchableOpacity className="flex-1 bg-gray-300 rounded-lg p-3" onPress={() => setShowEditModal(false)}>
-                  <Text className="text-center font-semibold text-gray-700">Close</Text>
+              {/* Enhanced Action Buttons */}
+              <View className="flex-row gap-4 mt-4">
+                <TouchableOpacity 
+                  className="flex-1 bg-gray-100 rounded-2xl py-4 px-4 border-2 border-gray-200"
+                  onPress={() => setShowEditModal(false)}
+                  activeOpacity={0.7}
+                  style={{
+                    shadowColor: '#000',
+                    shadowOffset: { width: 0, height: 2 },
+                    shadowOpacity: 0.1,
+                    shadowRadius: 4,
+                    elevation: 3,
+                  }}
+                >
+                  <View className="flex-row items-center justify-center">
+                    <MaterialIcons name="close" size={20} color="#6b7280" />
+                    <Text className="text-center font-bold text-gray-700 text-base ml-2">Close</Text>
+                  </View>
                 </TouchableOpacity>
                 <TouchableOpacity
-                  className={`flex-1 rounded-lg p-3 ${isEditing ? 'bg-gray-400' : 'bg-blue-600'}`}
+                  className={`flex-1 rounded-2xl py-4 px-4 ${isEditing ? 'bg-gray-400' : 'bg-[#ff512f]'}`}
                   onPress={async () => {
                     try {
                       setIsEditing(true);
@@ -2047,10 +2668,28 @@ const CStatus = () => {
                     }
                   }}
                   disabled={isEditing}
+                  activeOpacity={0.85}
+                  style={{
+                    shadowColor: isEditing ? '#000' : '#ff512f',
+                    shadowOffset: { width: 0, height: 4 },
+                    shadowOpacity: 0.3,
+                    shadowRadius: 8,
+                    elevation: 6,
+                  }}
                 >
-                  <Text className="text-center font-semibold text-white">
-                    {isEditing ? 'Saving...' : 'Save'}
-                  </Text>
+                  <View className="flex-row items-center justify-center">
+                    {isEditing ? (
+                      <>
+                        <MaterialIcons name="hourglass-empty" size={20} color="#ffffff" />
+                        <Text className="text-center font-bold text-white text-base ml-2">Saving...</Text>
+                      </>
+                    ) : (
+                      <>
+                        <MaterialIcons name="save" size={20} color="#ffffff" />
+                        <Text className="text-center font-bold text-white text-base ml-2">Save</Text>
+                      </>
+                    )}
+                  </View>
                 </TouchableOpacity>
               </View>
             </ScrollView>
@@ -2058,166 +2697,6 @@ const CStatus = () => {
         </View>
       </Modal>
 
-      {/* Edit Location Picker */}
-      <Modal
-        visible={showEditLocationPicker}
-        animationType="slide"
-        transparent={false}
-        onRequestClose={() => setShowEditLocationPicker(false)}
-      >
-        <View className="flex-1 bg-white">
-          <View className="h-16 flex-row items-center justify-between px-4 border-b border-gray-200 bg-white">
-            <TouchableOpacity 
-              onPress={() => setShowEditLocationPicker(false)}
-              className="px-4 py-3"
-              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-            >
-              <Text className="text-red-600 font-semibold text-xl">Cancel</Text>
-            </TouchableOpacity>
-            <Text className="text-gray-800 font-bold">Pick New Location</Text>
-            <TouchableOpacity
-              onPress={() => {
-                if (editTempLocation?.latitude && editTempLocation?.longitude) {
-                  setEditData({
-                    ...editData,
-                    latitude: editTempLocation.latitude,
-                    longitude: editTempLocation.longitude,
-                    address: editTempAddress || editData.address,
-                  });
-                  setShowEditLocationPicker(false);
-                  // Reopen the edit modal so the user can finish editing
-                  setTimeout(() => setShowEditModal(true), 200);
-                } else {
-                  Alert.alert('Select a location', 'Tap on the map to place a pin, then drag it to adjust.');
-                }
-              }}
-              className="px-4 py-3"
-              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-            >
-              <Text className="text-green-600 font-semibold text-xl">Use</Text>
-            </TouchableOpacity>
-          </View>
-          {isGettingEditLocation && (
-            <View className="absolute top-16 left-0 right-0 z-10 items-center p-2">
-              <View className="bg-black/60 px-3 py-1 rounded-full"><Text className="text-white text-xs">Getting location…</Text></View>
-            </View>
-          )}
-          <MapView
-            style={{ flex: 1 }}
-            provider={PROVIDER_GOOGLE}
-            initialRegion={editMapRegion || mapRegion}
-            ref={editMapRef}
-            showsUserLocation={true}
-            showsMyLocationButton={true}
-            toolbarEnabled={true}
-            scrollEnabled={true}
-            zoomEnabled={true}
-            onPress={(e) => {
-              const { latitude, longitude } = e.nativeEvent.coordinate;
-              setEditTempLocation({ latitude, longitude });
-              (async () => {
-                try {
-                  const res = await Location.reverseGeocodeAsync({ latitude, longitude });
-                  if (res && res[0]) {
-                    const r = res[0];
-                    const label = [r.name, r.street, r.subregion, r.city || r.region, r.postalCode, r.country].filter(Boolean).join(', ');
-                    setEditTempAddress(label);
-                  } else { setEditTempAddress(''); }
-                } catch { setEditTempAddress(''); }
-              })();
-            }}
-          >
-            {editTempLocation?.latitude && (
-              <Marker
-                coordinate={editTempLocation}
-                draggable={true}
-                onDragStart={() => {
-                  setIsDraggingEditMarker(true);
-                }}
-                onDrag={(e) => {
-                  const { latitude, longitude } = e.nativeEvent.coordinate;
-                  setEditTempLocation({ latitude, longitude });
-                  
-                  // Smooth edge panning - pure pan without zoom changes
-                  if (editMapRef.current) {
-                    editMapRef.current.getCamera().then((camera) => {
-                      const centerLat = camera.center.latitude;
-                      const centerLng = camera.center.longitude;
-                      const zoom = camera.zoom || 15;
-                      
-                      // Calculate visible area based on zoom (for threshold only)
-                      const latDelta = 180 / Math.pow(2, zoom);
-                      const lngDelta = 360 / Math.pow(2, zoom);
-                      
-                      // Threshold: trigger when 25% from edge
-                      const latThreshold = latDelta * 0.25;
-                      const lngThreshold = lngDelta * 0.25;
-                      
-                      // Check distance from center to marker
-                      const distTop = latitude - centerLat;
-                      const distBottom = centerLat - latitude;
-                      const distRight = longitude - centerLng;
-                      const distLeft = centerLng - longitude;
-                      
-                      // Determine pan direction - pan 40% of visible area
-                      let panLat = 0;
-                      let panLng = 0;
-                      
-                      if (distTop > latThreshold) panLat = latDelta * 0.4;
-                      if (distBottom > latThreshold) panLat = -latDelta * 0.4;
-                      if (distRight > lngThreshold) panLng = lngDelta * 0.4;
-                      if (distLeft > lngThreshold) panLng = -lngDelta * 0.4;
-                      
-                      // Use animateCamera to pan without any zoom changes
-                      if (panLat !== 0 || panLng !== 0) {
-                        editMapRef.current.animateCamera({
-                          center: {
-                            latitude: centerLat + panLat,
-                            longitude: centerLng + panLng,
-                          },
-                        }, { duration: 100 });
-                      }
-                    }).catch(() => {});
-                  }
-                }}
-                onDragEnd={(e) => {
-                  setIsDraggingEditMarker(false);
-                  const { latitude, longitude } = e.nativeEvent.coordinate;
-                  setEditTempLocation({ latitude, longitude });
-                  // Don't adjust map after drag - keep user's zoom level
-                  // Reverse-geocode dragged location
-                  (async () => {
-                    try {
-                      const res = await Location.reverseGeocodeAsync({ latitude, longitude });
-                      if (res && res[0]) {
-                        const r = res[0];
-                        const label = [r.name, r.street, r.subregion, r.city || r.region, r.postalCode, r.country]
-                          .filter(Boolean)
-                          .join(', ');
-                        setEditTempAddress(label);
-                      } else {
-                        setEditTempAddress('');
-                      }
-                    } catch (err) {
-                      setEditTempAddress('');
-                    }
-                  })();
-                }}
-              />
-            )}
-          </MapView>
-          <View className="p-4 border-t border-gray-200">
-            <Text className="text-gray-600 text-sm">
-              {editTempLocation ? `${editTempAddress ? editTempAddress + ' • ' : ''}${editTempLocation.latitude.toFixed(6)}, ${editTempLocation.longitude.toFixed(6)}` : 'Tap anywhere on the map to place a pin, then drag it to adjust'}
-            </Text>
-            {editTempLocation && (
-              <Text className="text-gray-500 text-xs mt-1">
-                Drag the pin to adjust the location
-              </Text>
-            )}
-          </View>
-        </View>
-      </Modal>
 
       {/* Success Toast */}
       {showSuccessToast && (
