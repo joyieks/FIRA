@@ -1,9 +1,30 @@
 import { Stack } from "expo-router";
 import "./global.css";
 import { MaterialIcons } from '@expo/vector-icons';
-import { TouchableOpacity, StatusBar, View } from 'react-native';
+import { TouchableOpacity, StatusBar, View, LogBox } from 'react-native';
 import { AuthProvider } from './config/AuthContext';
 import BackButtonHandler from './components/BackButtonHandler';
+
+// Disable all console logs and warnings in the UI (they still log to console)
+if (!__DEV__) {
+  console.log = () => {};
+  console.warn = () => {};
+  console.error = () => {};
+}
+
+// Ignore specific warnings that appear in yellow boxes
+LogBox.ignoreLogs([
+  'Non-serializable values were found in the navigation state',
+  'VirtualizedLists should never be nested',
+  'Require cycle:',
+  'Remote debugger',
+  'Animated:',
+  'Warning:',
+  'Setting a timer'
+]);
+
+// Ignore all logs (removes yellow/red boxes but keeps console output)
+LogBox.ignoreAllLogs(true);
 
 export default function RootLayout() {
   return (

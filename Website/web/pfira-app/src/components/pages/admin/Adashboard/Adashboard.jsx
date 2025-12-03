@@ -113,7 +113,7 @@ const Adashboard = () => {
       
       if (response.ok) {
         const data = await response.json();
-        console.log('📊 Fetched fire reports for admin dashboard:', data.length);
+        // Fetched fire reports
         
         // Filter reports that have valid coordinates AND are not cancelled or fire out
         const reportsWithCoords = data.filter(report => {
@@ -124,21 +124,19 @@ const Adashboard = () => {
           return hasCoords && !isCancelled && !isFireOut;
         });
         
-        console.log('🔥 Reports with valid coordinates:', reportsWithCoords.length);
+        // Reports with valid coordinates
         
         // Log each report's location for debugging
-        reportsWithCoords.forEach(report => {
-          console.log(`Admin Dashboard Report ${report.id}: ${report.latitude}, ${report.longitude} - ${report.address || report.geotag_location}`);
-        });
+        // Reports loaded
         
         setFireReports(reportsWithCoords);
         
         // Check if there's a selected report ID from navigation
         const selectedReportId = localStorage.getItem('selectedReportId');
         if (selectedReportId) {
-          const reportToSelect = reportsWithCoords.find(report => report.id === selectedReportId);
+          const reportToSelect = reportsWithCoords.find(report => String(report.id) === String(selectedReportId));
           if (reportToSelect) {
-            console.log('Auto-selecting report from navigation:', reportToSelect.id);
+            // Auto-selecting report
             setSelectedReport(reportToSelect);
             setPendingSelection(reportToSelect);
             // Center map on the selected fire report
@@ -163,17 +161,27 @@ const Adashboard = () => {
   useEffect(() => {
     fetchFireReports();
     
+    // Debug: Check what happened with last notification click
+    const lastClick = localStorage.getItem('lastNotificationClick');
+    if (lastClick) {
+      console.log('🔍 Last notification click data:', JSON.parse(lastClick));
+      localStorage.removeItem('lastNotificationClick'); // Clean up
+    }
+    
     // Check for pending selection immediately on mount
     const selectedReportId = localStorage.getItem('selectedReportId');
     if (selectedReportId) {
-      console.log('Found pending selection on mount:', selectedReportId);
+      console.log('🎯 Found selectedReportId in localStorage:', selectedReportId);
+      // Found pending selection
       // Set a flag that we have a pending selection
       setPendingSelection({ id: selectedReportId });
+    } else {
+      console.log('❌ No selectedReportId found in localStorage');
     }
     
     // Set up periodic refresh to get new reports
     const refreshInterval = setInterval(() => {
-      console.log('🔄 Refreshing fire reports...');
+      // Refreshing fire reports
       fetchFireReports();
     }, 30000); // Refresh every 30 seconds
     
@@ -373,8 +381,7 @@ const Adashboard = () => {
         assignee_id: assigneeId,
         assigned_at: new Date().toISOString()
       };
-      console.log('[Assign] assignmentNote=', assignmentNote);
-      console.log('[Assign] upsert payload=', { ...payload, note: assignmentNote && assignmentNote.trim() ? assignmentNote.trim() : null });
+      // Assignment note processing
       const { error } = await supabase
         .from('report_assignments')
         .upsert({ ...payload, note: assignmentNote && assignmentNote.trim() ? assignmentNote.trim() : null }, { onConflict: 'report_id,assignee_id' });
@@ -439,10 +446,50 @@ const Adashboard = () => {
   useEffect(() => {
     if (mapLoaded && fireReports.length > 0) {
       const selectedReportId = localStorage.getItem('selectedReportId');
+      // Map loaded, checking for selected report
       if (selectedReportId) {
-        const reportToSelect = fireReports.find(report => report.id === selectedReportId);
+        console.log('🔍 Searching for report with ID:', selectedReportId);
+        
+        // Try to find report by UUID first, then by timestamp match
+        const reportToSelect = fireReports.find(report => {
+          // Direct UUID match
+          if (String(report.id) === String(selectedReportId)) {
+            console.log('✅ Matched by UUID');
+            return true;
+          }
+          
+          // If selectedReportId is a timestamp (numeric), try to match against created_at
+          if (/^\d+$/.test(selectedReportId)) {
+            const timestampMs = parseInt(selectedReportId);
+            const reportDate = new Date(report.created_at);
+            const reportTimestamp = reportDate.getTime();
+            
+            console.log('🔍 Comparing timestamps:', {
+              notification: new Date(timestampMs).toISOString(),
+              report: report.created_at,
+              reportMs: reportTimestamp,
+              diff: Math.abs(timestampMs - reportTimestamp)
+            });
+            
+            // Allow 5 minute tolerance for timestamp matching (in case of clock differences)
+            const diff = Math.abs(timestampMs - reportTimestamp);
+            if (diff < 300000) { // 5 minutes in milliseconds
+              console.log('✅ Matched by timestamp within 5 minutes');
+              return true;
+            }
+          }
+          
+          return false;
+        });
+        
+        console.log('✅ Report match result:', reportToSelect ? 'FOUND' : 'NOT FOUND');
         if (reportToSelect) {
-          console.log('Both map and reports loaded - auto-selecting report:', reportToSelect.id);
+          console.log('📍 Matched report:', reportToSelect.id, reportToSelect.latitude, reportToSelect.longitude);
+        }
+        
+        // Looking for report
+        if (reportToSelect) {
+          // Auto-selecting report
           setIsAutoSelecting(true);
           setSelectedReport(reportToSelect);
           setPendingSelection(null); // Clear pending selection
@@ -453,10 +500,12 @@ const Adashboard = () => {
           });
           localStorage.removeItem('selectedReportId');
           setTimeout(() => setIsAutoSelecting(false), 2000);
+        } else {
+          // Report not found
         }
       } else if (pendingSelection) {
         // If we have a pending selection but no localStorage ID, use the pending selection
-        console.log('Using pending selection:', pendingSelection.id);
+        // Using pending selection
         setIsAutoSelecting(true);
         setSelectedReport(pendingSelection);
         // Center map on the selected fire report
@@ -477,7 +526,7 @@ const Adashboard = () => {
       // wait a bit then try to select anyway
       const fallbackTimeout = setTimeout(() => {
         if (pendingSelection && !mapLoaded) {
-          console.log('Fallback selection - map still loading, selecting report anyway:', pendingSelection.id);
+          // Fallback selection
           setIsAutoSelecting(true);
           setSelectedReport(pendingSelection);
           setPendingSelection(null);
@@ -495,14 +544,14 @@ const Adashboard = () => {
   };
 
   const onLoad = useCallback((map) => {
-    console.log('✅ Map loaded successfully');
+    // Map loaded
     setMapLoaded(true);
     setMapError(null);
   }, []);
 
   // Handle LoadScript load
   const handleLoadScriptLoad = useCallback(() => {
-    console.log('✅ Google Maps API loaded successfully');
+    // Google Maps API loaded
   }, []);
 
   // Handle LoadScript error
@@ -519,13 +568,13 @@ const Adashboard = () => {
   }, []);
 
   const onUnmount = useCallback(() => {
-    console.log('🗺️ Map unmounted');
+    // Map unmounted
     setMapLoaded(false);
   }, []);
 
   // Manual refresh function
   const handleManualRefresh = useCallback(() => {
-    console.log('🔄 Manual refresh triggered, retry count:', retryCount);
+    // Manual refresh triggered
     setMapLoaded(false);
     setMapError(null);
     setMapLoadTimeout(false);
@@ -540,7 +589,7 @@ const Adashboard = () => {
 
   // Handle marker click to center map and select report
   const handleMarkerClick = useCallback((report) => {
-    console.log('Marker clicked:', report.id);
+    // Marker clicked
     setSelectedReport(report);
     // Center map on the clicked fire report
     setMapCenter({
@@ -669,7 +718,6 @@ const Adashboard = () => {
 
           {/* Fire Report Markers */}
           {mapLoaded && fireReports.map((report) => {
-            console.log(`Rendering fire report marker for ${report.id} at:`, report.latitude, report.longitude);
             return (
               <Marker
                 key={`${report.id}-${report.latitude}-${report.longitude}-${report.address || report.geotag_location || 'no-address'}`}

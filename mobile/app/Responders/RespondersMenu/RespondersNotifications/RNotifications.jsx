@@ -512,15 +512,6 @@ export default function RNotifications({ onUnreadCountChange }) {
           <Text className="text-gray-500 text-center mb-4">
             Stay alert! We&apos;ll notify you when emergency calls come in.
           </Text>
-          {__DEV__ && currentResponderId && (
-            <View className="bg-blue-50 p-4 rounded-lg mt-4">
-              <Text className="text-xs text-blue-800 font-semibold mb-2">Debug Info:</Text>
-              <Text className="text-xs text-blue-700">Responder ID: {currentResponderId}</Text>
-              <Text className="text-xs text-blue-700 mt-1">
-                Check console logs for notification loading details
-              </Text>
-            </View>
-          )}
         </View>
       )}
 

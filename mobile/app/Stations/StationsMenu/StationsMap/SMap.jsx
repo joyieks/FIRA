@@ -496,6 +496,8 @@ Please respond immediately to this assignment.`;
           );
         })}
         </MapView>
+
+
       {/* Modal detail to avoid Callout-related crashes */}
       <Modal
         visible={!!showReportModal && !!selectedReport}

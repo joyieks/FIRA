@@ -3,7 +3,7 @@ import { FiMenu, FiX, FiBell, FiUser, FiSettings, FiLogOut, FiUsers, FiMessageCi
 import { GrOverview } from "react-icons/gr";
 import { FaMapLocationDot } from "react-icons/fa6";
 import { IoIosNotifications } from "react-icons/io";
-import { Link, useLocation, Outlet } from 'react-router-dom';
+import { Link, useLocation, useNavigate, Outlet } from 'react-router-dom';
 import { supabase } from '../../../../config/supabase';
 
 const StationLayout = ({ children }) => {
@@ -444,10 +444,15 @@ const StationLayout = ({ children }) => {
                               !notification.is_read ? 'bg-blue-50' : ''
                             }`}
                             onClick={() => {
-                              // Just navigate to notifications page - don't mark as read yet
-                              // Users will mark as read manually on the notification page
                               setNotificationsOpen(false);
-                              window.location.href = '/station-dashboard/notification';
+                              // If notification has related_report_id, navigate to map with that report
+                              if (notification.related_report_id) {
+                                localStorage.setItem('selectedReportId', notification.related_report_id);
+                                window.location.href = '/station-dashboard';
+                              } else {
+                                // Otherwise go to notifications page
+                                window.location.href = '/station-dashboard/notification';
+                              }
                             }}
                           >
                             <div className="flex items-start space-x-3">

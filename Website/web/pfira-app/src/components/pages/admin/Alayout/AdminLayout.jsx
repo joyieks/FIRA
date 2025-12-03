@@ -5,7 +5,7 @@ import { FaMapLocationDot } from "react-icons/fa6";
 import { IoIosNotifications } from "react-icons/io";
 import { LuMessageCircleMore } from "react-icons/lu";
 import { FaUserFriends } from "react-icons/fa";
-import { Link, useLocation, Outlet } from 'react-router-dom';
+import { Link, useLocation, useNavigate, Outlet } from 'react-router-dom';
 import { useNotifications } from '../../../../contexts/NotificationContext';
 
 const AdminLayout = ({ children }) => {
@@ -13,6 +13,7 @@ const AdminLayout = ({ children }) => {
   const [profileOpen, setProfileOpen] = useState(false);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const location = useLocation();
+  const navigate = useNavigate();
   const profileRef = useRef(null);
   const notificationsRef = useRef(null);
   
@@ -168,6 +169,8 @@ const AdminLayout = ({ children }) => {
                       </div>
                     ) : (
                       <div className="max-h-64 overflow-y-auto">
+                        {console.log('🔔 Rendering notifications dropdown, count:', notifications.length)}
+                        {console.log('🔔 First 5 notifications:', notifications.slice(0, 5))}
                         {notifications.slice(0, 5).map((notification) => (
                           <div
                             key={notification.id}
@@ -175,8 +178,30 @@ const AdminLayout = ({ children }) => {
                               !notification.is_read ? 'bg-blue-50' : ''
                             }`}
                             onClick={() => {
+                              // Store debug info before page reloads
+                              const debugInfo = {
+                                notificationId: notification.id,
+                                relatedReportId: notification.related_report_id,
+                                hasRelatedId: !!notification.related_report_id,
+                                timestamp: Date.now()
+                              };
+                              localStorage.setItem('lastNotificationClick', JSON.stringify(debugInfo));
+                              
                               markAsRead(notification.id);
-                              window.location.href = '/admin-dashboard/notification';
+                              
+                              // If notification has related_report_id, navigate to map with that report
+                              if (notification.related_report_id) {
+                                localStorage.setItem('selectedReportId', notification.related_report_id);
+                                
+                                // If already on admin-dashboard, trigger reload to pick up the new selectedReportId
+                                if (location.pathname === '/admin-dashboard') {
+                                  window.location.reload();
+                                } else {
+                                  navigate('/admin-dashboard');
+                                }
+                              } else {
+                                navigate('/admin-dashboard/notification');
+                              }
                             }}
                           >
                             <div className="flex items-start space-x-3">

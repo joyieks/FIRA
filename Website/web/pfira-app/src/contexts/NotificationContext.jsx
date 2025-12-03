@@ -92,7 +92,7 @@ export const NotificationProvider = ({ children }) => {
         }
         const authId = authUser.id;
         const authEmail = authUser.email || authUser.user_metadata?.email;
-        console.log('🔍 Global: Auth user:', { authId, authEmail });
+        // Auth user found
 
         // Try primary key match first
         let adminId = null;
@@ -116,7 +116,7 @@ export const NotificationProvider = ({ children }) => {
 
         if (adminId) {
           setCurrentAdminId(adminId);
-          console.log('✅ Global: Resolved admin ID via Supabase auth:', adminId);
+          // Resolved admin ID
           try {
             const cache = JSON.stringify({ id: adminId, email: authEmail });
             localStorage.setItem('userData', cache);
@@ -262,7 +262,7 @@ export const NotificationProvider = ({ children }) => {
         console.log('🔍 Global: Extracted admin ID:', adminId);
         if (adminId) {
           setCurrentAdminId(adminId);
-          console.log('✅ Global: Admin ID set successfully:', adminId);
+          // Admin ID set
         } else {
           console.error('❌ Global: No valid admin ID found in userData');
         }
@@ -282,7 +282,7 @@ export const NotificationProvider = ({ children }) => {
     }
     
     try {
-      console.log('🔄 Global: Loading notifications for admin:', currentAdminId);
+      // Loading notifications
       setLoading(true);
       
       const { data, error } = await supabase
@@ -297,7 +297,7 @@ export const NotificationProvider = ({ children }) => {
         return;
       }
 
-      console.log('✅ Global: Notifications loaded successfully:', data?.length || 0, 'notifications');
+      // Notifications loaded
       
       // Check for new unread fire alerts that we haven't already triggered an alarm for
       const newFireAlerts = data?.filter(notification => 
@@ -342,14 +342,12 @@ export const NotificationProvider = ({ children }) => {
     } finally {
       setLoading(false);
     }
-  }, [currentAdminId, notifications]);
+  }, [currentAdminId]);
 
   // Check for new fire reports directly from the API (like the map dashboard)
   const checkForNewFireReports = useCallback(async () => {
     try {
       const timestamp = new Date().toLocaleTimeString();
-      console.log(`🔥 Global [${timestamp}]: Checking Fire Detection API for new reports...`);
-      console.log('🔥 Global: currentAdminId:', currentAdminId);
       
       if (!currentAdminId) {
         console.warn('⚠️ Global: No currentAdminId available, skipping fire report check');
@@ -360,7 +358,7 @@ export const NotificationProvider = ({ children }) => {
       
       if (response.ok) {
         const data = await response.json();
-        console.log('🔥 Global: Fire Detection API returned:', data.length, 'reports');
+        // Fire Detection API check
         
         // Filter reports that have valid coordinates AND are not cancelled or fire out
         const activeReports = data.filter(report => {
@@ -371,8 +369,7 @@ export const NotificationProvider = ({ children }) => {
           return hasCoords && !isCancelled && !isFireOut;
         });
         
-        console.log('🔥 Global: Active fire reports:', activeReports.length);
-        console.log('🔥 Global: isInitialized:', isInitializedRef.current, 'lastCount:', lastFireReportCount);
+        // Active fire reports check
         
         // Only check for new reports if we've been initialized (not on first load)
         if (isInitializedRef.current) {
@@ -382,8 +379,7 @@ export const NotificationProvider = ({ children }) => {
           );
           
           // Log current state for debugging
-          console.log('📊 Global: Processed report IDs:', Array.from(processedReportIdsRef.current));
-          console.log('📊 Global: All active report IDs:', activeReports.map(r => r.id));
+          // Tracking report IDs
           
           if (newReports.length > 0) {
             console.log('🔥 Global: NEW FIRE REPORTS DETECTED!', newReports.length, 'new reports');
@@ -432,25 +428,22 @@ export const NotificationProvider = ({ children }) => {
           } else {
             // No new reports detected
             if (activeReports.length !== lastFireReportCount) {
-              console.log('📊 Global: Report count changed but no new unprocessed reports');
-              console.log('📊 Global: All reports already processed or removed');
+              // Report count changed
               setLastFireReportCount(activeReports.length);
             } else {
               // Count is stable, no need to log
             }
           }
         } else {
-          console.log('🔥 Global: Initializing fire report tracking...');
+          // Initializing fire report tracking
           isInitializedRef.current = true;
           setLastFireReportCount(activeReports.length);
           
           // Add all existing reports to processed set (don't notify for existing reports on page load)
           activeReports.forEach(report => {
             processedReportIdsRef.current.add(report.id);
-            console.log('➕ Global: Adding to processed set (initialization):', report.id);
           });
-          console.log('🔥 Global: Initialized with', activeReports.length, 'existing reports');
-          console.log('🔥 Global: Initialized IDs:', activeReports.map(r => r.id));
+          // Initialized with existing reports
         }
       } else {
         console.error('❌ Global: Failed to fetch fire reports from API:', response.status);
@@ -463,7 +456,7 @@ export const NotificationProvider = ({ children }) => {
   // Load notifications when admin ID is available
   useEffect(() => {
     if (currentAdminId) {
-      console.log('🚀 Global: Admin ID available, starting notification system for:', currentAdminId);
+      // Starting notification system
       loadNotifications();
       
       // Reset initialization state for new admin (only when admin changes)
@@ -475,24 +468,24 @@ export const NotificationProvider = ({ children }) => {
       }
       
       // Initialize fire report count
-      console.log('🔄 Global: Running initial fire report check...');
+      // Initial fire report check
       checkForNewFireReports();
       
       // Set up fast polling to check for new fire reports (sync with map dashboard)
-      console.log('⏱️ Global: Starting 1-second polling interval for fire reports');
+      // Starting polling interval for fire reports
       const fastRefreshInterval = setInterval(() => {
         const intervalTimestamp = new Date().toLocaleTimeString();
-        console.log(`🔄 Fast refresh [${intervalTimestamp}]: Polling cycle triggered`);
+        // Fast refresh polling cycle
         checkForNewFireReports();
       }, 1000); // Check every 1 second for new fire reports (very fast detection)
       
       // Also poll notifications every 5 seconds to catch any that were created by mobile app
-      console.log('⏱️ Global: Starting 5-second polling interval for notifications');
+      // Starting polling interval for notifications
       const notificationRefreshInterval = setInterval(() => {
         loadNotifications();
       }, 5000);
       
-      console.log('✅ Global: Polling intervals started successfully');
+      // Polling intervals started
       
       return () => {
         clearInterval(fastRefreshInterval);
@@ -504,12 +497,11 @@ export const NotificationProvider = ({ children }) => {
   // Real-time subscription for new notifications
   useEffect(() => {
     if (!currentAdminId) {
-      console.log('❌ Global: No currentAdminId, skipping real-time subscription');
+      // No currentAdminId, skipping subscription
       return;
     }
 
-    console.log('🔔 Global: Setting up real-time subscription for admin:', currentAdminId);
-
+    // Setting up real-time subscription
     const channel = supabase
       .channel(`global-notifications:admin:${currentAdminId}`)
       .on('postgres_changes', {
@@ -628,16 +620,11 @@ export const NotificationProvider = ({ children }) => {
         }
       })
       .subscribe((status) => {
-        console.log('🔔 Global: Real-time subscription status:', status);
-        if (status === 'SUBSCRIBED') {
-          console.log('✅ Global: Successfully subscribed to ALL notifications');
-          console.log('✅ Global: Now listening for notifications with user_id:', currentAdminId);
-        } else if (status === 'CHANNEL_ERROR') {
+        // Real-time subscription status tracking
+        if (status === 'CHANNEL_ERROR') {
           console.error('❌ Global: Channel subscription error');
         } else if (status === 'TIMED_OUT') {
           console.error('⏰ Global: Subscription timed out');
-        } else if (status === 'CLOSED') {
-          console.log('🔒 Global: Subscription closed');
         }
       });
 

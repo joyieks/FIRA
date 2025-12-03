@@ -11,6 +11,13 @@ export default function RStatus({ onNavigateToMap }) {
   const [selectedAssignment, setSelectedAssignment] = useState(null);
   const [refreshing, setRefreshing] = useState(false);
 
+  // Helper function to generate human-readable report ID
+  const generateReadableReportId = (uuid) => {
+    if (!uuid) return 'Unknown';
+    // Take first 8 characters and convert to uppercase for better readability
+    const shortId = String(uuid).substring(0, 8).toUpperCase();
+    return `FR-${shortId}`;
+  };
 
   // Load notifications and set current assignment
   const loadNotifications = async () => {
@@ -100,10 +107,11 @@ export default function RStatus({ onNavigateToMap }) {
     if (typeof structuresAffectedFromAPI === 'number') {
       structuresAffectedFromAPI = `${structuresAffectedFromAPI} structure(s)`;
     }
+    const readableId = generateReadableReportId(fireReport.id);
     return {
       id: `report-${String(fireReport.id)}`, // Use simple ID without concatenation
       notificationId: notification?.id || null, // Store actual notification ID separately
-      title: notification?.title || `Fire Report #${fireReport.id}`,
+      title: notification?.title || `Fire Report ${readableId}`,
       location,
       description: notification?.message || '',
       priority: notification?.priority || 'high',
@@ -206,7 +214,7 @@ export default function RStatus({ onNavigateToMap }) {
                   <View className="flex-1 pr-2">
                     <View className="flex-row items-center flex-wrap mb-1">
                       <Text className={`font-bold text-base ${assignment.isAccepted ? 'text-green-800' : 'text-red-800'}`}>
-                        Fire Report #{assignment.fireReportId}
+                        Fire Report {generateReadableReportId(assignment.fireReportId)}
                       </Text>
                     </View>
                     <View className="flex-row items-center flex-wrap gap-2 mb-2">

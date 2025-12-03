@@ -113,6 +113,9 @@ export default function RAlertsWorker() {
     try {
       console.log('🔊 RAlertsWorker: playAlert called');
       
+      // Mark that sound should be playing FIRST to prevent watchdog interference
+      shouldBePlayingRef.current = true;
+      
       // Ensure we have a sound instance
       if (!sirenRef.current || !sirenReadyRef.current) {
         console.log('🔊 RAlertsWorker: No sound instance, creating new one...');
@@ -142,6 +145,7 @@ export default function RAlertsWorker() {
           console.log('🔊 RAlertsWorker: New sound instance created');
         } catch (createError) {
           console.error('🔊 RAlertsWorker: Failed to create sound:', createError);
+          shouldBePlayingRef.current = false;
           return;
         }
       }
@@ -155,60 +159,45 @@ export default function RAlertsWorker() {
           volume: status.volume
         });
         
-        // Stop if already playing to restart
+        // If already playing correctly, just ensure vibration is on
+        if (status.isPlaying && status.isLooping) {
+          console.log('🔊 RAlertsWorker: Sound already playing correctly');
+          Vibration.vibrate([0, 1000, 500, 1000], true);
+          return;
+        }
+        
+        // Stop if playing to restart
         if (status.isPlaying) {
           console.log('🔊 RAlertsWorker: Stopping current playback to restart');
           await sirenRef.current.stopAsync();
+          // Wait a bit after stopping to avoid race conditions
+          await new Promise(resolve => setTimeout(resolve, 50));
         }
         
-        // Reset to beginning
-        await sirenRef.current.setPositionAsync(0);
-        
-        // Ensure looping is enabled
+        // Configure sound before playing
         await sirenRef.current.setIsLoopingAsync(true);
-        
-        // Set maximum volume
         await sirenRef.current.setVolumeAsync(1.0);
+        await sirenRef.current.setPositionAsync(0);
         
         // Play the sound
         console.log('🔊 RAlertsWorker: Starting playback...');
         await sirenRef.current.playAsync();
         
-        // Give audio system a moment to start
-        await new Promise(resolve => setTimeout(resolve, 100));
-        
         // Verify it's playing
+        await new Promise(resolve => setTimeout(resolve, 100));
         const playingStatus = await sirenRef.current.getStatusAsync();
         console.log('🔊 RAlertsWorker: After play attempt:', {
           isPlaying: playingStatus.isPlaying,
-          isLooping: playingStatus.isLooping,
-          positionMillis: playingStatus.positionMillis,
-          durationMillis: playingStatus.durationMillis
+          isLooping: playingStatus.isLooping
         });
-        
-        if (!playingStatus.isPlaying) {
-          console.error('🔊 RAlertsWorker: Sound failed to play! Retrying...');
-          // Retry with fresh start
-          await sirenRef.current.setPositionAsync(0);
-          await sirenRef.current.playAsync();
-          await new Promise(resolve => setTimeout(resolve, 100));
-          
-          const retryStatus = await sirenRef.current.getStatusAsync();
-          console.log('🔊 RAlertsWorker: After retry:', {
-            isPlaying: retryStatus.isPlaying
-          });
-        }
         
         // Start vibration
         Vibration.vibrate([0, 1000, 500, 1000], true);
         console.log('🔊 RAlertsWorker: Vibration started');
-        
-        // Mark that sound should be playing (for watchdog)
-        shouldBePlayingRef.current = true;
-        console.log('🔊 RAlertsWorker: shouldBePlayingRef set to TRUE');
       }
     } catch (error) {
       console.error('🔊 RAlertsWorker: Error in playAlert:', error);
+      shouldBePlayingRef.current = false;
     }
   };
 

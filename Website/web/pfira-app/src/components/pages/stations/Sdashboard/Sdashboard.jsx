@@ -4,6 +4,14 @@ import { useOutletContext } from 'react-router-dom';
 import { supabase } from '../../../../config/supabase';
 
 const Sdashboard = () => {
+  // Helper function to generate human-readable report ID
+  const generateReadableReportId = (uuid) => {
+    if (!uuid) return 'Unknown';
+    // Take first 8 characters and convert to uppercase for better readability
+    const shortId = uuid.substring(0, 8).toUpperCase();
+    return `FR-${shortId}`;
+  };
+
   // Helper function to clean up "Unknown - count not provided" text
   const cleanStructuresValue = (value) => {
     if (!value) return null;
@@ -674,9 +682,10 @@ const Sdashboard = () => {
               if (row.assignee_type === 'station' && String(row.assignee_id) === String(stationId)) {
                 // Immediate alert and persist notification
                 const title = 'New Report Assigned to Your Station';
-                const message = `Report ID ${row.report_id}${row.note ? ` • Note: ${row.note}` : ''}`;
+                const readableId = generateReadableReportId(row.report_id);
+                const message = `Report ${readableId}${row.note ? ` • Note: ${row.note}` : ''}`;
                 startAlarmLoop();
-                await supabase.from('notifications').insert({ user_id: stationId, user_type: 'station', type: 'assignment', title, message, is_read: false });
+                await supabase.from('notifications').insert({ user_id: stationId, user_type: 'station', type: 'assignment', title, message, is_read: false, related_report_id: String(row.report_id) });
                 // Refresh lists
                 setTimeout(() => {
                   // trigger reload via polling function by toggling mapLoaded or directly call load (not in scope here)
@@ -693,9 +702,10 @@ const Sdashboard = () => {
               const expectedTarget = `station:${stationId}`;
               if (row.target === expectedTarget) {
                 const title = 'Report Forwarded to Your Station';
-                const message = `Report ID ${row.report_id}${row.note ? ` • Note: ${row.note}` : ''}`;
+                const readableId = generateReadableReportId(row.report_id);
+                const message = `Report ${readableId}${row.note ? ` • Note: ${row.note}` : ''}`;
                 startAlarmLoop();
-                await supabase.from('notifications').insert({ user_id: stationId, user_type: 'station', type: 'assignment', title, message, is_read: false });
+                await supabase.from('notifications').insert({ user_id: stationId, user_type: 'station', type: 'assignment', title, message, is_read: false, related_report_id: String(row.report_id) });
               }
             } catch (e) {
               console.error('❌ Station: RT forward handler error:', e);
@@ -783,6 +793,25 @@ const Sdashboard = () => {
     setMapError('Failed to load map. Please refresh the page.');
     setMapLoaded(false);
   }, []);
+
+  // Check for selectedReportId from notification click and zoom to it
+  useEffect(() => {
+    const selectedReportId = localStorage.getItem('selectedReportId');
+    if (selectedReportId && assignedReports.length > 0) {
+      console.log('🎯 Zooming to selected report:', selectedReportId);
+      const report = assignedReports.find(r => String(r.id) === String(selectedReportId));
+      if (report && report.latitude && report.longitude) {
+        const lat = typeof report.latitude === 'number' ? report.latitude : parseFloat(report.latitude);
+        const lng = typeof report.longitude === 'number' ? report.longitude : parseFloat(report.longitude);
+        if (!isNaN(lat) && !isNaN(lng)) {
+          setMapCenter({ lat, lng });
+          setSelectedAssignedReport(report);
+          // Clear the localStorage item after using it
+          localStorage.removeItem('selectedReportId');
+        }
+      }
+    }
+  }, [assignedReports]);
 
   const onUnmount = useCallback(() => {
     console.log('🗺️ Map unmounted');

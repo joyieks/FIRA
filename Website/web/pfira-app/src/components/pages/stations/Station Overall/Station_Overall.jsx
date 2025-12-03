@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { FiSearch, FiFilter, FiX, FiChevronDown, FiUserPlus, FiMapPin } from 'react-icons/fi';
+import { FiSearch, FiFilter, FiX, FiChevronDown, FiUserPlus, FiMapPin, FiAlertTriangle } from 'react-icons/fi';
 import { supabase } from '../../../../config/supabase';
 
 const Station_Overview = () => {
@@ -24,6 +24,13 @@ const Station_Overview = () => {
   const [chatAlarmByReport, setChatAlarmByReport] = useState({}); // reportId -> normalized label
 
   const API_URL = 'https://fire-detection-api-production-f55b.up.railway.app';
+
+  // Helper function to generate human-readable report ID
+  const generateReadableReportId = (uuid) => {
+    if (!uuid) return 'Unknown';
+    const shortId = String(uuid).substring(0, 8).toUpperCase();
+    return `FR-${shortId}`;
+  };
 
   // Helper function to clean up "Unknown - count not provided" text
   const cleanStructuresValue = (value) => {
@@ -786,12 +793,13 @@ const Station_Overview = () => {
             const currentReport = reports.find(r => String(r.id) === rid);
             const location = currentReport?.location || currentReport?.address || 'Unknown location';
             const reporter = currentReport?.reporter || 'Unknown reporter';
+            const readableId = generateReadableReportId(rid);
             
             const rows = uniqueAdds.map(id => ({
               responder_id: id,
               station_id: currentStationId,
               fire_report_id: rid,
-              title: '🚨 New Fire Assignment',
+              title: `🚨 New Fire Assignment - Report ${readableId}`,
               message: `You have been assigned to a fire incident.\n\n📍 Location: ${location}\n👤 Reporter: ${reporter}\n\nPlease respond as soon as possible.`,
               priority: 'urgent',
               status: 'pending',
