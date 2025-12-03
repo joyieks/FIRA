@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { View, Text, ScrollView, TouchableOpacity, Image, RefreshControl } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
+import { LinearGradient } from 'expo-linear-gradient';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { supabase } from '../../../config/supabase';
 
@@ -9,6 +10,7 @@ const CNotifications = ({ onUnreadCountChange, setActiveTab, setReportIdToFocus 
   const [notifications, setNotifications] = useState([]);
   const [loading, setLoading] = useState(true);
   const [currentUserId, setCurrentUserId] = useState(null);
+  const [submittedReport, setSubmittedReport] = useState(null);
 
   // Get current user ID from AsyncStorage (custom auth system)
   useEffect(() => {
@@ -169,10 +171,59 @@ const CNotifications = ({ onUnreadCountChange, setActiveTab, setReportIdToFocus 
     });
   };
 
+  // Load user's most recent submitted report
+  const loadSubmittedReport = async () => {
+    if (!currentUserId) return;
+
+    try {
+      const response = await fetch('https://fire-detection-api-production-f55b.up.railway.app/get_reports', {
+        headers: { 'Accept': 'application/json' }
+      });
+      
+      if (response.ok) {
+        const allReports = await response.json();
+        // Find user's most recent submitted report (not cancelled)
+        const userReports = allReports
+          .filter(report => {
+            const reporterId = report.reporterId || report.user_id;
+            return reporterId === currentUserId;
+          })
+          .filter(report => {
+            const statusText = (report.status || report.progress || '').toString().toLowerCase();
+            return !statusText.includes('cancelled') && !statusText.includes('canceled');
+          })
+          .sort((a, b) => {
+            const dateA = new Date(a.created_at || a.timestamp || 0);
+            const dateB = new Date(b.created_at || b.timestamp || 0);
+            return dateB - dateA; // Most recent first
+          });
+
+        if (userReports.length > 0) {
+          const mostRecent = userReports[0];
+          // Only show if report has confidence data and was created recently (within last 24 hours)
+          const reportDate = new Date(mostRecent.created_at || mostRecent.timestamp);
+          const hoursSinceCreation = (new Date().getTime() - reportDate.getTime()) / (1000 * 60 * 60);
+          
+          if (mostRecent.confidence && hoursSinceCreation < 24) {
+            setSubmittedReport(mostRecent);
+          } else {
+            setSubmittedReport(null);
+          }
+        } else {
+          setSubmittedReport(null);
+        }
+      }
+    } catch (error) {
+      console.error('Error loading submitted report:', error);
+      setSubmittedReport(null);
+    }
+  };
+
   // Load notifications when user ID is available
   useEffect(() => {
     if (currentUserId) {
       loadNotifications();
+      loadSubmittedReport();
     }
   }, [currentUserId]);
 
@@ -341,12 +392,103 @@ const CNotifications = ({ onUnreadCountChange, setActiveTab, setReportIdToFocus 
           refreshControl={
             <RefreshControl
               refreshing={refreshing}
-              onRefresh={onRefresh}
+              onRefresh={async () => {
+                setRefreshing(true);
+                await loadNotifications();
+                await loadSubmittedReport();
+                setRefreshing(false);
+              }}
               colors={['#ff512f']}
               tintColor="#ff512f"
             />
           }
         >
+          {/* Special "Report Submitted" Notification Card */}
+          {submittedReport && (
+            <TouchableOpacity
+              className="rounded-2xl mb-4"
+              style={{
+                shadowColor: '#ff512f',
+                shadowOffset: { width: 0, height: 4 },
+                shadowOpacity: 0.4,
+                shadowRadius: 12,
+                elevation: 8,
+                borderWidth: 2,
+                borderColor: '#ff6b35',
+                overflow: 'hidden',
+              }}
+              onPress={() => {
+                // Redirect to Map and focus on the report
+                if (setActiveTab && setReportIdToFocus && submittedReport.id) {
+                  setReportIdToFocus(submittedReport.id);
+                  setActiveTab(1); // Switch to Map tab (index 1 in CitizenScreen)
+                }
+              }}
+              activeOpacity={0.85}
+            >
+              <LinearGradient
+                colors={['#ff6b35', '#ff512f', '#dc2626']}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 0 }}
+                style={{
+                  padding: 20,
+                  borderRadius: 16,
+                }}
+              >
+                <View className="flex-row items-start">
+                  <View 
+                    className="rounded-full items-center justify-center mr-4"
+                    style={{
+                      width: 56,
+                      height: 56,
+                      backgroundColor: 'rgba(255, 255, 255, 0.25)',
+                      shadowColor: '#000',
+                      shadowOffset: { width: 0, height: 2 },
+                      shadowOpacity: 0.3,
+                      shadowRadius: 4,
+                      elevation: 5,
+                    }}
+                  >
+                    <MaterialIcons name="check-circle" size={32} color="#ffffff" />
+                  </View>
+                  <View className="flex-1">
+                    <View className="flex-row items-start mb-2 flex-wrap">
+                      <Text className="text-white text-lg font-bold mr-2 flex-1" style={{ flexShrink: 1 }}>
+                        Your report has been submitted!
+                      </Text>
+                      <View 
+                        className="px-2 py-1 rounded-full"
+                        style={{ 
+                          backgroundColor: 'rgba(255, 255, 255, 0.25)',
+                          marginTop: 2,
+                        }}
+                      >
+                        <Text className="text-white text-xs font-bold">NEW</Text>
+                      </View>
+                    </View>
+                    <Text 
+                      className="text-sm leading-5 mb-3"
+                      style={{ color: 'rgba(255, 255, 255, 0.9)' }}
+                    >
+                      AI has analyzed your report to have {submittedReport.confidence || 'N/A'}% fire confidence
+                    </Text>
+                    <View className="flex-row items-center">
+                      <MaterialIcons name="place" size={16} color="rgba(255, 255, 255, 0.9)" />
+                      <Text 
+                        className="text-xs ml-1 flex-1" 
+                        numberOfLines={1}
+                        style={{ color: 'rgba(255, 255, 255, 0.8)' }}
+                      >
+                        {submittedReport.resolved_address || submittedReport.address || 'Location selected'}
+                      </Text>
+                      <MaterialIcons name="arrow-forward" size={18} color="rgba(255, 255, 255, 0.9)" />
+                    </View>
+                  </View>
+                </View>
+              </LinearGradient>
+            </TouchableOpacity>
+          )}
+
           {notifications.map((notification) => {
             const icon = getNotificationIcon(notification.type, notification.title);
             const priorityColor = getPriorityColor(notification.priority);

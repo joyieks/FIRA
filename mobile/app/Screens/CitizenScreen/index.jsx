@@ -27,14 +27,15 @@ const TAB_NAMES = [
 const CitizenScreen = () => {
   const [activeTab, setActiveTab] = useState(2); // Default to Status
   const [unreadCount, setUnreadCount] = useState(0);
+  const [reportIdToFocus, setReportIdToFocus] = useState(null);
   const insets = useSafeAreaInsets();
   
   const renderActiveComponent = () => {
     switch (activeTab) {
       case 0: // Notifications
-        return <CNotifications onUnreadCountChange={setUnreadCount} />;
+        return <CNotifications onUnreadCountChange={setUnreadCount} setActiveTab={setActiveTab} setReportIdToFocus={setReportIdToFocus} />;
       case 1: // Map
-        return <CMap />;
+        return <CMap reportIdToFocus={reportIdToFocus} setReportIdToFocus={setReportIdToFocus} />;
       case 2: // Status
         return <CStatus />;
       case 3: // Settings

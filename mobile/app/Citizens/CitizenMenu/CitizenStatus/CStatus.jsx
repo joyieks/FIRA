@@ -2135,7 +2135,7 @@ const CStatus = () => {
                             <View className="flex-row items-start mb-3">
                               <MaterialIcons name="psychology" size={18} color="#3b82f6" />
                               <View className="flex-1 ml-3">
-                                <Text className="text-gray-500 text-xs mb-1">AI Prediction</Text>
+                                <Text className="text-gray-500 text-xs mb-1">AI Confidence</Text>
                                 <Text className="text-gray-800 font-semibold text-base">
                                   {selectedReport.prediction} {selectedReport.confidence ? `(${selectedReport.confidence})` : ''}
                                 </Text>
@@ -2217,7 +2217,7 @@ const CStatus = () => {
                       >
                         <View className="flex-row items-center justify-center">
                           <MaterialIcons name="edit" size={20} color="#6b7280" />
-                          <Text className="text-center font-bold text-gray-700 text-base ml-2">Edit</Text>
+                          <Text className="text-center font-bold text-gray-700 text-base ml-2">Edit Report</Text>
                         </View>
                       </TouchableOpacity>
                       <TouchableOpacity
@@ -2238,7 +2238,7 @@ const CStatus = () => {
                       >
                         <View className="flex-row items-center justify-center">
                           <MaterialIcons name="cancel" size={20} color="#ffffff" />
-                          <Text className="text-center font-bold text-white text-base ml-2">Cancel</Text>
+                          <Text className="text-center font-bold text-white text-base ml-2">Cancel Report</Text>
                         </View>
                       </TouchableOpacity>
                     </View>

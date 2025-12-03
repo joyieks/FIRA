@@ -1,7 +1,8 @@
 
 import React, { useState, useEffect, useRef } from 'react';
-import { View, Text, TouchableOpacity, Modal, ScrollView, Image, Alert, TextInput, KeyboardAvoidingView, Platform, TouchableWithoutFeedback, Keyboard } from 'react-native';
-import MapView, { Marker } from 'react-native-maps';
+import { View, Text, TouchableOpacity, Modal, ScrollView, Image, Alert, TextInput, KeyboardAvoidingView, Platform, TouchableWithoutFeedback, Keyboard, Animated } from 'react-native';
+import MapView, { Marker, PROVIDER_GOOGLE } from 'react-native-maps';
+import { LinearGradient } from 'expo-linear-gradient';
 import * as Location from 'expo-location';
 import * as ImagePicker from 'expo-image-picker';
 import { MaterialIcons } from '@expo/vector-icons';
@@ -24,6 +25,8 @@ export default function CMap({ reportIdToFocus, setReportIdToFocus }) {
   const [showLegend, setShowLegend] = useState(false);
   const [currentUser, setCurrentUser] = useState(null);
   const [region, setRegion] = useState(null);
+  const [isMapInteracting, setIsMapInteracting] = useState(false);
+  const cardSlideAnim = useRef(new Animated.Value(0)).current;
   
   // Nearby incidents notification
   const [nearbyIncidents, setNearbyIncidents] = useState([]);
@@ -238,6 +241,15 @@ export default function CMap({ reportIdToFocus, setReportIdToFocus }) {
     checkNearbyIncidents();
   }, [location, reports]);
 
+  // Animate cards when interacting with map (same logic as CStatus.jsx)
+  useEffect(() => {
+    const shouldHide = isMapInteracting;
+    Animated.timing(cardSlideAnim, {
+      toValue: shouldHide ? 1 : 0,
+      duration: 300,
+      useNativeDriver: true,
+    }).start();
+  }, [isMapInteracting, cardSlideAnim]);
 
   // Set initial region for the map
   const initialRegion = location
@@ -396,8 +408,9 @@ export default function CMap({ reportIdToFocus, setReportIdToFocus }) {
   }, [reportIdToFocus, reports]);
 
 
-  // Show loading state
-  if (loading) {
+  // Show loading state only if we don't have location yet AND no report to focus
+  // This prevents blocking when we're just focusing on a report
+  if (loading && !location && !reportIdToFocus) {
     return (
       <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
         <Text>Loading map...</Text>
@@ -603,7 +616,11 @@ export default function CMap({ reportIdToFocus, setReportIdToFocus }) {
         style={{ flex: 1 }}
         initialRegion={initialRegion}
         region={region || initialRegion}
-        onRegionChangeComplete={setRegion}
+        onRegionChangeStart={() => setIsMapInteracting(true)}
+        onRegionChangeComplete={(newRegion) => {
+          setIsMapInteracting(false);
+          setRegion(newRegion);
+        }}
         showsUserLocation={true}
         zoomEnabled
         scrollEnabled
@@ -615,9 +632,32 @@ export default function CMap({ reportIdToFocus, setReportIdToFocus }) {
           console.log(`Rendering marker for report ${report.id} at:`, report.latitude, report.longitude, `Address: ${report.address || report.geotag_location}`);
           const isNearby = nearbyIncidents.some(incident => incident.id === report.id);
           
+          // Calculate distance from user's location for all reports
+          let distanceText = null;
+          let distance = null;
+          if (location) {
+            const reportLat = parseFloat(report.latitude);
+            const reportLon = parseFloat(report.longitude);
+            if (!isNaN(reportLat) && !isNaN(reportLon)) {
+              distance = calculateDistance(
+                location.latitude,
+                location.longitude,
+                reportLat,
+                reportLon
+              );
+              if (distance < 1) {
+                distanceText = `${Math.round(distance * 1000)}m away`;
+              } else if (distance < 10) {
+                distanceText = `${distance.toFixed(1)}km away`;
+              } else {
+                distanceText = `${Math.round(distance)}km away`;
+              }
+            }
+          }
+          
           return (
             <Marker
-              key={`${report.id}-${report.latitude}-${report.longitude}-${report.address || report.geotag_location || 'no-address'}`} // Force re-render on location or address change
+              key={`${report.id}-${report.latitude}-${report.longitude}-${report.address || report.geotag_location || 'no-address'}`}
               coordinate={{
                 latitude: parseFloat(report.latitude),
                 longitude: parseFloat(report.longitude),
@@ -627,6 +667,58 @@ export default function CMap({ reportIdToFocus, setReportIdToFocus }) {
               description={report.cause_of_fire || 'Emergency report'}
             >
               <View className="items-center">
+                {/* Distance Indicator - Above Marker */}
+                {distanceText && (
+                  <View 
+                    className="absolute -top-12 items-center"
+                    style={{
+                      minWidth: 100,
+                    }}
+                  >
+                    <View 
+                      className="bg-white rounded-lg px-3 py-1.5 border-2 border-red-500"
+                      style={{
+                        shadowColor: '#000',
+                        shadowOffset: { width: 0, height: 2 },
+                        shadowOpacity: 0.25,
+                        shadowRadius: 4,
+                        elevation: 5,
+                      }}
+                    >
+                      <View className="flex-row items-center">
+                        <MaterialIcons name="location-on" size={14} color="#ef4444" />
+                        <Text className="text-red-600 font-bold text-xs ml-1">
+                          {distanceText}
+                        </Text>
+                      </View>
+                      {/* Location name - truncated */}
+                      {(report.resolved_address || report.address) && (
+                        <Text 
+                          className="text-gray-700 text-[10px] mt-0.5 text-center"
+                          numberOfLines={1}
+                          style={{ maxWidth: 120 }}
+                        >
+                          {report.resolved_address || report.address}
+                        </Text>
+                      )}
+                    </View>
+                    {/* Arrow pointing down to marker */}
+                    <View 
+                      style={{
+                        width: 0,
+                        height: 0,
+                        borderLeftWidth: 6,
+                        borderRightWidth: 6,
+                        borderTopWidth: 6,
+                        borderLeftColor: 'transparent',
+                        borderRightColor: 'transparent',
+                        borderTopColor: '#ffffff',
+                        marginTop: -1,
+                      }}
+                    />
+                  </View>
+                )}
+                
                 {/* Nearby indicator ring */}
                 {isNearby && (
                   <View 
@@ -737,255 +829,527 @@ export default function CMap({ reportIdToFocus, setReportIdToFocus }) {
         </View>
       )}
 
-      {/* Reports count indicator with legend toggle */}
-      <TouchableOpacity 
+      {/* Reports count indicator - Always visible */}
+      <View
         style={{
           position: 'absolute',
           top: showNearbyNotification ? 200 : 48,
           left: 16,
           zIndex: 4,
         }}
-        className="bg-white rounded-lg p-3 shadow-lg"
-        onPress={() => setShowLegend(!showLegend)}
-        activeOpacity={0.8}
       >
-        <Text className="text-sm font-semibold text-gray-800">
-          📍 {reports.length} Reports
-        </Text>
-        {nearbyIncidents.length > 0 && (
-          <Text className="text-xs text-red-600 font-semibold mt-1">
-            ⚠️ {nearbyIncidents.length} Nearby
-          </Text>
-        )}
-        <Text className="text-xs text-gray-500 mt-1">
-          Tap for legend
-        </Text>
-      </TouchableOpacity>
-
-      {/* Color Legend */}
-      {showLegend && (
-        <View 
+        <TouchableOpacity 
+          className="bg-white rounded-xl p-2.5 shadow-lg"
+          onPress={() => setShowLegend(!showLegend)}
+          activeOpacity={0.8}
           style={{
-            position: 'absolute',
-            top: showNearbyNotification ? 280 : 128,
-            left: 16,
-            zIndex: 4,
+            shadowColor: '#000',
+            shadowOffset: { width: 0, height: 2 },
+            shadowOpacity: 0.15,
+            shadowRadius: 6,
+            elevation: 5,
+            minWidth: 140,
           }}
-          className="bg-white rounded-lg p-3 shadow-lg max-w-xs"
         >
-          <View className="flex-row items-center justify-between mb-2">
-            <Text className="text-sm font-semibold text-gray-800">Fire Alarm Levels</Text>
-            <TouchableOpacity onPress={() => setShowLegend(false)}>
-              <MaterialIcons name="close" size={16} color="#6b7280" />
-            </TouchableOpacity>
+          <View className="flex-row items-center">
+            <MaterialIcons name="place" size={16} color="#ef4444" />
+            <Text className="text-xs font-bold text-gray-800 ml-1">
+              {reports.length} Report{reports.length !== 1 ? 's' : ''}
+            </Text>
           </View>
-          
-          <View className="space-y-1">
-            <View className="flex-row items-center">
-              <View className="w-3 h-3 rounded-full mr-2" style={{ backgroundColor: '#93c5fd' }} />
-              <Text className="text-xs text-gray-600">Fire Out</Text>
+          {nearbyIncidents.length > 0 && (
+            <View className="flex-row items-center mt-1">
+              <MaterialIcons name="warning" size={12} color="#ef4444" />
+              <Text className="text-[10px] text-red-600 font-semibold ml-1">
+                {nearbyIncidents.length} Nearby
+              </Text>
             </View>
-            <View className="flex-row items-center">
-              <View className="w-3 h-3 rounded-full mr-2" style={{ backgroundColor: '#fef3c7' }} />
-              <Text className="text-xs text-gray-600">First Alarm</Text>
-            </View>
-            <View className="flex-row items-center">
-              <View className="w-3 h-3 rounded-full mr-2" style={{ backgroundColor: '#fed7aa' }} />
-              <Text className="text-xs text-gray-600">Second Alarm</Text>
-            </View>
-            <View className="flex-row items-center">
-              <View className="w-3 h-3 rounded-full mr-2" style={{ backgroundColor: '#fecaca' }} />
-              <Text className="text-xs text-gray-600">Third Alarm</Text>
-            </View>
-            <View className="flex-row items-center">
-              <View className="w-3 h-3 rounded-full mr-2" style={{ backgroundColor: '#ef4444' }} />
-              <Text className="text-xs text-gray-600">Fifth+ Alarm</Text>
-            </View>
-            <View className="flex-row items-center">
-              <View className="w-3 h-3 rounded-full mr-2" style={{ backgroundColor: '#450a0a' }} />
-              <Text className="text-xs text-gray-600">General Alarm</Text>
-            </View>
+          )}
+          {/* Nearest Fire Distance Indicator */}
+          {(() => {
+            if (!location || reports.length === 0) return null;
+            
+            // Calculate distance to all reports and find the nearest
+            const distances = reports
+              .map(report => {
+                const reportLat = parseFloat(report.latitude);
+                const reportLon = parseFloat(report.longitude);
+                if (isNaN(reportLat) || isNaN(reportLon)) return null;
+                
+                const distance = calculateDistance(
+                  location.latitude,
+                  location.longitude,
+                  reportLat,
+                  reportLon
+                );
+                
+                return {
+                  distance,
+                  report
+                };
+              })
+              .filter(Boolean)
+              .sort((a, b) => a.distance - b.distance);
+            
+            if (distances.length === 0) return null;
+            
+            const nearest = distances[0];
+            const nearestDistanceText = nearest.distance < 1 
+              ? `${Math.round(nearest.distance * 1000)}m away`
+              : nearest.distance < 10
+              ? `${nearest.distance.toFixed(1)}km away`
+              : `${Math.round(nearest.distance)}km away`;
+            
+            return (
+              <View className="mt-1.5 pt-1.5 border-t border-gray-200">
+                <View className="flex-row items-center">
+                  <MaterialIcons name="local-fire-department" size={12} color="#ef4444" />
+                  <Text className="text-[10px] text-gray-700 font-semibold ml-1">
+                    Nearest:
+                  </Text>
+                </View>
+                <Text className="text-[10px] text-red-600 font-bold mt-0.5">
+                  {nearestDistanceText}
+                </Text>
+                {nearest.report.resolved_address || nearest.report.address ? (
+                  <Text 
+                    className="text-[9px] text-gray-500 mt-0.5"
+                    numberOfLines={1}
+                    style={{ maxWidth: 130 }}
+                  >
+                    {nearest.report.resolved_address || nearest.report.address}
+                  </Text>
+                ) : null}
+              </View>
+            );
+          })()}
+          <View className="flex-row items-center mt-1.5 pt-1 border-t border-gray-200">
+            <MaterialIcons name="info-outline" size={12} color="#6b7280" />
+            <Text className="text-[10px] text-gray-500 ml-1">
+              {showLegend ? 'Hide legend' : 'Show legend'}
+            </Text>
           </View>
-        </View>
-      )}
+        </TouchableOpacity>
+      </View>
 
-      {/* Report Detail Modal */}
+      {/* Color Legend Modal - Styled */}
+      <Modal
+        visible={showLegend}
+        animationType="fade"
+        transparent={true}
+        onRequestClose={() => setShowLegend(false)}
+      >
+        <TouchableOpacity
+          className="flex-1 bg-black/50 justify-center items-center"
+          activeOpacity={1}
+          onPress={() => setShowLegend(false)}
+        >
+          <TouchableOpacity
+            activeOpacity={1}
+            onPress={(e) => e.stopPropagation()}
+            className="bg-white rounded-3xl w-11/12 max-w-sm overflow-hidden"
+            style={{
+              shadowColor: '#000',
+              shadowOffset: { width: 0, height: 10 },
+              shadowOpacity: 0.3,
+              shadowRadius: 20,
+              elevation: 15,
+            }}
+          >
+            {/* Enhanced Header */}
+            <LinearGradient
+              colors={['#ff6b35', '#ff512f', '#dc2626']}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 0 }}
+              style={{
+                paddingTop: 20,
+                paddingBottom: 16,
+                paddingHorizontal: 20,
+                flexDirection: 'row',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+              }}
+            >
+              <View className="flex-row items-center">
+                <MaterialIcons name="info" size={24} color="#ffffff" />
+                <Text className="text-white text-lg font-bold ml-2" style={{
+                  textShadowColor: 'rgba(0, 0, 0, 0.2)',
+                  textShadowOffset: { width: 0, height: 1 },
+                  textShadowRadius: 3,
+                }}>Fire Alarm Levels</Text>
+              </View>
+              <TouchableOpacity
+                onPress={() => setShowLegend(false)}
+                className="bg-white/20 rounded-full p-2"
+                style={{
+                  backgroundColor: 'rgba(255, 255, 255, 0.2)',
+                }}
+              >
+                <MaterialIcons name="close" size={20} color="#ffffff" />
+              </TouchableOpacity>
+            </LinearGradient>
+
+            <View className="p-5">
+              <View className="space-y-3">
+                <View className="flex-row items-center">
+                  <View className="w-4 h-4 rounded-full mr-3" style={{ backgroundColor: '#93c5fd' }} />
+                  <Text className="text-sm text-gray-800 font-medium">Fire Out</Text>
+                </View>
+                <View className="flex-row items-center">
+                  <View className="w-4 h-4 rounded-full mr-3" style={{ backgroundColor: '#fef3c7' }} />
+                  <Text className="text-sm text-gray-800 font-medium">First Alarm</Text>
+                </View>
+                <View className="flex-row items-center">
+                  <View className="w-4 h-4 rounded-full mr-3" style={{ backgroundColor: '#fed7aa' }} />
+                  <Text className="text-sm text-gray-800 font-medium">Second Alarm</Text>
+                </View>
+                <View className="flex-row items-center">
+                  <View className="w-4 h-4 rounded-full mr-3" style={{ backgroundColor: '#fecaca' }} />
+                  <Text className="text-sm text-gray-800 font-medium">Third Alarm</Text>
+                </View>
+                <View className="flex-row items-center">
+                  <View className="w-4 h-4 rounded-full mr-3" style={{ backgroundColor: '#ef4444' }} />
+                  <Text className="text-sm text-gray-800 font-medium">Fifth+ Alarm</Text>
+                </View>
+                <View className="flex-row items-center">
+                  <View className="w-4 h-4 rounded-full mr-3" style={{ backgroundColor: '#450a0a' }} />
+                  <Text className="text-sm text-gray-800 font-medium">General Alarm</Text>
+                </View>
+              </View>
+            </View>
+          </TouchableOpacity>
+        </TouchableOpacity>
+      </Modal>
+
+
+      {/* Report Detail Modal - Styled like CStatus.jsx but compact */}
       <Modal
         visible={showReportModal}
         animationType="slide"
-        presentationStyle="pageSheet"
+        transparent={true}
         onRequestClose={() => setShowReportModal(false)}
       >
-        <View className="flex-1 bg-white">
-          <View className="flex-row items-center justify-between p-4 border-b border-gray-200">
-            <Text className="text-xl font-bold text-gray-800">Report Details</Text>
-            <View className="flex-row items-center space-x-2">
-              {/* 3-dot menu - only show for user's own reports */}
-              {selectedReport && isUserReport(selectedReport) && 
-               !['Cancelled', 'Fire Out'].includes(selectedReport.status || selectedReport.progress) && (
-                <TouchableOpacity
-                  className="p-2"
-                  onPress={() => {
-                    Alert.alert(
-                      'Report Actions',
-                      'What would you like to do with this report?',
-                      [
-                        {
-                          text: 'Edit',
-                          onPress: () => {
-                            setShowReportModal(false);
-                            handleEditReport(selectedReport);
-                          },
-                          style: 'default'
-                        },
-                        {
-                          text: 'Cancel',
-                          onPress: () => {
-                            setShowReportModal(false);
-                            handleCancelReport(selectedReport);
-                          },
-                          style: 'destructive'
-                        },
-                        {
-                          text: 'Cancel Action',
-                          style: 'cancel'
-                        }
-                      ]
-                    );
+        <View className="flex-1 bg-black/60 justify-center items-center">
+          <View className="bg-white rounded-3xl w-11/12 max-h-[85%] overflow-hidden" style={{
+            shadowColor: '#000',
+            shadowOffset: { width: 0, height: 10 },
+            shadowOpacity: 0.3,
+            shadowRadius: 20,
+            elevation: 15,
+          }}>
+            {selectedReport && (
+              <ScrollView showsVerticalScrollIndicator={false}>
+                {/* Enhanced Header */}
+                <LinearGradient
+                  colors={['#ff6b35', '#ff512f', '#dc2626']}
+                  start={{ x: 0, y: 0 }}
+                  end={{ x: 1, y: 0 }}
+                  style={{
+                    paddingTop: 16,
+                    paddingBottom: 16,
+                    paddingHorizontal: 20,
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
                   }}
                 >
-                  <MaterialIcons name="more-vert" size={24} color="#6b7280" />
-                </TouchableOpacity>
-              )}
-              <TouchableOpacity
-                onPress={() => setShowReportModal(false)}
-                className="p-2"
-              >
-                <MaterialIcons name="close" size={24} color="#6b7280" />
-              </TouchableOpacity>
-            </View>
-          </View>
+                  <View className="flex-row items-center">
+                    <MaterialIcons name="description" size={24} color="#ffffff" />
+                    <Text className="text-white text-xl font-bold ml-2" style={{
+                      textShadowColor: 'rgba(0, 0, 0, 0.2)',
+                      textShadowOffset: { width: 0, height: 1 },
+                      textShadowRadius: 3,
+                    }}>Report Details</Text>
+                  </View>
+                  <TouchableOpacity
+                    onPress={() => setShowReportModal(false)}
+                    className="bg-white/20 rounded-full p-2"
+                    style={{
+                      backgroundColor: 'rgba(255, 255, 255, 0.2)',
+                    }}
+                  >
+                    <MaterialIcons name="close" size={20} color="#ffffff" />
+                  </TouchableOpacity>
+                </LinearGradient>
 
-          {selectedReport && (
-            <>
-              <ScrollView className="flex-1 p-4">
-                {/* Report Image */}
-                {selectedReport.image_url && (
-                  <Image
-                    source={{ uri: selectedReport.image_url }}
-                    className="w-full h-48 rounded-lg mb-4"
-                    resizeMode="cover"
-                  />
-                )}
-
-                {/* Report Info */}
-                <View className="space-y-4">
-                  <View>
-                    <Text className="text-gray-600 text-sm">Reporter</Text>
-                    <Text className="text-gray-800 font-semibold text-lg">
-                      {selectedReport.reporter || 'Unknown Reporter'}
-                    </Text>
+                <View className="px-5 pt-5 pb-6">
+                  {/* Fire Image */}
+                  <View className="mb-5">
+                    <Image
+                      source={(() => {
+                        if (selectedReport.image_url) return { uri: selectedReport.image_url };
+                        if (selectedReport.photo_url) return { uri: selectedReport.photo_url };
+                        if (selectedReport.image?.uri) return selectedReport.image;
+                        if (typeof selectedReport.image === 'string') return { uri: selectedReport.image };
+                        return require('../../../../assets/images/burnhouse.jpg');
+                      })()}
+                      className="w-full h-56 rounded-2xl"
+                      resizeMode="cover"
+                      style={{
+                        shadowColor: '#000',
+                        shadowOffset: { width: 0, height: 4 },
+                        shadowOpacity: 0.2,
+                        shadowRadius: 8,
+                        elevation: 8,
+                      }}
+                    />
                   </View>
 
-                  <View>
-                    <Text className="text-gray-600 text-sm">Location</Text>
-                    <Text className="text-gray-800 font-semibold">
-                      {selectedReport.address || selectedReport.geotag_location || 'Location unavailable'}
-                    </Text>
-                    {selectedReport.address && selectedReport.geotag_location && (
-                      <Text className="text-gray-500 text-xs mt-1">
-                        Coordinates: {selectedReport.geotag_location}
-                      </Text>
-                    )}
-                    {selectedReport.distanceText && (
-                      <View className="mt-2 bg-red-50 border border-red-200 rounded-lg p-2">
-                        <View className="flex-row items-center">
-                          <MaterialIcons name="location-on" size={16} color="#ef4444" />
-                          <Text className="text-red-800 font-semibold text-sm ml-1">
-                            {selectedReport.distanceText} from your location
+                  {/* Status Badge - Prominent */}
+                  {(() => {
+                    const progress = selectedReport.status || selectedReport.progress ||
+                      (selectedReport.prediction === 'Fire' ? 'On Going' : 'Under Control') ||
+                      'Unknown';
+                    const getProgressColor = (p) => {
+                      switch (p) {
+                        case 'On Going': return '#ef4444';
+                        case 'Under Control': return '#f59e0b';
+                        case 'Fire Out': return '#10b981';
+                        default: return '#6b7280';
+                      }
+                    };
+                    const color = getProgressColor(progress);
+                    return (
+                      <View className="mb-5 items-center">
+                        <View
+                          className="px-5 py-2 rounded-full"
+                          style={{ 
+                            backgroundColor: color + '20',
+                            borderWidth: 2,
+                            borderColor: color,
+                          }}
+                        >
+                          <Text
+                            className="text-base font-bold"
+                            style={{ color }}
+                          >
+                            {progress}
                           </Text>
                         </View>
                       </View>
-                    )}
+                    );
+                  })()}
+
+                  {/* Map Preview - Compact */}
+                  {selectedReport.latitude && selectedReport.longitude && (
+                    <View className="mb-5 rounded-2xl overflow-hidden" style={{ height: 180 }}>
+                      <MapView
+                        style={{ flex: 1 }}
+                        provider={PROVIDER_GOOGLE}
+                        initialRegion={{
+                          latitude: parseFloat(selectedReport.latitude),
+                          longitude: parseFloat(selectedReport.longitude),
+                          latitudeDelta: 0.01,
+                          longitudeDelta: 0.01,
+                        }}
+                        scrollEnabled={false}
+                        zoomEnabled={false}
+                        pitchEnabled={false}
+                        rotateEnabled={false}
+                      >
+                        <Marker
+                          coordinate={{
+                            latitude: parseFloat(selectedReport.latitude),
+                            longitude: parseFloat(selectedReport.longitude),
+                          }}
+                        />
+                      </MapView>
+                    </View>
+                  )}
+
+                  {/* Basic Information Section */}
+                  <View className="mb-5">
+                    <Text className="text-gray-500 text-xs font-semibold uppercase mb-3 tracking-wider">Basic Information</Text>
+                    <View className="bg-gray-50 rounded-2xl p-4">
+                      <View className="flex-row items-start mb-3">
+                        <MaterialIcons name="person" size={18} color="#6b7280" />
+                        <View className="flex-1 ml-3">
+                          <Text className="text-gray-500 text-xs mb-1">Reporter</Text>
+                          <Text className="text-gray-800 font-semibold text-base">
+                            {selectedReport.reporter || selectedReport.user_name || 'Unknown Reporter'}
+                          </Text>
+                        </View>
+                      </View>
+                      <View className="h-px bg-gray-200 mb-3" />
+                      <View className="flex-row items-start mb-3">
+                        <MaterialIcons name="place" size={18} color="#6b7280" />
+                        <View className="flex-1 ml-3">
+                          <Text className="text-gray-500 text-xs mb-1">Location</Text>
+                          <Text className="text-gray-800 font-semibold text-base">
+                            {selectedReport.resolved_address || selectedReport.address || selectedReport.location || selectedReport.geotag_location || 'Location unavailable'}
+                          </Text>
+                          {selectedReport.distanceText && (
+                            <View className="mt-2 bg-red-50 border border-red-200 rounded-lg p-2">
+                              <View className="flex-row items-center">
+                                <MaterialIcons name="location-on" size={14} color="#ef4444" />
+                                <Text className="text-red-800 font-semibold text-xs ml-1">
+                                  {selectedReport.distanceText} from your location
+                                </Text>
+                              </View>
+                            </View>
+                          )}
+                        </View>
+                      </View>
+                      <View className="h-px bg-gray-200 mb-3" />
+                      <View className="flex-row items-start">
+                        <MaterialIcons name="schedule" size={18} color="#6b7280" />
+                        <View className="flex-1 ml-3">
+                          <Text className="text-gray-500 text-xs mb-1">Reported</Text>
+                          <Text className="text-gray-800 font-semibold text-base">
+                            {selectedReport.formatted_timestamp || selectedReport.created_at || selectedReport.timestamp || 'Unknown time'}
+                          </Text>
+                        </View>
+                      </View>
+                    </View>
                   </View>
 
-                  <View>
-                    <Text className="text-gray-600 text-sm">Status</Text>
-                    <View className="flex-row items-center mt-1">
-                      <View 
-                        className="w-3 h-3 rounded-full mr-2"
-                        style={{ backgroundColor: getMarkerColor(selectedReport) }}
-                      />
-                      <Text className="text-gray-800 font-semibold">
-                        {selectedReport.recommended_alarm_level || selectedReport.alarm_level ||
-                         (selectedReport.prediction === 'Fire' ? 'On Going' : 
-                          selectedReport.prediction === 'No Fire' ? 'Under Control' : 'Unknown')}
-                      </Text>
-                    </View>
-                  </View>
-
-                  <View>
-                    <Text className="text-gray-600 text-sm">Cause of Fire</Text>
-                    <Text className="text-gray-800 font-semibold">
-                      {selectedReport.cause_of_fire || 'No cause specified'}
-                    </Text>
-                  </View>
-
-                  {selectedReport.prediction && (
-                    <View>
-                      <Text className="text-gray-600 text-sm">AI Fire Detection</Text>
-                      <Text className="text-gray-800 font-semibold">
-                        Prediction: {selectedReport.prediction}{selectedReport.confidence ? ` (${selectedReport.confidence})` : null}
-                      </Text>
-                    </View>
-                  )}
-
-                  {selectedReport.structure && (
-                    <View>
-                      <Text className="text-gray-600 text-sm">Structure Type</Text>
-                      <Text className="text-gray-800 font-semibold">
-                        {selectedReport.structure}
-                        {selectedReport.structure_confidence ? ` (${selectedReport.structure_confidence})` : ''}
-                      </Text>
+                  {/* Fire Details Section */}
+                  {(selectedReport.cause || selectedReport.cause_of_fire || selectedReport.number_of_structures_on_fire) && (
+                    <View className="mb-5">
+                      <Text className="text-gray-500 text-xs font-semibold uppercase mb-3 tracking-wider">Fire Details</Text>
+                      <View className="rounded-2xl p-4" style={{ backgroundColor: 'rgba(255, 81, 47, 0.05)' }}>
+                        {selectedReport.cause || selectedReport.cause_of_fire ? (
+                          <>
+                            <View className="flex-row items-start mb-3">
+                              <MaterialIcons name="warning" size={18} color="#ff512f" />
+                              <View className="flex-1 ml-3">
+                                <Text className="text-gray-500 text-xs mb-1">Cause of Fire</Text>
+                                <Text className="text-gray-800 font-semibold text-base">
+                                  {selectedReport.cause || selectedReport.cause_of_fire || 'No cause specified'}
+                                </Text>
+                              </View>
+                            </View>
+                            {selectedReport.number_of_structures_on_fire && <View className="h-px mb-3" style={{ backgroundColor: 'rgba(255, 81, 47, 0.2)' }} />}
+                          </>
+                        ) : null}
+                        {selectedReport.number_of_structures_on_fire && (
+                          <View className="flex-row items-start">
+                            <MaterialIcons name="business" size={18} color="#ff512f" />
+                            <View className="flex-1 ml-3">
+                              <Text className="text-gray-500 text-xs mb-1">Structures Affected</Text>
+                              <Text className="text-gray-800 font-semibold text-base">
+                                {selectedReport.number_of_structures_on_fire} structure(s)
+                              </Text>
+                            </View>
+                          </View>
+                        )}
+                      </View>
                     </View>
                   )}
 
-                  {(selectedReport.smoke_intensity || selectedReport.smoke_confidence) && (
-                    <View>
-                      <Text className="text-gray-600 text-sm">Smoke Analysis</Text>
-                      <Text className="text-gray-800 font-semibold">
-                        {selectedReport.smoke_intensity ? `Intensity: ${selectedReport.smoke_intensity}` : null}
-                        {selectedReport.smoke_confidence ? ` ${selectedReport.smoke_confidence}` : null}
-                      </Text>
+                  {/* AI Analysis Section */}
+                  {(selectedReport.prediction || selectedReport.structure || selectedReport.smoke_intensity || selectedReport.alarm_level) && (
+                    <View className="mb-5">
+                      <Text className="text-gray-500 text-xs font-semibold uppercase mb-3 tracking-wider">AI Analysis</Text>
+                      <View className="rounded-2xl p-4" style={{ backgroundColor: 'rgba(59, 130, 246, 0.05)' }}>
+                        {selectedReport.prediction && (
+                          <>
+                            <View className="flex-row items-start mb-3">
+                              <MaterialIcons name="psychology" size={18} color="#3b82f6" />
+                              <View className="flex-1 ml-3">
+                                <Text className="text-gray-500 text-xs mb-1">AI Confidence</Text>
+                                <Text className="text-gray-800 font-semibold text-base">
+                                  {selectedReport.prediction} {selectedReport.confidence ? `(${selectedReport.confidence})` : ''}
+                                </Text>
+                              </View>
+                            </View>
+                            {(selectedReport.structure || selectedReport.smoke_intensity || selectedReport.alarm_level) && <View className="h-px mb-3" style={{ backgroundColor: 'rgba(59, 130, 246, 0.2)' }} />}
+                          </>
+                        )}
+                        {selectedReport.structure && (
+                          <>
+                            <View className="flex-row items-start mb-3">
+                              <MaterialIcons name="domain" size={18} color="#3b82f6" />
+                              <View className="flex-1 ml-3">
+                                <Text className="text-gray-500 text-xs mb-1">Structure Type</Text>
+                                <Text className="text-gray-800 font-semibold text-base">
+                                  {selectedReport.structure}
+                                  {selectedReport.structure_confidence ? ` (${selectedReport.structure_confidence})` : ''}
+                                </Text>
+                              </View>
+                            </View>
+                            {(selectedReport.smoke_intensity || selectedReport.alarm_level) && <View className="h-px mb-3" style={{ backgroundColor: 'rgba(59, 130, 246, 0.2)' }} />}
+                          </>
+                        )}
+                        {selectedReport.smoke_intensity && (
+                          <>
+                            <View className="flex-row items-start mb-3">
+                              <MaterialIcons name="cloud" size={18} color="#3b82f6" />
+                              <View className="flex-1 ml-3">
+                                <Text className="text-gray-500 text-xs mb-1">Smoke Intensity</Text>
+                                <Text className="text-gray-800 font-semibold text-base">
+                                  {selectedReport.smoke_intensity} {selectedReport.smoke_confidence ? `(${selectedReport.smoke_confidence})` : ''}
+                                </Text>
+                              </View>
+                            </View>
+                            {selectedReport.alarm_level && <View className="h-px mb-3" style={{ backgroundColor: 'rgba(59, 130, 246, 0.2)' }} />}
+                          </>
+                        )}
+                        {selectedReport.alarm_level && (
+                          <View className="flex-row items-start">
+                            <MaterialIcons name="notifications-active" size={18} color="#3b82f6" />
+                            <View className="flex-1 ml-3">
+                              <Text className="text-gray-500 text-xs mb-1">Alarm Level</Text>
+                              <Text className="text-gray-800 font-semibold text-base">
+                                {selectedReport.alarm_level}
+                              </Text>
+                            </View>
+                          </View>
+                        )}
+                      </View>
                     </View>
                   )}
 
-                  {selectedReport.number_of_structures_on_fire && (
-                    <View>
-                      <Text className="text-gray-600 text-sm">Structures Affected</Text>
-                      <Text className="text-gray-800 font-semibold">{selectedReport.number_of_structures_on_fire} structure(s)</Text>
-                    </View>
-                  )}
-
-                  {(selectedReport.alarm_level || selectedReport.recommended_alarm_level) && (
-                    <View>
-                      <Text className="text-gray-600 text-sm">Emergency Alert Level</Text>
-                      <Text className="text-red-800 font-semibold">{selectedReport.alarm_level || selectedReport.recommended_alarm_level}</Text>
-                    </View>
-                  )}
-
-                  {selectedReport.formatted_timestamp && (
-                    <View>
-                      <Text className="text-gray-600 text-sm">Reported</Text>
-                      <Text className="text-gray-800 font-semibold">{selectedReport.formatted_timestamp}</Text>
+                  {/* Action Buttons - Only for user's own reports */}
+                  {selectedReport && isUserReport(selectedReport) && 
+                   !['Cancelled', 'Fire Out'].includes(selectedReport.status || selectedReport.progress) && (
+                    <View className="flex-row gap-3 mt-2">
+                      <TouchableOpacity
+                        className="flex-1 bg-gray-100 rounded-2xl py-4 px-4 border-2 border-gray-200"
+                        onPress={() => {
+                          setShowReportModal(false);
+                          handleEditReport(selectedReport);
+                        }}
+                        activeOpacity={0.7}
+                        style={{
+                          shadowColor: '#000',
+                          shadowOffset: { width: 0, height: 2 },
+                          shadowOpacity: 0.1,
+                          shadowRadius: 4,
+                          elevation: 3,
+                        }}
+                      >
+                        <View className="flex-row items-center justify-center">
+                          <MaterialIcons name="edit" size={20} color="#6b7280" />
+                          <Text className="text-center font-bold text-gray-700 text-base ml-2">Edit Report</Text>
+                        </View>
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        className="flex-1 bg-[#ff512f] rounded-2xl py-4 px-4"
+                        onPress={() => {
+                          setShowReportModal(false);
+                          handleCancelReport(selectedReport);
+                        }}
+                        activeOpacity={0.85}
+                        style={{
+                          shadowColor: '#ff512f',
+                          shadowOffset: { width: 0, height: 4 },
+                          shadowOpacity: 0.3,
+                          shadowRadius: 8,
+                          elevation: 6,
+                        }}
+                      >
+                        <View className="flex-row items-center justify-center">
+                          <MaterialIcons name="cancel" size={20} color="#ffffff" />
+                          <Text className="text-center font-bold text-white text-base ml-2">Cancel Report</Text>
+                        </View>
+                      </TouchableOpacity>
                     </View>
                   )}
                 </View>
               </ScrollView>
-
-
-            </>
-          )}
+            )}
+          </View>
         </View>
       </Modal>
 
