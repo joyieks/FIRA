@@ -5,6 +5,7 @@
  */
 
 import { supabase } from '../config/supabase';
+import { sendPushNotification } from './pushNotificationService';
 
 /**
  * Create a notification for a nearby fire incident
@@ -61,7 +62,10 @@ export async function createNearbyIncidentNotification(userId, incident) {
       console.error('❌ Error checking existing notification:', checkError);
     }
 
-    // Only create if notification doesn't exist or is older than 1 hour
+    let insertedNotification = null;
+    let shouldCreateNotification = true;
+
+    // Check if notification already exists
     if (existing && existing.length > 0) {
       const existingNotif = existing[0];
       const { data: notifDetails } = await supabase
@@ -75,35 +79,91 @@ export async function createNearbyIncidentNotification(userId, incident) {
         const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000);
         
         if (createdAt > oneHourAgo) {
-          console.log('ℹ️ Recent notification exists for this incident, skipping');
-          return { success: false, message: 'Notification already exists' };
+          console.log('ℹ️ Recent notification exists for this incident, will still send push notification');
+          shouldCreateNotification = false;
+          insertedNotification = existingNotif; // Use existing notification
         }
       }
     }
 
-    // Create the notification
-    const { data: insertedNotification, error } = await supabase
-      .from('notifications')
-      .insert({
-        user_id: userId,
-        user_type: 'citizen',
-        title: title,
-        message: message,
-        type: 'fire_alert',
-        priority: priority,
-        is_read: false,
-        related_report_id: String(incident.id)
-      })
-      .select()
-      .single();
+    // Create the notification if it doesn't exist or is old
+    if (shouldCreateNotification) {
+      const { data: newNotification, error } = await supabase
+        .from('notifications')
+        .insert({
+          user_id: userId,
+          user_type: 'citizen',
+          title: title,
+          message: message,
+          type: 'fire_alert',
+          priority: priority,
+          is_read: false,
+          related_report_id: String(incident.id)
+        })
+        .select()
+        .single();
 
-    if (error) {
-      console.error('❌ Error creating nearby incident notification:', error);
-      return { success: false, error: error.message };
+      if (error) {
+        console.error('❌ Error creating nearby incident notification:', error);
+        // Still try to send push notification even if DB insert fails
+      } else {
+        insertedNotification = newNotification;
+        console.log('✅ Nearby incident notification created:', insertedNotification.id);
+      }
     }
-
-    console.log('✅ Nearby incident notification created:', insertedNotification.id);
-    return { success: true, notification: insertedNotification };
+    
+    // Only send push notification if this is a NEW notification (not a duplicate)
+    // If notification already exists and was created recently, skip push notification to avoid duplicates
+    if (shouldCreateNotification || !insertedNotification) {
+      // This is a new notification, send push notification
+      console.log('📱 About to send push notification for NEW nearby incident...');
+      try {
+        // Get a shorter location string for push notification
+        const shortLocation = location.length > 50 
+          ? location.substring(0, 47) + '...' 
+          : location;
+        
+        const pushTitle = `🔥 Nearby Fire - ${incident.distanceText || 'Close to you'}`;
+        const pushBody = `Fire incident reported ${incident.distanceText || 'near you'}. Location: ${shortLocation}`;
+        
+        console.log('📱 Sending push notification for nearby incident:');
+        console.log('   Title:', pushTitle);
+        console.log('   Body:', pushBody);
+        console.log('   Incident ID:', incident.id);
+        console.log('   Distance:', incident.distanceText);
+        
+        const pushResult = await sendPushNotification(
+          pushTitle,
+          pushBody,
+          {
+            type: 'nearby_incident',
+            notificationId: insertedNotification?.id || 'new',
+            reportId: String(incident.id),
+            priority: priority,
+            distance: incident.distance,
+            distanceText: incident.distanceText,
+            location: location,
+            alarmLevel: alarmLevel,
+          }
+        );
+        
+        console.log('📱 Push notification result:', pushResult);
+        if (pushResult) {
+          console.log('✅ Push notification sent successfully for nearby incident');
+        } else {
+          console.warn('⚠️ Push notification returned false - may not have been sent');
+        }
+      } catch (pushError) {
+        console.error('❌ Error sending push notification for nearby incident:', pushError);
+        console.error('❌ Push error details:', JSON.stringify(pushError, null, 2));
+        console.error('❌ Push error stack:', pushError.stack);
+        // Don't fail the notification creation if push fails
+      }
+    } else {
+      console.log('ℹ️ Push notification already sent recently for this incident, skipping to avoid duplicate');
+    }
+    
+    return { success: true, notification: insertedNotification || { id: 'push_only' } };
   } catch (error) {
     console.error('❌ Error in createNearbyIncidentNotification:', error);
     return { success: false, error: error.message };

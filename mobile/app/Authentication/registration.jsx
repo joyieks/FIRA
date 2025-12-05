@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, TextInput, TouchableOpacity, Image, ScrollView, Alert } from 'react-native';
+import { View, Text, TextInput, TouchableOpacity, Image, ScrollView, Alert, Modal } from 'react-native';
 import { useRouter } from 'expo-router';
-import { AntDesign } from '@expo/vector-icons';
+import { AntDesign, MaterialIcons } from '@expo/vector-icons';
 import { supabase } from '../config/supabase';
 
 const RegistrationComponent = () => {
@@ -21,6 +21,7 @@ const RegistrationComponent = () => {
   const [verificationCode, setVerificationCode] = useState('');
   const [userInputCode, setUserInputCode] = useState('');
   const [resendCountdown, setResendCountdown] = useState(0);
+  const [showSuccessModal, setShowSuccessModal] = useState(false);
 
   // EmailJS configuration
   const serviceId = 'service_5k3e6xe';
@@ -233,31 +234,8 @@ const RegistrationComponent = () => {
       // Hide verification screen immediately
       setShowVerification(false);
       
-      // Show success message and redirect to login instead of trying to maintain session
-      Alert.alert(
-        'Account Created Successfully!',
-        'Your account has been created and verified. Please log in to continue.',
-        [{ 
-          text: 'Login Now', 
-          onPress: () => {
-            // Clear form data
-            setFormData({
-              firstName: '',
-              lastName: '',
-              email: '',
-              password: '',
-              confirmPassword: '',
-              phoneNumber: '',
-              agreeTerms: false,
-            });
-            setUserInputCode('');
-            setVerificationCode('');
-            
-            // Navigate to login
-            router.replace('/Authentication/login');
-          }
-        }]
-      );
+      // Show success modal
+      setShowSuccessModal(true);
       
     } catch (error) {
       console.error('Account creation error:', error);
@@ -428,6 +406,85 @@ const RegistrationComponent = () => {
           <Text className="text-fire font-medium">Sign In</Text>
         </TouchableOpacity>
       </View>
+
+      {/* Success Modal */}
+      <Modal
+        visible={showSuccessModal}
+        animationType="fade"
+        transparent={true}
+        onRequestClose={() => {
+          setShowSuccessModal(false);
+          // Clear form data
+          setFormData({
+            firstName: '',
+            lastName: '',
+            email: '',
+            password: '',
+            confirmPassword: '',
+            phoneNumber: '',
+            agreeTerms: false,
+          });
+          setUserInputCode('');
+          setVerificationCode('');
+          // Navigate to login
+          router.replace('/Authentication/login');
+        }}
+      >
+        <View className="flex-1 bg-black/70 justify-center items-center px-4">
+          <View className="bg-white rounded-3xl w-full max-w-sm overflow-hidden shadow-2xl" style={{
+            shadowColor: '#000',
+            shadowOffset: { width: 0, height: 10 },
+            shadowOpacity: 0.3,
+            shadowRadius: 20,
+            elevation: 15,
+          }}>
+            {/* Success Icon and Title */}
+            <View className="p-6 items-center">
+              <View className="bg-green-100 rounded-full p-4 mb-4">
+                <MaterialIcons name="check-circle" size={64} color="#10b981" />
+              </View>
+              <Text className="text-2xl font-bold text-gray-800 mb-2">Account Created Successfully!</Text>
+              <Text className="text-gray-600 text-center text-base leading-6">
+                Your account has been created and verified. Please log in to continue.
+              </Text>
+            </View>
+            
+            {/* Login Button */}
+            <View className="px-6 pb-6">
+              <TouchableOpacity
+                className="bg-green-500 rounded-2xl py-4 items-center shadow-lg"
+                onPress={() => {
+                  setShowSuccessModal(false);
+                  // Clear form data
+                  setFormData({
+                    firstName: '',
+                    lastName: '',
+                    email: '',
+                    password: '',
+                    confirmPassword: '',
+                    phoneNumber: '',
+                    agreeTerms: false,
+                  });
+                  setUserInputCode('');
+                  setVerificationCode('');
+                  // Navigate to login
+                  router.replace('/Authentication/login');
+                }}
+                activeOpacity={0.85}
+                style={{
+                  shadowColor: '#10b981',
+                  shadowOffset: { width: 0, height: 4 },
+                  shadowOpacity: 0.3,
+                  shadowRadius: 8,
+                  elevation: 6,
+                }}
+              >
+                <Text className="text-white font-bold text-base">LOGIN NOW</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </ScrollView>
   );
 };

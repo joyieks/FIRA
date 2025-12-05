@@ -158,6 +158,57 @@ export default function AMap({ isSidebarOpen = false }) {
     setRefreshing(false);
   }, [fetchFireReports]);
 
+  // Helper function to clean alarm level text
+  const cleanAlarmLevel = (alarmLevel) => {
+    if (!alarmLevel) return alarmLevel;
+    if (typeof alarmLevel === 'string' && alarmLevel.includes('- structure count not provided')) {
+      return alarmLevel.split('- structure count not provided')[0].trim();
+    }
+    return alarmLevel;
+  };
+
+  // Determine suggested alarm based on number of structures
+  const determineSuggestedAlarm = (numStructures) => {
+    const count = Number(numStructures);
+    if (!count || isNaN(count)) return null;
+    if (count >= 80) return 'GENERAL ALARM';
+    if (count >= 36) return 'TASK FORCE DELTA';
+    if (count >= 32) return 'TASK FORCE CHARLIE';
+    if (count >= 28) return 'TASK FORCE BRAVO';
+    if (count >= 24) return 'TASK FORCE ALPHA';
+    if (count >= 20) return '5th Alarm';
+    if (count >= 16) return '4th Alarm';
+    if (count >= 12) return '3rd Alarm';
+    if (count >= 8) return '2nd Alarm';
+    if (count >= 4) return '1st Alarm';
+    return 'Under Control';
+  };
+
+  // Resolve the best available alarm level
+  const resolveAlarmLevel = (report) => {
+    const normalize = (value) => {
+      if (!value) return null;
+      const cleaned = cleanAlarmLevel(String(value).trim());
+      if (!cleaned) return null;
+      const lower = cleaned.toLowerCase();
+      if (lower === 'unknown' || lower === 'none') return null;
+      return cleaned;
+    };
+
+    const candidates = [
+      normalize(report?.final_fire_alarm_level),
+      normalize(report?.recommended_alarm_level),
+      normalize(report?.suggested_alarm_level),
+      normalize(report?.ai_suggested_alarm),
+      normalize(report?.alarm_level)
+    ].filter(Boolean);
+
+    if (candidates.length > 0) return candidates[0];
+
+    const computed = determineSuggestedAlarm(report?.number_of_structures_on_fire || report?.structures_affected);
+    return computed || '1st Alarm';
+  };
+
   // Get alarm level color
   const getAlarmLevelColor = (alarmLevel) => {
     if (!alarmLevel) return '#6b7280';
@@ -183,9 +234,8 @@ export default function AMap({ isSidebarOpen = false }) {
 
   // Get marker color
   const getMarkerColor = (report) => {
-    if (report.recommended_alarm_level || report.alarm_level) {
-      return getAlarmLevelColor(report.recommended_alarm_level || report.alarm_level);
-    }
+    const resolved = resolveAlarmLevel(report);
+    if (resolved) return getAlarmLevelColor(resolved);
     
     switch (report.prediction) {
       case 'Fire': return '#ef4444';
@@ -257,15 +307,14 @@ export default function AMap({ isSidebarOpen = false }) {
     // these shouldn't appear in the mobile admin map
     if (report.prediction === 'Fire') return 'Fire Detected';
     if (report.prediction === 'No Fire') return 'No Fire Detected';
-    if (report.recommended_alarm_level || report.alarm_level) {
-      return report.recommended_alarm_level || report.alarm_level;
-    }
+    const alarmLevel = resolveAlarmLevel(report);
+    if (alarmLevel) return alarmLevel;
     return 'Under Investigation';
   };
 
   // Format alarm text similar to web (approximate truck counts)
   const formatAlarm = (report) => {
-    const level = report.recommended_alarm_level || report.alarm_level || report.final_fire_alarm_level;
+    const level = resolveAlarmLevel(report);
     if (!level) return null;
     const l = (level || '').toLowerCase();
     if (l.includes('fifth')) return 'Fifth Alarm - 20 fire trucks';
@@ -283,6 +332,19 @@ export default function AMap({ isSidebarOpen = false }) {
     if (!pred) return null;
     if (conf) return `${pred} (${conf})`;
     return pred;
+  };
+
+  // Get cause of fire from report (check multiple possible field names)
+  const getCauseOfFire = (report) => {
+    return (
+      report?.cause_of_fire ||
+      report?.cause ||
+      report?.possible_cause ||
+      report?.fire_cause ||
+      report?.causeOfFire ||
+      report?.cause_description ||
+      null
+    );
   };
 
   const getSafeImageUri = (uri) => {
@@ -551,10 +613,10 @@ export default function AMap({ isSidebarOpen = false }) {
                   ) : null}
 
                   {/* Cause */}
-                  {selectedReport.cause_of_fire ? (
+                  {getCauseOfFire(selectedReport) ? (
                     <View style={styles.modalRow}>
                       <Text style={styles.modalLabel}>Cause:</Text>
-                      <Text style={styles.modalValue}>{selectedReport.cause_of_fire}</Text>
+                      <Text style={styles.modalValue}>{getCauseOfFire(selectedReport)}</Text>
                     </View>
                   ) : null}
 

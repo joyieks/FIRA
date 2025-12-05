@@ -30,6 +30,56 @@ const Sdashboard = () => {
     return null;
   };
 
+  // Helper function to clean alarm level text
+  const cleanAlarmLevel = (alarmLevel) => {
+    if (!alarmLevel) return alarmLevel;
+    if (typeof alarmLevel === 'string' && alarmLevel.includes('- structure count not provided')) {
+      return alarmLevel.split('- structure count not provided')[0].trim();
+    }
+    return alarmLevel;
+  };
+
+  // Derive the best fire alarm level using suggested/AI values first, then compute
+  const determineSuggestedAlarm = (numStructures) => {
+    const count = Number(numStructures);
+    if (!count || isNaN(count)) return null;
+    if (count >= 80) return 'GENERAL ALARM';
+    if (count >= 36) return 'TASK FORCE DELTA';
+    if (count >= 32) return 'TASK FORCE CHARLIE';
+    if (count >= 28) return 'TASK FORCE BRAVO';
+    if (count >= 24) return 'TASK FORCE ALPHA';
+    if (count >= 20) return '5th Alarm';
+    if (count >= 16) return '4th Alarm';
+    if (count >= 12) return '3rd Alarm';
+    if (count >= 8) return '2nd Alarm';
+    if (count >= 4) return '1st Alarm';
+    return 'Under Control';
+  };
+
+  const resolveAlarmLevel = (report) => {
+    const normalize = (value) => {
+      if (!value) return null;
+      const cleaned = cleanAlarmLevel(String(value).trim());
+      if (!cleaned) return null;
+      const lower = cleaned.toLowerCase();
+      if (lower === 'unknown' || lower === 'none') return null;
+      return cleaned;
+    };
+
+    const candidates = [
+      normalize(report?.final_fire_alarm_level),
+      normalize(report?.recommended_alarm_level),
+      normalize(report?.suggested_alarm_level),
+      normalize(report?.ai_suggested_alarm),
+      normalize(report?.alarm_level)
+    ].filter(Boolean);
+
+    if (candidates.length > 0) return candidates[0];
+
+    const computed = determineSuggestedAlarm(report?.number_of_structures_on_fire || report?.structures_affected);
+    return computed || '1st Alarm';
+  };
+
   // Safely read outlet context; on hard reload this can be undefined before layout mounts
   const outletContext = (typeof useOutletContext === 'function' ? useOutletContext() : {}) || {};
   const { stationData } = outletContext;
@@ -840,7 +890,7 @@ const Sdashboard = () => {
       // Create comprehensive notification message
       const notificationMessage = `👤 Reporter: ${fireReport.reporter_name || 'Unknown Reporter'}\n` +
         `📍 Location: ${fireReport.address || fireReport.geotag_location || 'Not specified'}\n` +
-        `🔥 Alarm Level: ${fireReport.recommended_alarm_level || fireReport.alarm_level || 'Unknown'}\n` +
+        `🔥 Fire Alarm Level: ${resolveAlarmLevel(fireReport)}\n` +
         `📊 AI Detection: ${fireReport.prediction || 'Unknown'}\n` +
         `⏰ Reported: ${fireReport.formatted_timestamp || fireReport.timestamp || 'Unknown'}\n` +
         `📝 Cause: ${fireReport.cause_of_fire || fireReport.cause || 'Not specified'}\n` +
@@ -916,7 +966,7 @@ const Sdashboard = () => {
   };
 
   const getMarkerColor = (report) => {
-    const alarm = report?.recommended_alarm_level || report?.alarm_level;
+    const alarm = resolveAlarmLevel(report);
     if (alarm) return getAlarmLevelColor(alarm);
     const pred = report?.prediction;
     if (pred === 'Fire') return '#ef4444';
@@ -1100,7 +1150,15 @@ const Sdashboard = () => {
           })}
 
           {/* Assigned fire reports for this station (inside map) */}
-          {mapLoaded && assignedReports.map((report) => {
+          {mapLoaded && assignedReports
+            .filter(report => {
+              // Hide Fire Out and Cancelled reports from the map
+              const status = (report.status || report.progress || '').toString().toLowerCase();
+              const isCancelled = status.includes('cancelled') || status.includes('canceled');
+              const isFireOut = status.includes('fire out');
+              return !isCancelled && !isFireOut;
+            })
+            .map((report) => {
             const latVal = report.latitude ?? report.lat;
             const lngVal = report.longitude ?? report.lng;
             const lat = parseFloat(latVal);
@@ -1183,9 +1241,7 @@ const Sdashboard = () => {
                   {(selectedAssignedReport.cause_of_fire || selectedAssignedReport.cause) && (
                     <p><strong>Cause:</strong> {selectedAssignedReport.cause_of_fire || selectedAssignedReport.cause}</p>
                   )}
-                  {(selectedAssignedReport.recommended_alarm_level || selectedAssignedReport.alarm_level) && (
-                    <p><strong>Alarm Level:</strong> <span className="ml-1 px-2 py-1 rounded text-xs font-semibold bg-red-100 text-red-800">{selectedAssignedReport.recommended_alarm_level || selectedAssignedReport.alarm_level}</span></p>
-                  )}
+                <p><strong>Fire Alarm Level:</strong> <span className="ml-1 px-2 py-1 rounded text-xs font-semibold bg-red-100 text-red-800">{resolveAlarmLevel(selectedAssignedReport)}</span></p>
                   {(selectedAssignedReport.prediction || selectedAssignedReport.confidence) && (
                     <p><strong>AI Fire Detection:</strong> <span className={`ml-1 px-2 py-1 rounded text-xs font-semibold ${selectedAssignedReport.prediction === 'Fire' ? 'bg-red-100 text-red-800' : 'bg-orange-100 text-orange-800'}`}>{selectedAssignedReport.prediction || 'Unknown'}{selectedAssignedReport.confidence ? ` (${selectedAssignedReport.confidence})` : ''}</span></p>
                   )}
@@ -1291,7 +1347,15 @@ const Sdashboard = () => {
       )}
 
           {/* Assigned fire reports for this station */}
-          {mapLoaded && assignedReports.map((report) => {
+          {mapLoaded && assignedReports
+            .filter(report => {
+              // Hide Fire Out and Cancelled reports from the map
+              const status = (report.status || report.progress || '').toString().toLowerCase();
+              const isCancelled = status.includes('cancelled') || status.includes('canceled');
+              const isFireOut = status.includes('fire out');
+              return !isCancelled && !isFireOut;
+            })
+            .map((report) => {
             const latVal = report.latitude ?? report.lat;
             const lngVal = report.longitude ?? report.lng;
             const lat = parseFloat(latVal);

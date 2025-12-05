@@ -1,11 +1,12 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { View, Text, ScrollView, TouchableOpacity, RefreshControl, AppState } from 'react-native';
+import { View, Text, ScrollView, TouchableOpacity, RefreshControl, AppState, Alert } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as Notifications from 'expo-notifications';
 import { supabase } from '../../../config/supabase';
 
-export default function SNotifications({ onUnreadCountChange }) {
+export default function SNotifications({ onUnreadCountChange, onOpenReport }) {
   const insets = useSafeAreaInsets();
   const [notifications, setNotifications] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -92,10 +93,44 @@ export default function SNotifications({ onUnreadCountChange }) {
         schema: 'public',
         table: 'notifications',
         filter: `user_id=eq.${currentStationId}`
-      }, (payload) => {
+      }, async (payload) => {
         console.log('📱 Station: Real-time notification received:', payload.new);
         
         if (payload.new?.user_type === 'station') {
+          // Send push notification for alarm level changes
+          if (payload.new?.type === 'alarm_level_change') {
+            try {
+              // Check permissions before sending notification
+              const { status } = await Notifications.getPermissionsAsync();
+              if (status !== 'granted') {
+                console.warn('⚠️ Notification permissions not granted, requesting...');
+                const { status: newStatus } = await Notifications.requestPermissionsAsync();
+                if (newStatus !== 'granted') {
+                  console.error('❌ Notification permission denied');
+                  return;
+                }
+              }
+
+              await Notifications.scheduleNotificationAsync({
+                content: {
+                  title: payload.new.title || '⚠️ Alarm Level Changed',
+                  body: payload.new.message || 'The fire alarm level has been updated',
+                  sound: true,
+                  priority: Notifications.AndroidNotificationPriority.HIGH,
+                  data: {
+                    type: 'alarm_level_change',
+                    reportId: payload.new.related_report_id,
+                    notificationId: payload.new.id,
+                  },
+                },
+                trigger: null, // Immediate notification
+              });
+              console.log('✅ Push notification sent for alarm level change');
+            } catch (error) {
+              console.error('❌ Error sending push notification:', error);
+            }
+          }
+          
           setNotifications(prev => {
             const exists = prev.some(n => n.id === payload.new.id);
             if (!exists) {
@@ -253,6 +288,25 @@ export default function SNotifications({ onUnreadCountChange }) {
     }
   }, [unreadCount, onUnreadCountChange]);
 
+  // Handle notification click - open report details
+  const handleNotificationClick = async (notification) => {
+    try {
+      // Mark as read
+      await markAsRead(notification.id);
+      
+      // Check if notification has related report
+      if (notification.related_report_id && onOpenReport) {
+        console.log('📍 Opening fire report details:', notification.related_report_id);
+        
+        // Call the callback to open the report in Overview tab
+        onOpenReport(notification.related_report_id);
+      }
+    } catch (error) {
+      console.error('❌ Error handling notification click:', error);
+      Alert.alert('Error', 'Unable to open fire report details');
+    }
+  };
+
   return (
     <View className="flex-1 bg-gray-50">
       {/* Filter Tabs */}
@@ -302,7 +356,7 @@ export default function SNotifications({ onUnreadCountChange }) {
                 notification.is_read ? 'opacity-75' : ''
               }`}
               style={{ borderLeftColor: priorityColor }}
-              onPress={() => markAsRead(notification.id)}
+              onPress={() => handleNotificationClick(notification)}
             >
               <View className="flex-row items-start">
                 {/* Icon */}

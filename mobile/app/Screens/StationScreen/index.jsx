@@ -18,12 +18,20 @@ export default function StationScreen() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [selectedContact, setSelectedContact] = useState(null);
   const [unreadCount, setUnreadCount] = useState(0);
+  const [reportIdToOpen, setReportIdToOpen] = useState(null);
   const insets = useSafeAreaInsets();
 
   const TABS = [
-    { component: <SStatus /> },
-    { component: <SMap /> },
-    { component: <SNotifications onUnreadCountChange={setUnreadCount} /> },
+    { component: <SStatus reportIdToOpen={null} onReportOpened={() => {}} /> },
+    { component: <SMap reportIdToOpen={reportIdToOpen} onReportOpened={() => setReportIdToOpen(null)} /> },
+    { component: <SNotifications 
+        onUnreadCountChange={setUnreadCount} 
+        onOpenReport={(reportId) => {
+          setReportIdToOpen(reportId);
+          setActiveTab(1); // Switch to Map tab
+        }} 
+      /> 
+    },
     { component: <SFiraChat onContactSelect={setSelectedContact} /> },
     { component: <SUserManagement /> },
     { component: <SProfile /> },

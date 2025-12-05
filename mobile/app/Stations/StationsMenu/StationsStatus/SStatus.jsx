@@ -1,15 +1,17 @@
 
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { View, Text, TextInput, ScrollView, TouchableOpacity, Modal, Image, Alert, RefreshControl } from 'react-native';
+import { View, Text, TextInput, ScrollView, TouchableOpacity, Modal, Image, Alert, RefreshControl, Vibration, Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { Audio } from 'expo-av';
+import * as Notifications from 'expo-notifications';
 import { supabase } from '../../../config/supabase';
 import { notifyRespondersOnStatusChange, fetchReportData } from '../../../services/responderNotificationService';
 import { notifyRespondersOnBulkAssignment } from '../../../services/responderAssignmentNotification';
 import { notifyAllUsersOnStatusChange } from '../../../services/universalNotificationService';
 
-export default function SStatus() {
+export default function SStatus({ reportIdToOpen, onReportOpened }) {
   const insets = useSafeAreaInsets();
   const [stationId, setStationId] = useState(null);
   const [stationName, setStationName] = useState('');
@@ -18,6 +20,13 @@ export default function SStatus() {
   const [showReportModal, setShowReportModal] = useState(false);
   const [aiChatSuggestions, setAiChatSuggestions] = useState([]);
   const [chatAlarmByReport, setChatAlarmByReport] = useState({});
+  
+  // Alarm system state
+  const [sound, setSound] = useState(null);
+  const [isAlarmPlaying, setIsAlarmPlaying] = useState(false);
+  const knownReportIds = useRef(new Set());
+  const alarmedReportIds = useRef(new Set()); // Track which reports have already triggered alarm
+  const isInitialLoad = useRef(true);
   
   // Statistics
   const [totalReports, setTotalReports] = useState(0);
@@ -34,6 +43,7 @@ export default function SStatus() {
   const [responderSelection, setResponderSelection] = useState({}); // reportId -> Set(ids)
   const [responderExisting, setResponderExisting] = useState({});
   const [isAssigning, setIsAssigning] = useState(false);
+  const [isEditingAssignments, setIsEditingAssignments] = useState(false);
 
   const API_URL = 'https://fire-detection-api-production-f55b.up.railway.app';
 
@@ -79,6 +89,138 @@ export default function SStatus() {
     }
   };
 
+  // Configure notification handler
+  useEffect(() => {
+    const setupNotifications = async () => {
+      Notifications.setNotificationHandler({
+        handleNotification: async () => ({
+          shouldShowAlert: true,
+          shouldPlaySound: true,
+          shouldSetBadge: true,
+        }),
+      });
+
+      // Request notification permissions
+      const { status } = await Notifications.requestPermissionsAsync();
+      if (status !== 'granted') {
+        console.warn('⚠️ Notification permissions not granted');
+      } else {
+        console.log('✅ Notification permissions granted');
+      }
+
+      // Configure Android notification channel for alarm level changes
+      if (Platform.OS === 'android') {
+        try {
+          await Notifications.setNotificationChannelAsync('alarm-level-changes', {
+            name: 'Alarm Level Changes',
+            importance: Notifications.AndroidImportance.MAX,
+            vibrationPattern: [0, 250, 250, 250],
+            lightColor: '#FF231F7C',
+            sound: 'default',
+            description: 'Notifications for fire alarm level changes',
+          });
+          console.log('✅ Android notification channel configured for alarm level changes');
+        } catch (error) {
+          console.error('❌ Error setting up Android notification channel:', error);
+        }
+      }
+    };
+
+    setupNotifications();
+
+    // Configure audio session
+    const configureAudio = async () => {
+      try {
+        await Audio.setAudioModeAsync({
+          allowsRecordingIOS: false,
+          playsInSilentModeIOS: true,
+          shouldDuckAndroid: true,
+          playThroughEarpieceAndroid: false,
+          staysActiveInBackground: true,
+        });
+      } catch (error) {
+        console.error('❌ Error configuring audio:', error);
+      }
+    };
+    configureAudio();
+  }, []);
+
+  // Play alarm sound with vibration
+  const playAlarm = async (report) => {
+    try {
+      console.log('🚨 Playing fire alarm for report:', report.id);
+      
+      // Stop any existing alarm
+      if (sound) {
+        await sound.stopAsync();
+        await sound.unloadAsync();
+      }
+
+      // Load and play the alarm sound
+      const { sound: newSound } = await Audio.Sound.createAsync(
+        require('../../../../assets/sounds/fire_alarm_sound.mp3'),
+        { isLooping: true, volume: 1.0 },
+        (status) => {
+          if (status.didJustFinish && !status.isLooping) {
+            setIsAlarmPlaying(false);
+          }
+        }
+      );
+      
+      setSound(newSound);
+      await newSound.playAsync();
+      setIsAlarmPlaying(true);
+
+      // Start vibration pattern (vibrate for 1 second, pause 0.5 seconds, repeat)
+      const vibrationPattern = [0, 1000, 500];
+      Vibration.vibrate(vibrationPattern, true);
+
+      // Send push notification
+      await Notifications.scheduleNotificationAsync({
+        content: {
+          title: '🚨 NEW FIRE REPORT',
+          body: `Location: ${report.location}\nStatus: ${report.status}\nAlarm Level: ${report.finalAlarmLevel}`,
+          sound: true,
+          priority: Notifications.AndroidNotificationPriority.HIGH,
+          data: { reportId: report.id },
+        },
+        trigger: null, // Immediate notification
+      });
+
+      console.log('✅ Alarm, vibration, and notification triggered');
+    } catch (error) {
+      console.error('❌ Error playing alarm:', error);
+    }
+  };
+
+  // Stop alarm
+  const stopAlarm = async () => {
+    try {
+      console.log('🛑 Stopping alarm');
+      
+      if (sound) {
+        await sound.stopAsync();
+        await sound.unloadAsync();
+        setSound(null);
+      }
+      
+      Vibration.cancel();
+      setIsAlarmPlaying(false);
+    } catch (error) {
+      console.error('❌ Error stopping alarm:', error);
+    }
+  };
+
+  // Cleanup sound on unmount
+  useEffect(() => {
+    return () => {
+      if (sound) {
+        sound.unloadAsync();
+      }
+      Vibration.cancel();
+    };
+  }, [sound]);
+
   // Get station ID from AsyncStorage
   useEffect(() => {
     const loadStationData = async () => {
@@ -93,6 +235,7 @@ export default function SStatus() {
         }
       } catch (err) {
         console.error('📱 Station Overview: Error loading station data:', err);
+        Alert.alert('❌ Error', `Error loading station data: ${err.message}`);
       }
     };
     loadStationData();
@@ -135,6 +278,118 @@ export default function SStatus() {
       subscription.unsubscribe();
     };
   }, []);
+
+  // Listen for alarm level change notifications and update reports
+  useEffect(() => {
+    if (!stationId) {
+      Alert.alert('⚠️ No Station ID', 'Station ID not found. Cannot set up real-time subscription.');
+      return;
+    }
+
+    console.log('📱 Station Overview: Setting up alarm level change listener for station:', stationId);
+
+    const channel = supabase
+      .channel(`station-alarm-level-changes:${stationId}`)
+      .on('postgres_changes', {
+        event: 'INSERT',
+        schema: 'public',
+        table: 'notifications',
+        filter: `user_id=eq.${stationId}`
+      }, async (payload) => {
+        console.log('🔔 Notification received:', payload.new);
+        
+        const notification = payload.new;
+        
+        // Check if this is an alarm level change notification for this station
+        if (notification.user_type === 'station' && notification.type === 'alarm_level_change') {
+          console.log('✅ Alarm level change notification detected!');
+          
+          // Show alert for debugging (remove in production)
+          Alert.alert(
+            '🔔 Alarm Level Changed',
+            `Notification received!\n\nTitle: ${notification.title || 'N/A'}\nReport ID: ${notification.related_report_id || 'N/A'}`,
+            [{ text: 'OK' }]
+          );
+          
+          const reportId = notification.related_report_id;
+          
+          if (reportId) {
+            // Check permissions before sending notification
+            try {
+              const { status } = await Notifications.getPermissionsAsync();
+              if (status !== 'granted') {
+                console.warn('⚠️ Notification permissions not granted, requesting...');
+                Alert.alert('Permission Needed', 'Requesting notification permission...');
+                const { status: newStatus } = await Notifications.requestPermissionsAsync();
+                if (newStatus !== 'granted') {
+                  Alert.alert('Permission Denied', 'Notification permission was denied. Please enable it in settings.');
+                  return;
+                }
+              }
+
+              // Send push notification
+              const notificationConfig = {
+                content: {
+                  title: notification.title || '⚠️ Alarm Level Changed',
+                  body: notification.message || 'The fire alarm level has been updated',
+                  sound: true,
+                  priority: Notifications.AndroidNotificationPriority.HIGH,
+                  data: {
+                    type: 'alarm_level_change',
+                    reportId: reportId,
+                    notificationId: notification.id,
+                  },
+                },
+                trigger: null, // Immediate notification
+              };
+
+              // Add Android channel if on Android
+              if (Platform.OS === 'android') {
+                notificationConfig.content.android = {
+                  channelId: 'alarm-level-changes',
+                  priority: 'high',
+                  sound: true,
+                  vibrate: [0, 250, 250, 250],
+                };
+              }
+
+              const notificationId = await Notifications.scheduleNotificationAsync(notificationConfig);
+              console.log('✅ Push notification sent for alarm level change');
+              
+              // Show success alert for debugging
+              Alert.alert(
+                '✅ Notification Sent',
+                `Push notification scheduled!\nNotification ID: ${notificationId}`,
+                [{ text: 'OK' }]
+              );
+            } catch (error) {
+              console.error('❌ Error sending push notification:', error);
+              Alert.alert(
+                '❌ Error',
+                `Failed to send notification:\n${error.message || 'Unknown error'}`,
+                [{ text: 'OK' }]
+              );
+            }
+
+            // Reload reports to get updated alarm level
+            console.log('🔄 Reloading reports to reflect alarm level change...');
+            await loadAssignedReports();
+          } else {
+            console.log('⚠️ Warning: Notification received but no report ID found');
+          }
+        } else {
+          console.log('📱 Notification received (not alarm level change):', notification);
+        }
+      })
+      .subscribe((status, err) => {
+        console.log('📱 Station Overview: Alarm level change subscription status:', status);
+        console.log('📱 Station Overview: Subscription error (if any):', err);
+      });
+
+    return () => {
+      channel.unsubscribe();
+    };
+  }, [stationId, loadAssignedReports]);
 
   // Compute strongest AI alarm per report
   useEffect(() => {
@@ -298,6 +553,39 @@ export default function SStatus() {
       const sorted = mapped.sort((a, b) => new Date(b.timestamp || 0) - new Date(a.timestamp || 0));
       setReports(sorted);
 
+      // Check for new reports and trigger alarm (only after initial load)
+      if (isInitialLoad.current) {
+        // On first load, just record all existing report IDs without triggering alarm
+        console.log('📋 Initial load: Recording existing reports without alarm');
+        sorted.forEach((report) => {
+          const reportId = String(report.id);
+          knownReportIds.current.add(reportId);
+          alarmedReportIds.current.add(reportId); // Also mark as already processed for alarm
+        });
+        isInitialLoad.current = false;
+      } else {
+        // After initial load, check for genuinely new reports
+        sorted.forEach((report) => {
+          const reportId = String(report.id);
+          if (!knownReportIds.current.has(reportId)) {
+            // New report detected!
+            console.log('🚨 NEW FIRE REPORT DETECTED:', reportId);
+            knownReportIds.current.add(reportId);
+            
+            // Only trigger alarm ONCE per report (check if not already alarmed)
+            if (!alarmedReportIds.current.has(reportId)) {
+              const status = (report.status || '').toLowerCase();
+              const isActive = !status.includes('fire out') && !status.includes('cancelled') && !status.includes('resolved');
+              
+              if (isActive) {
+                alarmedReportIds.current.add(reportId); // Mark as alarmed
+                playAlarm(report);
+              }
+            }
+          }
+        });
+      }
+
       // Calculate statistics
       setTotalReports(sorted.length);
       setActiveReports(sorted.filter(r => {
@@ -368,6 +656,124 @@ export default function SStatus() {
     loadResponders();
   }, [stationId]);
 
+  // Handle opening a specific report from notification
+  useEffect(() => {
+    const openSpecificReport = async () => {
+      if (!reportIdToOpen || !stationId) return;
+
+      console.log('📍 Opening specific report from notification:', reportIdToOpen);
+
+      try {
+        // IMPORTANT: Mark this report as already processed for alarm to prevent retriggering
+        const reportIdStr = String(reportIdToOpen);
+        if (!alarmedReportIds.current.has(reportIdStr)) {
+          alarmedReportIds.current.add(reportIdStr);
+          console.log('🔕 Marking report as already alarmed to prevent duplicate alarm:', reportIdStr);
+        }
+        if (!knownReportIds.current.has(reportIdStr)) {
+          knownReportIds.current.add(reportIdStr);
+        }
+
+        // Find the report in the current reports list
+        const report = reports.find(r => String(r.id) === String(reportIdToOpen));
+
+        if (report) {
+          console.log('✅ Found report in list, opening modal');
+          setSelectedReport(report);
+          setIsEditingAssignments(false);
+
+          // Preload assigned responders for this report
+          const rid = String(report.id);
+          
+          // 1) Assignments table (mobile flow)
+          const { data: assigns } = await supabase
+            .from('report_assignments')
+            .select('assignee_id')
+            .eq('report_id', rid)
+            .eq('assignee_type', 'responder');
+          const ids = new Set((assigns || []).map(a => a.assignee_id));
+
+          // 2) Notifications table (web flow) – pending/accepted responders
+          const { data: notifAssigns } = await supabase
+            .from('responder_notifications')
+            .select('responder_id,status')
+            .eq('fire_report_id', rid)
+            .in('status', ['pending', 'accepted']);
+          (notifAssigns || []).forEach(n => ids.add(n.responder_id));
+
+          setResponderExisting(prev => ({ ...prev, [rid]: new Set(ids) }));
+          setResponderSelection(prev => ({ ...prev, [rid]: new Set(ids) }));
+
+          setShowReportModal(true);
+          
+          // Notify parent that report has been opened
+          if (onReportOpened) {
+            onReportOpened();
+          }
+        } else {
+          console.log('⚠️ Report not found in current list, fetching from API');
+          
+          // Fetch from API if not in list
+          const API_URL = 'https://fire-detection-api-production-f55b.up.railway.app';
+          const response = await fetch(`${API_URL}/get_reports`);
+          const allReports = await response.json();
+          const fetchedReport = allReports.find(r => String(r.id) === String(reportIdToOpen));
+
+          if (fetchedReport) {
+            // Map the report to match the expected format
+            const aiOverride = chatAlarmByReport[String(fetchedReport.id)];
+            const suggested = aiOverride || fetchedReport.recommended_alarm_level || fetchedReport.alarm_level || '';
+            const normalizedSuggested = suggested && suggested.toLowerCase().startsWith('unknown') ? 'Unknown' : (suggested || 'Unknown');
+            
+            const mappedReport = {
+              id: fetchedReport.id,
+              time: formatTime(fetchedReport.formatted_timestamp || fetchedReport.created_at),
+              reporter: fetchedReport.reporter_name || fetchedReport.reporter || 'Unknown Reporter',
+              location: fetchedReport.address || fetchedReport.geotag_location || 'Location unavailable',
+              status: fetchedReport.status || 'On Going',
+              suggestedAlarmLevel: normalizedSuggested,
+              finalAlarmLevel: fetchedReport.final_fire_alarm_level || '1st Alarm',
+              description: fetchedReport.cause_of_fire || fetchedReport.cause || 'No cause specified',
+              picture: fetchedReport.image_url,
+              minutesAgoText: minutesAgo(fetchedReport.created_at || fetchedReport.timestamp),
+              prediction: fetchedReport.prediction,
+              confidence: fetchedReport.confidence,
+              structure: fetchedReport.structure_type || fetchedReport.structure,
+              structure_confidence: fetchedReport.structure_confidence,
+              smokeIntensity: fetchedReport.smoke_intensity,
+              smokeConfidence: fetchedReport.smoke_confidence,
+              numberOfStructures: fetchedReport.structures_affected || fetchedReport.number_of_structures_on_fire,
+              timestamp: fetchedReport.created_at || fetchedReport.timestamp,
+              latitude: fetchedReport.latitude,
+              longitude: fetchedReport.longitude,
+              smoke_analysis: fetchedReport.smoke_analysis,
+            };
+
+            setSelectedReport(mappedReport);
+            setShowReportModal(true);
+            
+            if (onReportOpened) {
+              onReportOpened();
+            }
+          } else {
+            Alert.alert('Report Not Found', 'Unable to find this fire report.');
+            if (onReportOpened) {
+              onReportOpened();
+            }
+          }
+        }
+      } catch (error) {
+        console.error('❌ Error opening specific report:', error);
+        Alert.alert('Error', 'Unable to open fire report details');
+        if (onReportOpened) {
+          onReportOpened();
+        }
+      }
+    };
+
+    openSpecificReport();
+  }, [reportIdToOpen, reports, stationId, chatAlarmByReport]);
+
   // Filter reports based on search and status
   const filteredReports = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
@@ -435,8 +841,24 @@ export default function SStatus() {
       >
         {/* Header */}
         <View className="px-4 py-4">
-          <Text className="text-2xl font-bold text-gray-800 mb-1">{stationName}</Text>
-          <Text className="text-gray-500">Fire Reports Overview</Text>
+          <View className="flex-row justify-between items-center mb-2">
+            <View className="flex-1">
+              <Text className="text-2xl font-bold text-gray-800 mb-1">{stationName}</Text>
+              <Text className="text-gray-500">Fire Reports Overview</Text>
+            </View>
+            
+            {/* Alarm Indicator and Stop Button */}
+            {isAlarmPlaying && (
+              <TouchableOpacity
+                onPress={stopAlarm}
+                className="bg-red-600 px-4 py-3 rounded-xl flex-row items-center shadow-lg"
+                style={{ elevation: 5 }}
+              >
+                <MaterialIcons name="volume-off" size={24} color="white" />
+                <Text className="text-white font-bold ml-2">Stop Alarm</Text>
+              </TouchableOpacity>
+            )}
+          </View>
         </View>
 
         {/* Statistics Cards */}
@@ -540,7 +962,7 @@ export default function SStatus() {
           ) : (
             filteredReports.map((report) => {
               const statusColor = getStatusColor(report.status);
-              const alarmColor = getAlarmLevelColor(report.suggestedAlarmLevel);
+              const alarmColor = getAlarmLevelColor(report.finalAlarmLevel || report.suggestedAlarmLevel);
               
               return (
                 <TouchableOpacity
@@ -548,15 +970,27 @@ export default function SStatus() {
                   className="bg-white rounded-xl p-4 mb-3 shadow-sm"
                   onPress={async () => {
                     setSelectedReport(report);
-                    // Preload assigned responders for this report
+                    setIsEditingAssignments(false); // Reset edit mode when opening report
+                    // Preload assigned responders for this report (include web-side notifications)
                     try {
                       const rid = String(report.id);
+
+                      // 1) Assignments table (mobile flow)
                       const { data: assigns } = await supabase
                         .from('report_assignments')
                         .select('assignee_id')
                         .eq('report_id', rid)
                         .eq('assignee_type', 'responder');
                       const ids = new Set((assigns || []).map(a => a.assignee_id));
+
+                      // 2) Notifications table (web flow) – pending/accepted responders
+                      const { data: notifAssigns } = await supabase
+                        .from('responder_notifications')
+                        .select('responder_id,status')
+                        .eq('fire_report_id', rid)
+                        .in('status', ['pending', 'accepted']);
+                      (notifAssigns || []).forEach(n => ids.add(n.responder_id));
+
                       setResponderExisting(prev => ({ ...prev, [rid]: new Set(ids) }));
                       setResponderSelection(prev => ({ ...prev, [rid]: new Set(ids) }));
                     } catch (_) {}
@@ -592,10 +1026,10 @@ export default function SStatus() {
 
                   <View className="flex-row items-center justify-between mb-2">
                     <View className="flex-row items-center">
-                      <MaterialIcons name="warning" size={16} color="#6b7280" />
+                      <MaterialIcons name="local-fire-department" size={16} color="#dc2626" />
                       <View style={{ backgroundColor: alarmColor.bg, borderColor: alarmColor.border }} className="px-3 py-1 rounded-lg ml-2 border">
                         <Text style={{ color: alarmColor.text }} className="text-xs font-bold">
-                          {report.suggestedAlarmLevel}
+                          {report.finalAlarmLevel || report.suggestedAlarmLevel || '1st Alarm'}
                         </Text>
                       </View>
                     </View>
@@ -627,13 +1061,19 @@ export default function SStatus() {
         visible={showReportModal}
         animationType="fade"
         transparent={true}
-        onRequestClose={() => setShowReportModal(false)}
+        onRequestClose={() => {
+          setShowReportModal(false);
+          setIsEditingAssignments(false);
+        }}
       >
         <View className="flex-1 bg-black bg-opacity-50 justify-center items-center px-4">
           <View className="bg-white rounded-2xl w-full" style={{ maxWidth: 600, maxHeight: '90%' }}>
             <View className="flex-row justify-between items-center p-4 border-b border-gray-200">
               <Text className="text-xl font-bold text-gray-900">Report Details</Text>
-              <TouchableOpacity onPress={() => setShowReportModal(false)}>
+              <TouchableOpacity onPress={() => {
+                setShowReportModal(false);
+                setIsEditingAssignments(false);
+              }}>
                 <MaterialIcons name="close" size={28} color="#6b7280" />
               </TouchableOpacity>
             </View>
@@ -842,109 +1282,187 @@ export default function SStatus() {
                     </View>
                   )}
 
-                  {/* Assign Responders Section */}
+                  {/* Assignment Management Section */}
                   <View className="mb-4">
-                    <Text className="text-gray-600 text-sm mb-2 font-bold">Assign Responders</Text>
-                    <View className="bg-gray-50 border border-gray-200 rounded-lg overflow-hidden">
-                      <ScrollView style={{ maxHeight: 200 }}>
-                        {(responders || []).length === 0 ? (
-                          <View className="p-4">
-                            <Text className="text-gray-500">No responders available for this station.</Text>
-                          </View>
-                        ) : responders.map((r) => {
-                          const rid = String(selectedReport.id);
-                          const setSel = responderSelection[rid] || new Set();
-                          const checked = setSel.has(r.id);
-                          const name = `${r.first_name || ''} ${r.last_name || ''}`.trim() || 'Responder';
-                          return (
-                            <TouchableOpacity 
-                              key={r.id} 
-                              onPress={() => {
-                                setResponderSelection(prev => {
-                                  const next = new Set(prev[rid] || []);
-                                  if (checked) next.delete(r.id); 
-                                  else next.add(r.id);
-                                  return { ...prev, [rid]: next };
-                                });
-                              }} 
-                              className="px-4 py-3 flex-row justify-between items-center border-b border-gray-100"
-                            >
-                              <Text className="text-gray-900">{name}</Text>
-                              <View className={`px-3 py-1 rounded-lg ${checked ? 'bg-green-100' : 'bg-gray-100'}`}>
-                                <Text className={`text-xs font-semibold ${checked ? 'text-green-800' : 'text-gray-600'}`}>
-                                  {checked ? '✓ Assigned' : 'Assign'}
-                                </Text>
-                              </View>
-                            </TouchableOpacity>
-                          );
-                        })}
-                      </ScrollView>
-                      
-                      <View className="p-3 bg-white border-t border-gray-200 items-end">
+                    <View className="flex-row justify-between items-center mb-2">
+                      <Text className="text-gray-600 text-sm font-bold">Responder Assignments</Text>
+                      {!isEditingAssignments && (
                         <TouchableOpacity 
-                          disabled={isAssigning} 
-                          onPress={async () => {
-                            try {
-                              setIsAssigning(true);
-                              const rid = String(selectedReport.id);
-                              const selected = responderSelection[rid] || new Set();
-                              const existing = responderExisting[rid] || new Set();
-                              const toAdd = [...selected].filter(id => !existing.has(id));
-                              const toRemove = [...existing].filter(id => !selected.has(id));
-                              
-                              if (toAdd.length > 0) {
-                                const rows = toAdd.map(id => ({ 
-                                  report_id: rid, 
-                                  assignee_type: 'responder', 
-                                  assignee_id: id 
-                                }));
-                                const { error: addErr } = await supabase
-                                  .from('report_assignments')
-                                  .insert(rows);
-                                if (addErr) throw addErr;
-                                
-                                // Notify newly assigned responders
-                                try {
-                                  const reportData = await fetchReportData(rid);
-                                  const reportForNotification = reportData || selectedReport;
-                                  await notifyRespondersOnBulkAssignment(toAdd, rid, reportForNotification);
-                                  console.log('✅ Assignment notifications sent to responders');
-                                } catch (notifError) {
-                                  console.error('⚠️ Error sending assignment notifications:', notifError);
-                                  // Don't fail the assignment if notification fails
-                                }
-                              }
-                              
-                              if (toRemove.length > 0) {
-                                const { error: delErr } = await supabase
-                                  .from('report_assignments')
-                                  .delete()
-                                  .eq('report_id', rid)
-                                  .eq('assignee_type', 'responder')
-                                  .in('assignee_id', toRemove);
-                                if (delErr) throw delErr;
-                              }
-                              
-                              setResponderExisting(prev => ({ ...prev, [rid]: new Set(selected) }));
-                              
-                              // Update the assigned responders display
-                              await loadAssignedReports();
-                              
-                              Alert.alert('Success', 'Responder assignments updated successfully');
-                            } catch (e) {
-                              Alert.alert('Error', e.message || 'Failed to update assignments');
-                            } finally { 
-                              setIsAssigning(false); 
-                            }
-                          }} 
-                          className={`px-4 py-2 rounded-lg ${isAssigning ? 'bg-gray-400' : 'bg-blue-600'}`}
+                          onPress={() => setIsEditingAssignments(true)} 
+                          className="px-4 py-2 bg-blue-600 rounded-lg"
                         >
-                          <Text className="text-white font-bold">
-                            {isAssigning ? 'Saving...' : 'Save Assignments'}
-                          </Text>
+                          <Text className="text-white font-semibold text-sm">Edit Assignments</Text>
                         </TouchableOpacity>
-                      </View>
+                      )}
                     </View>
+
+                    {isEditingAssignments ? (
+                      <View className="bg-gray-50 border border-gray-200 rounded-lg overflow-hidden">
+                        <ScrollView style={{ maxHeight: 200 }}>
+                          {(responders || []).length === 0 ? (
+                            <View className="p-4">
+                              <Text className="text-gray-500">No responders available for this station.</Text>
+                            </View>
+                          ) : responders.map((r) => {
+                            const rid = String(selectedReport.id);
+                            const setSel = responderSelection[rid] || new Set();
+                            const checked = setSel.has(r.id);
+                            const name = `${r.first_name || ''} ${r.last_name || ''}`.trim() || 'Responder';
+                            return (
+                              <TouchableOpacity 
+                                key={r.id} 
+                                onPress={() => {
+                                  setResponderSelection(prev => {
+                                    const next = new Set(prev[rid] || []);
+                                    if (checked) next.delete(r.id); 
+                                    else next.add(r.id);
+                                    return { ...prev, [rid]: next };
+                                  });
+                                }} 
+                                className="px-4 py-3 flex-row justify-between items-center border-b border-gray-100"
+                              >
+                                <Text className="text-gray-900">{name}</Text>
+                                <View className={`px-3 py-1 rounded-lg ${checked ? 'bg-green-100' : 'bg-gray-100'}`}>
+                                  <Text className={`text-xs font-semibold ${checked ? 'text-green-800' : 'text-gray-600'}`}>
+                                    {checked ? '✓ Assigned' : 'Assign'}
+                                  </Text>
+                                </View>
+                              </TouchableOpacity>
+                            );
+                          })}
+                        </ScrollView>
+                        
+                        <View className="p-3 bg-white border-t border-gray-200 flex-row justify-end gap-2">
+                          <TouchableOpacity 
+                            onPress={() => {
+                              // Reset selection to existing assignments
+                              const rid = String(selectedReport.id);
+                              const existing = responderExisting[rid] || new Set();
+                              setResponderSelection(prev => ({ ...prev, [rid]: new Set(existing) }));
+                              setIsEditingAssignments(false);
+                            }} 
+                            className="px-4 py-2 rounded-lg bg-gray-200"
+                          >
+                            <Text className="text-gray-700 font-bold">Cancel</Text>
+                          </TouchableOpacity>
+                          <TouchableOpacity 
+                            disabled={isAssigning} 
+                            onPress={async () => {
+                              try {
+                                setIsAssigning(true);
+                                const rid = String(selectedReport.id);
+                                const selected = responderSelection[rid] || new Set();
+                                const existing = responderExisting[rid] || new Set();
+                                const toAdd = [...selected].filter(id => !existing.has(id));
+                                const toRemove = [...existing].filter(id => !selected.has(id));
+                                
+                                if (toAdd.length > 0) {
+                                  // Check for existing entries in report_assignments to avoid duplicates
+                                  const { data: existingAssignments } = await supabase
+                                    .from('report_assignments')
+                                    .select('assignee_id')
+                                    .eq('report_id', rid)
+                                    .eq('assignee_type', 'responder')
+                                    .in('assignee_id', toAdd);
+                                  
+                                  const alreadyInAssignments = new Set((existingAssignments || []).map(a => a.assignee_id));
+                                  const newAssignments = toAdd.filter(id => !alreadyInAssignments.has(id));
+                                  
+                                  if (newAssignments.length > 0) {
+                                    const rows = newAssignments.map(id => ({ 
+                                      report_id: rid, 
+                                      assignee_type: 'responder', 
+                                      assignee_id: id
+                                    }));
+                                    const { error: addErr } = await supabase
+                                      .from('report_assignments')
+                                      .insert(rows);
+                                    if (addErr) {
+                                      console.error('Failed to create report assignments:', addErr);
+                                      throw addErr;
+                                    }
+                                    console.log(`✅ Created ${newAssignments.length} report_assignments entries`);
+                                  }
+                                  
+                                  // Notify newly assigned responders (creates responder_notifications entries)
+                                  try {
+                                    const reportData = await fetchReportData(rid);
+                                    const reportForNotification = reportData || selectedReport;
+                                    await notifyRespondersOnBulkAssignment(toAdd, rid, reportForNotification);
+                                    console.log('✅ Assignment notifications sent to responders');
+                                  } catch (notifError) {
+                                    console.error('⚠️ Error sending assignment notifications:', notifError);
+                                    // Don't fail the assignment if notification fails
+                                  }
+                                }
+                                
+                                if (toRemove.length > 0) {
+                                  // Remove from report_assignments
+                                  const { error: delErr } = await supabase
+                                    .from('report_assignments')
+                                    .delete()
+                                    .eq('report_id', rid)
+                                    .eq('assignee_type', 'responder')
+                                    .in('assignee_id', toRemove);
+                                  if (delErr) {
+                                    console.error('Failed to delete report assignments:', delErr);
+                                  }
+                                  
+                                  // Also remove from responder_notifications
+                                  const { error: notifDelErr } = await supabase
+                                    .from('responder_notifications')
+                                    .delete()
+                                    .eq('fire_report_id', rid)
+                                    .in('responder_id', toRemove)
+                                    .in('status', ['pending', 'accepted']);
+                                  if (notifDelErr) {
+                                    console.error('Failed to delete responder notifications:', notifDelErr);
+                                  }
+                                }
+                                
+                                setResponderExisting(prev => ({ ...prev, [rid]: new Set(selected) }));
+                                
+                                // Update the assigned responders display
+                                await loadAssignedReports();
+                                
+                                setIsEditingAssignments(false);
+                                Alert.alert('Success', 'Responder assignments updated successfully');
+                              } catch (e) {
+                                Alert.alert('Error', e.message || 'Failed to update assignments');
+                              } finally { 
+                                setIsAssigning(false); 
+                              }
+                            }} 
+                            className={`px-4 py-2 rounded-lg ${isAssigning ? 'bg-gray-400' : 'bg-green-600'}`}
+                          >
+                            <Text className="text-white font-bold">
+                              {isAssigning ? 'Saving...' : 'Save Assignments'}
+                            </Text>
+                          </TouchableOpacity>
+                        </View>
+                      </View>
+                    ) : (
+                      <View className="bg-gray-50 border border-gray-200 rounded-lg p-4">
+                        {(() => {
+                          const rid = String(selectedReport.id);
+                          const assigned = assignedRespondersByReport[rid] || [];
+                          if (assigned.length === 0) {
+                            return <Text className="text-gray-500 text-sm">No responders assigned yet.</Text>;
+                          }
+                          return (
+                            <View>
+                              <Text className="text-gray-600 text-sm mb-2">Assigned Responders:</Text>
+                              {assigned.map((name, idx) => (
+                                <View key={idx} className="flex-row items-center mb-1">
+                                  <View className="w-2 h-2 bg-green-600 rounded-full mr-2" />
+                                  <Text className="text-gray-900">{name}</Text>
+                                </View>
+                              ))}
+                            </View>
+                          );
+                        })()}
+                      </View>
+                    )}
                   </View>
                 </>
               )}

@@ -25,6 +25,10 @@ const Overview = () => {
   const [cancelReason, setCancelReason] = useState('');
   const [reportToCancel, setReportToCancel] = useState(null);
   const [isCancelling, setIsCancelling] = useState(false);
+  
+  // Alarm level change confirmation states
+  const [showAlarmConfirm, setShowAlarmConfirm] = useState(false);
+  const [alarmChangeData, setAlarmChangeData] = useState(null);
 
   // Filter states
   const [statusFilter, setStatusFilter] = useState('all');
@@ -40,8 +44,16 @@ const Overview = () => {
       setIsLoading(true);
       console.log('Fetching reports from Railway API...');
       
+      // Add timeout to prevent infinite loading
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
+      
       // Fetch from Railway API
-      const response = await fetch(`${API_URL}/get_reports`);
+      const response = await fetch(`${API_URL}/get_reports`, {
+        signal: controller.signal
+      });
+      
+      clearTimeout(timeoutId);
       
       if (!response.ok) {
         console.error('Railway API error:', response.status, response.statusText);
@@ -97,7 +109,11 @@ const Overview = () => {
       setReports(transformedReports);
       setLastRefresh(new Date());
     } catch (error) {
-      console.error('Error loading reports:', error);
+      if (error.name === 'AbortError') {
+        console.error('Request timeout: Railway API took too long to respond');
+      } else {
+        console.error('Error loading reports:', error);
+      }
       setReports([]);
     } finally {
       setIsLoading(false);
@@ -165,6 +181,15 @@ const Overview = () => {
       return num;
     }
     return null;
+  };
+
+  // Helper function to clean alarm level text
+  const cleanAlarmLevel = (alarmLevel) => {
+    if (!alarmLevel) return alarmLevel;
+    if (typeof alarmLevel === 'string' && alarmLevel.includes('- structure count not provided')) {
+      return alarmLevel.split('- structure count not provided')[0].trim();
+    }
+    return alarmLevel;
   };
 
   // Determine suggested alarm based on number of structures
@@ -690,6 +715,154 @@ const Overview = () => {
           report.id === reportId ? { ...report, finalAlarmLevel: newAlarmLevel } : report
         ));
         console.log(`Final alarm level updated for report ${reportId}: ${newAlarmLevel}`);
+        
+        // Notify assigned responders about the alarm level change
+        try {
+          console.log('🔔 Notifying responders about alarm level change...');
+          
+          // Get all responders assigned to this report
+          const { data: assignedNotifications, error } = await supabase
+            .from('responder_notifications')
+            .select('id, responder_id, fire_report_id, status')
+            .eq('fire_report_id', String(reportId))
+            .in('status', ['pending', 'accepted', 'completed']);
+          
+          if (error) {
+            console.error('❌ Error fetching assigned responders:', error);
+          } else if (assignedNotifications && assignedNotifications.length > 0) {
+            console.log(`📋 Found ${assignedNotifications.length} responder(s) to notify`);
+            
+            // Update each responder's notification with alarm level change info
+            const updatePromises = assignedNotifications.map(notification => {
+              return supabase
+                .from('responder_notifications')
+                .update({
+                  title: `⚠️ Alarm Level Changed: ${newAlarmLevel}`,
+                  message: `The fire alarm level has been updated to ${newAlarmLevel}.\n\nPlease adjust your response accordingly. This may require additional resources or personnel.`,
+                  priority: 'urgent', // High priority for alarm level changes
+                  is_read: false // Mark as unread so responder sees the update
+                })
+                .eq('id', notification.id);
+            });
+            
+            const results = await Promise.all(updatePromises);
+            const updateError = results.find(r => r.error)?.error;
+            
+            if (updateError) {
+              console.error('❌ Error updating responder notifications:', updateError);
+            } else {
+              console.log(`✅ Notified ${assignedNotifications.length} responder(s) about alarm level change to ${newAlarmLevel}`);
+            }
+          } else {
+            console.log('ℹ️ No responders assigned to this report');
+          }
+        } catch (notifError) {
+          console.error('❌ Error notifying responders:', notifError);
+        }
+        
+        // Notify assigned stations about the alarm level change
+        try {
+          console.log('🔔 Notifying stations about alarm level change...');
+          console.log('🔍 Looking for stations assigned to report ID:', reportId);
+          
+          // Get station assigned to this report
+          const { data: stationAssignments, error: stationError } = await supabase
+            .from('report_assignments')
+            .select('assignee_id')
+            .eq('report_id', reportId)
+            .eq('assignee_type', 'station');
+          
+          console.log('📊 Query result:', { stationAssignments, stationError });
+          
+          if (stationError) {
+            console.error('❌ Error fetching assigned stations:', stationError);
+          } else if (stationAssignments && stationAssignments.length > 0) {
+            console.log(`📋 Found ${stationAssignments.length} station(s) to notify`);
+            console.log('📋 Station IDs:', stationAssignments.map(s => s.assignee_id));
+            
+            // Get report details for the notification
+            const report = reports.find(r => r.id === reportId);
+            const locationInfo = report?.location || 'Location unavailable';
+            const reporterName = report?.reporter || 'Unknown Reporter';
+            
+            console.log('📝 Creating notifications with data:', {
+              newAlarmLevel,
+              locationInfo,
+              reporterName
+            });
+            
+            // Create notification for each assigned station
+            const notificationPromises = stationAssignments.map(assignment => {
+              const notificationData = {
+                user_id: assignment.assignee_id,
+                user_type: 'station',
+                type: 'fire_alert',
+                related_report_id: String(reportId),
+                title: `🚨 Fire Incident - ${newAlarmLevel}`,
+                message: `ALARM LEVEL CHANGED\n\nThe fire incident at ${locationInfo} has been escalated to ${newAlarmLevel}.\n\nReporter: ${reporterName}\n\nPlease adjust your response accordingly. Additional resources may be required.`,
+                priority: 'urgent',
+                is_read: false
+              };
+              console.log('💾 Inserting notification:', notificationData);
+              return supabase
+                .from('notifications')
+                .insert(notificationData);
+            });
+            
+            const notifResults = await Promise.all(notificationPromises);
+            console.log('📤 Insert results:', notifResults);
+            
+            const notifError = notifResults.find(r => r.error)?.error;
+            
+            if (notifError) {
+              console.error('❌ Error creating station notifications:', notifError);
+            } else {
+              console.log(`✅ Notified ${stationAssignments.length} station(s) about alarm level change to ${newAlarmLevel}`);
+            }
+          } else {
+            console.log('ℹ️ No stations assigned to this report');
+            console.log('💡 Make sure the report is assigned to a station first');
+          }
+        } catch (stationNotifError) {
+          console.error('❌ Error notifying stations:', stationNotifError);
+        }
+        
+        // Create admin notification for alarm level change
+        try {
+          console.log('🔔 Creating admin notification for alarm level change...');
+          
+          // Get current admin user
+          const { data: { user } } = await supabase.auth.getUser();
+          
+          if (user?.id) {
+            const report = reports.find(r => r.id === reportId);
+            const locationInfo = report?.location || 'Location unavailable';
+            
+            // First, verify what user_type values are allowed
+            const { error: adminNotifError } = await supabase
+              .from('notifications')
+              .insert({
+                user_id: user.id,
+                user_type: 'admin',
+                type: 'fire_alert',
+                related_report_id: String(reportId),
+                title: `🚨 Alarm Level Updated - ${newAlarmLevel}`,
+                message: `You have updated the alarm level to ${newAlarmLevel} for the fire incident at ${locationInfo}.`,
+                priority: 'urgent',
+                is_read: false
+              });
+            
+            if (adminNotifError) {
+              console.error('❌ Error creating admin notification:', adminNotifError);
+              console.error('❌ Full error details:', JSON.stringify(adminNotifError, null, 2));
+            } else {
+              console.log('✅ Admin notification created for alarm level change');
+            }
+          }
+        } catch (adminNotifError) {
+          console.error('❌ Error creating admin notification:', adminNotifError);
+        }
+        
       } else {
         console.error('Failed to update final alarm level');
         alert('Failed to update final alarm level. Please try again.');
@@ -705,20 +878,33 @@ const Overview = () => {
     const currentReport = reports.find(r => r.id === reportId);
     const currentAlarmLevel = currentReport?.finalAlarmLevel || 'Unknown';
     
-    // Show confirmation dialog
-    const confirmed = window.confirm(
-      `Are you sure you want to change the final alarm level from "${currentAlarmLevel}" to "${newAlarmLevel}"?\n\n` +
-      `Report ID: ${reportId}\n` +
-      `Location: ${currentReport?.location || 'Unknown'}\n\n` +
-      `This action will update the emergency response level and may trigger additional resource deployment.`
-    );
-    
-    if (confirmed) {
-      setEditingFinalAlarm(prev => ({ ...prev, [reportId]: false }));
-      updateFinalAlarmLevel(reportId, newAlarmLevel);
-    } else {
-      // If user cancels, just close the editing mode without saving
-      setEditingFinalAlarm(prev => ({ ...prev, [reportId]: false }));
+    // Show custom confirmation modal
+    setAlarmChangeData({
+      reportId,
+      newAlarmLevel,
+      currentAlarmLevel,
+      location: currentReport?.location || 'Location unavailable',
+      reportIdShort: reportId.toString().substring(0, 8)
+    });
+    setShowAlarmConfirm(true);
+  };
+  
+  // Confirm alarm level change
+  const confirmAlarmChange = () => {
+    if (alarmChangeData) {
+      setEditingFinalAlarm(prev => ({ ...prev, [alarmChangeData.reportId]: false }));
+      updateFinalAlarmLevel(alarmChangeData.reportId, alarmChangeData.newAlarmLevel);
+      setShowAlarmConfirm(false);
+      setAlarmChangeData(null);
+    }
+  };
+  
+  // Cancel alarm level change
+  const cancelAlarmChange = () => {
+    if (alarmChangeData) {
+      setEditingFinalAlarm(prev => ({ ...prev, [alarmChangeData.reportId]: false }));
+      setShowAlarmConfirm(false);
+      setAlarmChangeData(null);
     }
   };
 
@@ -1068,7 +1254,7 @@ const Overview = () => {
                         </td>
                         <td className="px-4 py-4 whitespace-nowrap">
                           <span className={`px-3 py-1 rounded-md text-xs font-medium border ${getAlarmLevelColor(report.suggestedAlarmLevel)}`}>
-                            {report.suggestedAlarmLevel}
+                            {cleanAlarmLevel(report.suggestedAlarmLevel)}
                           </span>
                         </td>
                         <td className="px-4 py-4 whitespace-nowrap">
@@ -1198,9 +1384,7 @@ const Overview = () => {
                     <div>
                       <label className="block text-lg font-medium text-gray-700 mb-3">Suggested Alarm Level:</label>
                       <span className={`px-3 py-3 rounded-md text-base font-medium border ${getAlarmLevelColor(selectedReport.suggestedAlarmLevel)}`}>
-                        {selectedReport.suggestedAlarmLevel?.includes('Unknown - structure count not provided') 
-                          ? 'Unknown' 
-                          : selectedReport.suggestedAlarmLevel}
+                        {cleanAlarmLevel(selectedReport.suggestedAlarmLevel)}
                       </span>
                     </div>
                     <div>
@@ -1258,6 +1442,102 @@ const Overview = () => {
                 </div>
               </div>
             </div>
+          </div>
+        )}
+
+        {/* Alarm Level Change Confirmation Modal */}
+        {showAlarmConfirm && (
+          <div 
+            className="fixed inset-0 backdrop-blur-md bg-black/50 flex items-center justify-center p-4 z-50 transition-opacity duration-300"
+            style={{ animation: 'fadeIn 0.2s ease-out' }}
+          >
+            <div 
+              className="bg-white rounded-2xl shadow-2xl max-w-md w-full transform transition-all"
+              style={{ animation: 'scaleIn 0.3s ease-out' }}
+            >
+              {/* Header */}
+              <div className="bg-red-600 p-6 rounded-t-2xl">
+                <div className="flex items-center space-x-3">
+                  <div className="bg-white/20 backdrop-blur-sm rounded-full p-2">
+                    <FiAlertTriangle className="text-white" size={24} />
+                  </div>
+                  <h3 className="text-xl font-bold text-white">Confirm Alarm Level Change</h3>
+                </div>
+              </div>
+
+              {/* Content */}
+              <div className="p-6 space-y-4">
+                {/* Warning Message */}
+                <div className="bg-red-50 border border-red-200 rounded-lg p-4">
+                  <p className="text-gray-800 text-sm">
+                    Are you sure you want to change the final alarm level from{' '}
+                    <span className="font-bold text-red-600">"{alarmChangeData?.currentAlarmLevel}"</span>{' '}
+                    to{' '}
+                    <span className="font-bold text-red-600">"{alarmChangeData?.newAlarmLevel}"</span>?
+                  </p>
+                </div>
+
+                {/* Report Details */}
+                <div className="bg-gray-50 rounded-lg p-4 space-y-3">
+                  <div className="flex items-start space-x-2">
+                    <FiMapPin className="text-gray-500 mt-0.5" size={16} />
+                    <div className="flex-1">
+                      <p className="text-xs text-gray-500 mb-1">Report ID</p>
+                      <p className="text-sm font-mono text-gray-800">{alarmChangeData?.reportIdShort}...</p>
+                    </div>
+                  </div>
+                  <div className="flex items-start space-x-2">
+                    <FiMapPin className="text-gray-500 mt-0.5" size={16} />
+                    <div className="flex-1">
+                      <p className="text-xs text-gray-500 mb-1">Location</p>
+                      <p className="text-sm text-gray-800">{alarmChangeData?.location}</p>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Warning Notice */}
+                <div className="bg-red-50 border border-red-200 rounded-lg p-4">
+                  <div className="flex items-start space-x-2">
+                    <FiAlertTriangle className="text-red-600 mt-0.5 flex-shrink-0" size={16} />
+                    <p className="text-gray-700 text-xs">
+                      This action will update the emergency response level and may trigger additional resource deployment.
+                    </p>
+                  </div>
+                </div>
+
+                {/* Action Buttons */}
+                <div className="flex space-x-3 pt-2">
+                  <button
+                    onClick={cancelAlarmChange}
+                    className="flex-1 px-6 py-3 bg-gray-200 hover:bg-gray-300 text-gray-800 font-medium rounded-lg transition-colors"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={confirmAlarmChange}
+                    className="flex-1 px-6 py-3 bg-red-600 hover:bg-red-700 text-white font-medium rounded-lg transition-colors"
+                  >
+                    OK
+                  </button>
+                </div>
+              </div>
+            </div>
+            <style>{`
+              @keyframes fadeIn {
+                from { opacity: 0; }
+                to { opacity: 1; }
+              }
+              @keyframes scaleIn {
+                from { 
+                  opacity: 0;
+                  transform: scale(0.95);
+                }
+                to { 
+                  opacity: 1;
+                  transform: scale(1);
+                }
+              }
+            `}</style>
           </div>
         )}
 
