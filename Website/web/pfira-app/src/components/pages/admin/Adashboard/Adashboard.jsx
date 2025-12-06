@@ -247,12 +247,12 @@ const Adashboard = () => {
     const cleanedLevel = cleanAlarmLevel(alarmLevel);
     const level = cleanedLevel.toLowerCase();
     
-    // Fire alarm levels with appropriate colors
-    if (level.includes('first alarm')) return '#fef3c7'; // Light yellow
-    if (level.includes('second alarm')) return '#fed7aa'; // Light orange
-    if (level.includes('third alarm')) return '#fecaca'; // Light red
-    if (level.includes('fourth alarm')) return '#f87171'; // Medium red
-    if (level.includes('fifth alarm')) return '#ef4444'; // Red
+    // Fire alarm levels with appropriate colors (check both "1st" and "first" formats)
+    if (level.includes('first alarm') || level.includes('1st alarm')) return '#fef3c7'; // Light yellow
+    if (level.includes('second alarm') || level.includes('2nd alarm')) return '#fed7aa'; // Light orange
+    if (level.includes('third alarm') || level.includes('3rd alarm')) return '#fecaca'; // Light red
+    if (level.includes('fourth alarm') || level.includes('4th alarm')) return '#f87171'; // Medium red
+    if (level.includes('fifth alarm') || level.includes('5th alarm')) return '#ef4444'; // Red
     if (level.includes('task force alpha')) return '#dc2626'; // Dark red
     if (level.includes('task force bravo')) return '#b91c1c'; // Darker red
     if (level.includes('task force charlie')) return '#991b1b'; // Very dark red
@@ -271,9 +271,14 @@ const Adashboard = () => {
   const getMarkerColor = (report) => {
     // First check for alarm level (prioritize final_fire_alarm_level)
     const resolved = resolveAlarmLevel(report);
-    if (resolved) return getAlarmLevelColor(resolved);
+    if (resolved) {
+      const color = getAlarmLevelColor(resolved);
+      console.log('Report', report.id, 'resolved:', resolved, 'color:', color);
+      return color;
+    }
     
     // Fallback to prediction-based colors
+    console.log('Report', report.id, 'no alarm, using prediction:', report.prediction);
     switch (report.prediction) {
       case 'Fire': return '#ef4444'; // Red for active fire
       case 'No Fire': return '#93c5fd'; // Light blue for no fire
@@ -1597,7 +1602,7 @@ const Adashboard = () => {
                     </div>
                     <div className="flex items-center space-x-1.5 p-1.5 bg-white rounded">
                       <div className="w-2.5 h-2.5 rounded-full border border-gray-200" style={{ backgroundColor: '#ef4444' }}></div>
-                      <span className="text-gray-700 font-medium">Fifth+ Alarm</span>
+                      <span className="text-gray-700 font-medium">Fourth+ Alarm</span>
                     </div>
                     <div className="flex items-center space-x-1.5 p-1.5 bg-white rounded">
                       <div className="w-2.5 h-2.5 rounded-full border border-gray-200" style={{ backgroundColor: '#450a0a' }}></div>
