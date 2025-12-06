@@ -993,16 +993,22 @@ const Overview = () => {
   };
 
   const getAlarmLevelColor = (level) => {
-    switch (level) {
-      case '1st Alarm': return 'bg-blue-100 text-blue-800 border-blue-200';
-      case '2nd Alarm': return 'bg-orange-100 text-orange-800 border-orange-200';
-      case '3rd Alarm': return 'bg-red-100 text-red-800 border-red-200';
-      case '4th Alarm': return 'bg-purple-100 text-purple-800 border-purple-200';
-      case '5th Alarm': return 'bg-indigo-100 text-indigo-800 border-indigo-200';
-      case 'TASK FORCE': return 'bg-pink-100 text-pink-800 border-pink-200';
-      case 'General Alarm': return 'bg-red-600 text-white border-red-700';
-      default: return 'bg-gray-100 text-gray-800 border-gray-200';
-    }
+    if (!level) return 'bg-gray-100 text-gray-800 border-gray-200';
+    
+    const levelStr = level.toLowerCase();
+    
+    // Match the legend colors from Adashboard
+    if (levelStr.includes('1st') || levelStr.includes('first')) return 'bg-amber-50 text-amber-900 border-amber-200';
+    if (levelStr.includes('2nd') || levelStr.includes('second')) return 'bg-orange-100 text-orange-900 border-orange-200';
+    if (levelStr.includes('3rd') || levelStr.includes('third')) return 'bg-red-100 text-red-900 border-red-300';
+    if (levelStr.includes('4th') || levelStr.includes('fourth')) return 'bg-red-200 text-red-900 border-red-400';
+    if (levelStr.includes('5th') || levelStr.includes('fifth')) return 'bg-red-400 text-white border-red-500';
+    if (levelStr.includes('task force')) return 'bg-red-600 text-white border-red-700';
+    if (levelStr.includes('general')) return 'bg-red-950 text-white border-red-950';
+    if (levelStr.includes('fire out')) return 'bg-blue-200 text-blue-900 border-blue-300';
+    if (levelStr.includes('under control')) return 'bg-yellow-200 text-yellow-900 border-yellow-300';
+    
+    return 'bg-gray-100 text-gray-800 border-gray-200';
   };
 
   return (
