@@ -2,9 +2,11 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { FiSearch, FiFilter, FiX, FiChevronDown, FiUserPlus, FiMapPin, FiAlertTriangle } from 'react-icons/fi';
 import { supabase } from '../../../../config/supabase';
+import { useNotifications } from '../../../../contexts/NotificationContext';
 
 const Station_Overview = () => {
   const navigate = useNavigate();
+  const { unreadCount, stopAlert, audioBlocked, playAlert } = useNotifications();
   const [searchQuery, setSearchQuery] = useState('');
   const [showFilters, setShowFilters] = useState(false);
   const [selectedReport, setSelectedReport] = useState(null);
@@ -50,6 +52,15 @@ const Station_Overview = () => {
     return null;
   };
 
+  // Helper function to clean alarm level text
+  const cleanAlarmLevel = (alarmLevel) => {
+    if (!alarmLevel) return alarmLevel;
+    if (typeof alarmLevel === 'string' && alarmLevel.includes('- structure count not provided')) {
+      return alarmLevel.split('- structure count not provided')[0].trim();
+    }
+    return alarmLevel;
+  };
+
   const formatTime = (timestamp) => {
     if (!timestamp) return 'Unknown';
     try {
@@ -64,7 +75,7 @@ const Station_Overview = () => {
 
   // Determine suggested alarm level based on number of structures on fire
   const determineSuggestedAlarm = (numStructures) => {
-    if (!numStructures || numStructures === 0) return 'Unknown - structure count not provided';
+    if (!numStructures || numStructures === 0) return 'Unknown';
     if (numStructures >= 80) return 'GENERAL ALARM';
     if (numStructures >= 36) return 'TASK FORCE DELTA';
     if (numStructures >= 32) return 'TASK FORCE CHARLIE';
@@ -383,9 +394,13 @@ const Station_Overview = () => {
 
   const handleStatusChange = async (reportId, newStatus) => {
     try {
+      console.log('🔄 STATUS CHANGE INITIATED:', { reportId, newStatus });
+      
       // Get the report data before updating
       const currentReport = reports.find(r => r.id === reportId);
       const oldStatus = currentReport?.status || 'On Going';
+      
+      console.log('📊 Current status:', oldStatus, '→ New status:', newStatus);
       
       // Optimistic UI update
       setReports(prev => prev.map(report => 
@@ -393,16 +408,22 @@ const Station_Overview = () => {
       ));
       setOpenStatusDropdown(null);
 
+      console.log('📡 Sending status update to API...');
       const res = await fetch(`${API_URL}/update_report_status`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'Accept': 'application/json'
         },
-        body: JSON.stringify({ report_id: reportId, status: newStatus })
+        body: JSON.stringify({ 
+          report_id: reportId, 
+          status: newStatus,
+          updated_at: new Date().toISOString() // Force timestamp update
+        })
       });
 
       if (!res.ok) {
+        console.error('❌ API request failed:', res.status);
         // Revert change on failure
         setReports(prev => prev.map(report =>
           report.id === reportId ? { ...report, status: report.status || 'On Going' } : report
@@ -414,6 +435,8 @@ const Station_Overview = () => {
         return;
       }
 
+      console.log('✅ Status updated successfully in database');
+
       // ✅ SUCCESS - Now create notifications for all users
       try {
         console.log('🔔 Creating notifications for status change:', { reportId, oldStatus, newStatus });
@@ -421,12 +444,14 @@ const Station_Overview = () => {
         // Fetch the full report data from API for notification details
         let fullReportData = currentReport;
         try {
+          console.log('📥 Fetching latest report data...');
           const reportRes = await fetch(`${API_URL}/get_reports`);
           if (reportRes.ok) {
             const allReports = await reportRes.json();
             const foundReport = allReports.find(r => String(r.id) === String(reportId));
             if (foundReport) {
               fullReportData = foundReport;
+              console.log('✅ Latest report data fetched:', foundReport.status);
             }
           }
         } catch (fetchErr) {
@@ -434,13 +459,22 @@ const Station_Overview = () => {
         }
 
         // Create notifications using the universal notification service approach
+        console.log('📬 Creating notifications for citizen and responders...');
         await createNotificationsForStatusChange(reportId, newStatus, oldStatus, fullReportData);
-        console.log('✅ Notifications created successfully');
+        console.log('✅ Notifications created successfully - Mobile should receive update now!');
+        
+        // For Fire Out status, log extra confirmation
+        if (newStatus === 'Fire Out') {
+          console.log('🔥 FIRE OUT STATUS CONFIRMED!');
+          console.log('📱 Mobile app should detect this change within 2 seconds');
+          console.log('🎊 Fire Out modal should appear automatically on mobile');
+        }
       } catch (notifErr) {
         console.error('⚠️ Failed to create notifications (non-critical):', notifErr);
         // Don't fail the status update if notifications fail
       }
     } catch (e) {
+      console.error('❌ Error in handleStatusChange:', e);
       setReports(prev => prev.map(report =>
         report.id === reportId ? { ...report, status: report.status || 'On Going' } : report
       ));
@@ -636,7 +670,7 @@ const Station_Overview = () => {
       .from('responder_notifications')
       .select('id, responder_id, station_id, status')
       .eq('fire_report_id', String(reportId))
-      .in('status', ['pending', 'accepted']);
+      .in('status', ['pending', 'accepted', 'completed']); // Include completed for ongoing updates
 
     console.log('📊 Query result for this report:', { 
       reportId: String(reportId),
@@ -801,6 +835,27 @@ const Station_Overview = () => {
       }
     };
     loadAssigned();
+
+    // Real-time subscription for assignment changes to this specific report
+    if (showReportModal && selectedReport?.id) {
+      const rid = String(selectedReport.id);
+      const assignmentSubscription = supabase
+        .channel(`report_assignments_${rid}`)
+        .on('postgres_changes', {
+          event: '*',
+          schema: 'public',
+          table: 'report_assignments',
+          filter: `report_id=eq.${rid}`
+        }, (payload) => {
+          console.log('🔔 Real-time: Assignment change detected for report', rid, payload);
+          loadAssigned();
+        })
+        .subscribe();
+
+      return () => {
+        assignmentSubscription.unsubscribe();
+      };
+    }
   }, [showReportModal, selectedReport?.id]);
 
   // Commit responder assignments for a report (adds/removes to match current selection)
@@ -847,12 +902,46 @@ const Station_Overview = () => {
               console.error('Failed to create responder notifications:', addErr);
               alert(`Failed to add responder(s): ${addErr.message}`);
             }
+
+            // ALSO create entries in report_assignments table for mobile overview to work
+            // First check if entries already exist to avoid duplicates
+            const { data: existingAssignments } = await supabase
+              .from('report_assignments')
+              .select('assignee_id')
+              .eq('report_id', rid)
+              .eq('assignee_type', 'responder')
+              .in('assignee_id', uniqueAdds);
+            
+            const alreadyInAssignments = new Set((existingAssignments || []).map(a => a.assignee_id));
+            const newAssignments = uniqueAdds.filter(id => !alreadyInAssignments.has(id));
+            
+            if (newAssignments.length > 0) {
+              const assignmentRows = newAssignments.map(id => ({
+                report_id: rid,
+                assignee_type: 'responder',
+                assignee_id: id,
+                assigned_by: currentStationId,
+                note: `Assigned by station at ${new Date().toISOString()}`
+              }));
+              const { error: assignErr } = await supabase
+                .from('report_assignments')
+                .insert(assignmentRows);
+              if (assignErr) {
+                console.error('Failed to create report assignments:', assignErr);
+                console.error('Assignment error details:', JSON.stringify(assignErr, null, 2));
+                // Don't alert, as notification was created successfully
+              } else {
+                console.log(`✅ Created ${newAssignments.length} report_assignments entries for mobile sync`);
+              }
+            } else {
+              console.log('ℹ️ All responders already have report_assignments entries');
+            }
           }
         } catch (err) {
           alert(`Failed to add responder(s): ${err.message}`);
         }
       }
-      // Remove unchecked responders by deleting their notifications
+      // Remove unchecked responders by deleting their notifications AND assignments
       if (toRemove.length > 0) {
         const { error: delErr } = await supabase
           .from('responder_notifications')
@@ -861,6 +950,19 @@ const Station_Overview = () => {
           .in('responder_id', toRemove);
         if (delErr) {
           alert(`Failed to remove responder(s): ${delErr.message}`);
+        }
+
+        // ALSO delete from report_assignments table
+        const { error: delAssignErr } = await supabase
+          .from('report_assignments')
+          .delete()
+          .eq('report_id', rid)
+          .eq('assignee_type', 'responder')
+          .in('assignee_id', toRemove);
+        if (delAssignErr) {
+          console.error('Failed to delete report assignments:', delAssignErr);
+        } else {
+          console.log('✅ Deleted report_assignments entries for mobile sync');
         }
       }
       // Auto-update status to "Under Control" if at least one responder is assigned and status is "On Going"
@@ -1007,6 +1109,52 @@ const Station_Overview = () => {
 
   return (
     <div className="min-h-screen bg-gray-50 p-6" onClick={closeAllDropdowns}>
+      {/* Audio Blocked Warning */}
+      {audioBlocked && (
+        <div 
+          onClick={playAlert}
+          className="fixed top-24 left-6 z-50 bg-orange-600 text-white rounded-lg shadow-2xl cursor-pointer hover:bg-orange-700 transition-all p-4 max-w-sm"
+        >
+          <div className="flex items-center space-x-3">
+            <svg className="h-6 w-6 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.536 8.464a5 5 0 010 7.072m2.828-9.9a9 9 0 010 12.728M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
+              <line x1="1" y1="1" x2="23" y2="23" stroke="currentColor" strokeWidth={2} />
+            </svg>
+            <div className="flex-1">
+              <p className="font-bold text-sm">Sound Blocked</p>
+              <p className="text-xs">Click here to enable fire alarm</p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Fire Alert Indicator - Shows when there are unread fire notifications */}
+      {unreadCount > 0 && (
+        <div 
+          onClick={stopAlert}
+          className="fixed top-24 right-6 z-50 bg-red-600 text-white rounded-full shadow-2xl cursor-pointer hover:bg-red-700 transition-all duration-300 animate-pulse"
+          style={{ width: '80px', height: '80px' }}
+        >
+          <div className="flex flex-col items-center justify-center h-full">
+            <svg 
+              xmlns="http://www.w3.org/2000/svg" 
+              className="h-10 w-10 mb-1" 
+              fill="none" 
+              viewBox="0 0 24 24" 
+              stroke="currentColor"
+            >
+              <path 
+                strokeLinecap="round" 
+                strokeLinejoin="round" 
+                strokeWidth={2} 
+                d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" 
+              />
+            </svg>
+            <span className="text-xs font-bold">{unreadCount}</span>
+          </div>
+        </div>
+      )}
+
       <div className="max-w-none mx-auto">
         <div className="w-full">
           {/* Header */}
@@ -1175,7 +1323,7 @@ const Station_Overview = () => {
                       {/* AI Suggested Fire Alarm (display only) */}
                       <td className="px-4 py-4 whitespace-nowrap">
                         <span className={`px-3 py-1 rounded-md text-xs font-medium border ${getAlarmLevelColor(report.suggestedAlarmLevel)}`}>
-                          {report.suggestedAlarmLevel}
+                          {cleanAlarmLevel(report.suggestedAlarmLevel)}
                         </span>
                       </td>
                       <td className="px-4 py-4 whitespace-nowrap">
@@ -1342,9 +1490,7 @@ const Station_Overview = () => {
                       <div>
                         <label className="block text-lg font-medium text-gray-700 mb-3">Suggested Alarm Level:</label>
                         <span className={`px-3 py-3 rounded-md text-base font-medium border ${getAlarmLevelColor(selectedReport.suggestedAlarmLevel)}`}>
-                          {selectedReport.suggestedAlarmLevel?.includes('Unknown - structure count not provided') 
-                            ? 'Unknown' 
-                            : selectedReport.suggestedAlarmLevel}
+                          {cleanAlarmLevel(selectedReport.suggestedAlarmLevel)}
                         </span>
                       </div>
                       <div>

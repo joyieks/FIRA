@@ -8,6 +8,8 @@ import { LinearGradient } from 'expo-linear-gradient';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useAuth } from '../../../config/AuthContext';
 import { supabase } from '../../../config/supabase';
+import { sendPushNotification } from '../../../services/pushNotificationService';
+import { createNearbyIncidentNotifications } from '../../../services/citizenNotificationService';
 
 // Fire Detection API base
 const API_URL = 'https://fire-detection-api-production-f55b.up.railway.app/predict';
@@ -30,6 +32,9 @@ const CStatus = () => {
   const [nearbyReports, setNearbyReports] = useState([]);
   const [allReports, setAllReports] = useState([]); // TEMPORARY: Store all reports for debugging
   const [addressCache, setAddressCache] = useState({});
+  const [userLocation, setUserLocation] = useState(null);
+  const [processedNearbyIds, setProcessedNearbyIds] = useState(new Set());
+  const [lastReportCheckTime, setLastReportCheckTime] = useState(Date.now());
 
   // Use Supabase auth context
   useEffect(() => {
@@ -47,7 +52,7 @@ const CStatus = () => {
   }, [isAuthenticated, userData?.uid]);
 
   // Check for Fire Out reports and show Thank You modal
-  const checkForFireOutReports = (reports) => {
+  const checkForFireOutReports = async (reports) => {
     if (!reports || reports.length === 0 || !modalKeysLoaded) return;
     
     // Find the most recent Fire Out report that hasn't been shown yet
@@ -64,11 +69,442 @@ const CStatus = () => {
     if (fireOutReport) {
       const reportId = String(fireOutReport.id || fireOutReport._id);
       const modalKey = `${reportId}:Fire Out`;
-      setFireOutReport(fireOutReport);
+      
+      // Get report location for notification
+      const location = fireOutReport.resolved_address || 
+                       fireOutReport.address || 
+                       fireOutReport.geotag_location || 
+                       'your reported location';
+      
+      // Update the report in all lists immediately to reflect Fire Out status
+      const updatedReport = { ...fireOutReport, status: 'Fire Out', progress: 'Fire Out' };
+      
+      // Update yourReports list
+      setYourReports(prev => {
+        const updated = prev.map(report => 
+          String(report.id) === String(reportId) 
+            ? updatedReport
+            : report
+        );
+        return sortReportsByDate(updated);
+      });
+      
+      // Update allReports list
+      setAllReports(prev => {
+        const updated = prev.map(report => 
+          String(report.id) === String(reportId) 
+            ? updatedReport
+            : report
+        );
+        return sortReportsByDate(updated);
+      });
+      
+      // Update nearbyReports list if this report is there
+      setNearbyReports(prev => {
+        const updated = prev.map(report => 
+          String(report.id) === String(reportId) 
+            ? updatedReport
+            : report
+        );
+        return sortReportsByDate(updated);
+      });
+      
+      // Send push notification for Fire Out status
+      try {
+        const shortLocation = location.length > 50 
+          ? location.substring(0, 47) + '...' 
+          : location;
+        
+        const pushTitle = '✅ Fire Out - Report Resolved';
+        const pushBody = `Great news! The fire at ${shortLocation} has been extinguished. Thank you for your report!`;
+        
+        console.log('📱 Sending push notification for Fire Out status:');
+        console.log('   Title:', pushTitle);
+        console.log('   Body:', pushBody);
+        console.log('   Report ID:', reportId);
+        console.log('   Location:', location);
+        
+        const pushResult = await sendPushNotification(
+          pushTitle,
+          pushBody,
+          {
+            type: 'fire_out',
+            reportId: reportId,
+            status: 'Fire Out',
+            location: location,
+          }
+        );
+        
+        if (pushResult) {
+          console.log('✅ Push notification sent successfully for Fire Out status');
+        } else {
+          console.warn('⚠️ Push notification returned false for Fire Out status');
+        }
+      } catch (pushError) {
+        console.error('❌ Error sending push notification for Fire Out status:', pushError);
+        console.error('❌ Push error details:', JSON.stringify(pushError, null, 2));
+        // Don't fail the modal display if push fails
+      }
+      
+      setFireOutReport(updatedReport);
       setShowThankYouModal(true);
       // Mark this report:status combination as shown
       setShownModalKeys(prev => new Set([...prev, modalKey]));
       console.log('🎊 Showing Fire Out modal for report:', reportId);
+      console.log('✅ Report status updated to Fire Out in all lists automatically');
+    }
+  };
+
+  // Get user location on mount and periodically update
+  useEffect(() => {
+    const getUserLocation = async () => {
+      try {
+        const { status } = await Location.requestForegroundPermissionsAsync();
+        if (status === 'granted') {
+          const location = await Location.getCurrentPositionAsync({
+            accuracy: Location.Accuracy.Balanced,
+            timeout: 10000,
+          });
+          const newLocation = {
+            latitude: location.coords.latitude,
+            longitude: location.coords.longitude,
+          };
+          setUserLocation(newLocation);
+          console.log('✅ User location obtained:', newLocation.latitude, newLocation.longitude);
+          
+          // Request notification permissions when location is obtained
+          try {
+            const { registerForPushNotificationsAsync } = await import('../../../services/pushNotificationService');
+            await registerForPushNotificationsAsync();
+            console.log('✅ Notification permissions requested');
+          } catch (notifError) {
+            console.error('❌ Error requesting notification permissions:', notifError);
+          }
+        } else {
+          console.warn('⚠️ Location permission not granted');
+        }
+      } catch (error) {
+        console.error('❌ Error getting user location:', error);
+      }
+    };
+    getUserLocation();
+    
+    // Update location every 30 seconds
+    const locationInterval = setInterval(getUserLocation, 30000);
+    return () => clearInterval(locationInterval);
+  }, []);
+
+  // Check for nearby incidents when location or reports change
+  useEffect(() => {
+    if (userLocation && allReports.length > 0 && currentUser?.uid) {
+      console.log('🔄 Checking for nearby incidents (location or reports changed)');
+      checkForNearbyIncidents(allReports);
+    }
+  }, [userLocation, allReports, currentUser?.uid]);
+
+  // Periodic check for nearby incidents (every 10 seconds) and auto-refresh reports
+  useEffect(() => {
+    if (!userLocation || !currentUser?.uid) return;
+
+    const interval = setInterval(async () => {
+      // Auto-refresh reports to get new ones
+      console.log('🔄 Auto-refreshing reports to check for new nearby incidents...');
+      const checkStartTime = Date.now();
+      
+      try {
+        const response = await fetch('https://fire-detection-api-production-f55b.up.railway.app/get_reports', {
+          headers: { 'Accept': 'application/json' }
+        });
+        
+        if (response.ok) {
+          const data = await response.json();
+          const isActiveReport = (r) => {
+            const statusText = (r.status || r.progress || '').toString().toLowerCase();
+            return !statusText.includes('cancelled') && !statusText.includes('canceled');
+          };
+          const activeReports = data.filter(isActiveReport);
+          
+          // Use the same sorting logic as loadReportsFromAPI
+          const getTimestampValue = (report) => {
+            const timestamp = report.formatted_timestamp || report.created_at || report.timestamp || report.time;
+            if (!timestamp) return 0;
+            if (timestamp === 'Just now') return new Date().getTime();
+            try {
+              return new Date(timestamp).getTime();
+            } catch {
+              return 0;
+            }
+          };
+          const sortedReports = [...activeReports].sort((a, b) => getTimestampValue(b) - getTimestampValue(a));
+          
+          // Find NEW reports (created after last check)
+          const newReports = sortedReports.filter(report => {
+            const reportTime = getTimestampValue(report);
+            return reportTime > lastReportCheckTime;
+          });
+          
+          if (newReports.length > 0) {
+            console.log(`🆕 Found ${newReports.length} NEW report(s) since last check!`);
+            setLastReportCheckTime(checkStartTime);
+          }
+          
+          setAllReports(sortedReports);
+          
+          // Update YOUR reports list automatically (user's own reports)
+          const userOwnReports = sortedReports.filter(report => {
+            const reporterId = report.reporterId || report.user_id;
+            return reporterId === currentUser.uid;
+          });
+          const sortedUserReports = userOwnReports.sort((a, b) => {
+            return getTimestampValue(b) - getTimestampValue(a);
+          });
+          console.log('🔄 Auto-updating YOUR reports:', sortedUserReports.length, 'reports');
+          setYourReports(sortedUserReports);
+          
+          // Check for Fire Out status in user's reports
+          for (const report of sortedUserReports) {
+            const status = (report.status || report.progress || '').toString();
+            if (status === 'Fire Out') {
+              const reportId = String(report.id);
+              const modalKey = `${reportId}:Fire Out`;
+              
+              console.log('🔍 10-SEC: Checking Fire Out report:', reportId, 'Modal key:', modalKey);
+              console.log('🔍 10-SEC: Already shown?', shownModalKeys.has(modalKey));
+              console.log('🔍 10-SEC: Current shown keys:', Array.from(shownModalKeys));
+              
+              // Check if already shown
+              if (!shownModalKeys.has(modalKey)) {
+                console.log('🔥 10-SEC INTERVAL: Fire Out detected for report:', reportId);
+                console.log('🎊 10-SEC INTERVAL: Triggering Fire Out modal and notification');
+                
+                const updatedReport = { ...report, status: 'Fire Out', progress: 'Fire Out' };
+                const location = report.resolved_address || report.address || report.geotag_location || 'your reported location';
+                const shortLocation = location.length > 50 ? location.substring(0, 47) + '...' : location;
+                
+                // Send push notification
+                console.log('📱 10-SEC: Sending push notification');
+                sendPushNotification(
+                  '✅ Fire Out - Report Resolved',
+                  `Great news! The fire at ${shortLocation} has been extinguished. Thank you for your report!`,
+                  {
+                    type: 'fire_out',
+                    reportId: reportId,
+                    status: 'Fire Out',
+                    location: location,
+                  }
+                ).then(result => {
+                  console.log('✅ 10-SEC: Push notification sent:', result);
+                }).catch(err => {
+                  console.error('❌ 10-SEC: Push notification error:', err);
+                });
+                
+                // Show modal
+                console.log('🚀 10-SEC: Setting modal state');
+                setFireOutReport(updatedReport);
+                setShowThankYouModal(true);
+                
+                // Add to shown keys and save to storage
+                setShownModalKeys(prev => {
+                  const newKeys = new Set([...prev, modalKey]);
+                  console.log('✅ 10-SEC: Added modal key:', modalKey);
+                  console.log('✅ 10-SEC: Total shown keys now:', Array.from(newKeys));
+                  return newKeys;
+                });
+                
+                console.log('✅ 10-SEC: Fire Out modal triggered - WILL ONLY SHOW ONCE');
+              } else {
+                console.log('⏭️ 10-SEC: Skipping - Fire Out modal already shown for report:', reportId);
+              }
+            }
+          }
+          
+          // Update nearby reports list automatically
+          const otherUsersReports = sortedReports.filter(report => {
+            const reporterId = report.reporterId || report.user_id;
+            return reporterId !== currentUser.uid;
+          });
+          const sortedOtherReports = otherUsersReports.sort((a, b) => {
+            return getTimestampValue(b) - getTimestampValue(a);
+          });
+          console.log('🔄 Auto-updating NEARBY reports:', sortedOtherReports.length, 'reports');
+          setNearbyReports(sortedOtherReports);
+          
+          // Check for nearby incidents with updated reports (excluding own reports)
+          if (otherUsersReports.length > 0) {
+            console.log('🔄 Checking for nearby incidents with refreshed reports');
+            // Pass new reports flag to prioritize checking new ones
+            const hasNewReports = newReports.length > 0;
+            if (hasNewReports) {
+              console.log(`🚨 ${newReports.length} new report(s) detected - checking for nearby incidents immediately!`);
+            }
+            await checkForNearbyIncidents(otherUsersReports, hasNewReports);
+          }
+        }
+      } catch (error) {
+        console.error('❌ Error auto-refreshing reports:', error);
+      }
+    }, 10000); // Check every 10 seconds (reduced from 15 for faster detection)
+
+    return () => clearInterval(interval);
+  }, [userLocation, currentUser?.uid, lastReportCheckTime]);
+
+  // Calculate distance between two coordinates using Haversine formula
+  const calculateDistance = (lat1, lon1, lat2, lon2) => {
+    const R = 6371; // Earth's radius in kilometers
+    const dLat = (lat2 - lat1) * Math.PI / 180;
+    const dLon = (lon2 - lon1) * Math.PI / 180;
+    const a = 
+      Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+      Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+      Math.sin(dLon / 2) * Math.sin(dLon / 2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    return R * c; // Distance in kilometers
+  };
+
+  // Check for nearby incidents and create notifications
+  const checkForNearbyIncidents = async (reports, hasNewReports = false) => {
+    console.log('🔍 checkForNearbyIncidents called:', {
+      hasUserLocation: !!userLocation,
+      reportsCount: reports?.length || 0,
+      hasCurrentUser: !!currentUser?.uid,
+      userLocation: userLocation
+    });
+
+    if (!userLocation) {
+      console.warn('⚠️ No user location available, skipping nearby check');
+      return;
+    }
+
+    if (!reports || reports.length === 0) {
+      console.warn('⚠️ No reports available, skipping nearby check');
+      return;
+    }
+
+    if (!currentUser?.uid) {
+      console.warn('⚠️ No current user, skipping nearby check');
+      return;
+    }
+
+    // Temporarily increase range for testing - you can reduce this later
+    const MIN_DISTANCE_KM = 0.0; // Start from 0km for testing (was 0.5)
+    const MAX_DISTANCE_KM = 10.0; // Increase to 10km for testing (was 5.0)
+    
+    console.log(`🔍 Checking ${reports.length} reports for nearby incidents...`);
+    
+    // Filter out user's own reports - don't notify them about their own reports
+    const otherReports = reports.filter(report => {
+      const reporterId = report.reporterId || report.user_id;
+      const isOwnReport = reporterId === currentUser.uid;
+      if (isOwnReport) {
+        console.log(`ℹ️ Skipping own report ${report.id} from nearby check`);
+      }
+      return !isOwnReport;
+    });
+    
+    console.log(`🔍 Filtered to ${otherReports.length} other users' reports (excluding own reports)`);
+    
+    const nearby = otherReports
+      .map(report => {
+        // Try to get coordinates from various fields
+        let reportLat, reportLon;
+        
+        if (report.latitude && report.longitude) {
+          reportLat = parseFloat(report.latitude);
+          reportLon = parseFloat(report.longitude);
+        } else if (report.geotag_location) {
+          const match = report.geotag_location.toString().match(/-?\d+\.?\d*\s*,\s*-?\d+\.?\d*/);
+          if (match) {
+            const [lat, lon] = match[0].split(',').map(s => parseFloat(s.trim()));
+            reportLat = lat;
+            reportLon = lon;
+          }
+        }
+        
+        if (isNaN(reportLat) || isNaN(reportLon)) {
+          console.log(`⚠️ Report ${report.id} has invalid coordinates:`, { 
+            latitude: report.latitude, 
+            longitude: report.longitude, 
+            geotag_location: report.geotag_location 
+          });
+          return null;
+        }
+        
+        const distance = calculateDistance(
+          userLocation.latitude,
+          userLocation.longitude,
+          reportLat,
+          reportLon
+        );
+        
+        console.log(`📍 Report ${report.id} distance: ${distance.toFixed(2)}km`);
+        
+        // Only include reports within the reasonable range
+        if (distance >= MIN_DISTANCE_KM && distance <= MAX_DISTANCE_KM) {
+          return {
+            ...report,
+            latitude: reportLat,
+            longitude: reportLon,
+            distance: distance,
+            distanceText: distance < 1 
+              ? `${Math.round(distance * 1000)}m away` 
+              : `${distance.toFixed(1)}km away`
+          };
+        }
+        return null;
+      })
+      .filter(Boolean)
+      .sort((a, b) => a.distance - b.distance); // Sort by closest first
+
+    console.log(`🔍 Found ${nearby.length} nearby incident(s) within ${MIN_DISTANCE_KM}-${MAX_DISTANCE_KM}km range`);
+
+    // Check for new nearby incidents
+    if (nearby.length > 0) {
+      const newIncidents = nearby.filter(incident => 
+        !processedNearbyIds.has(incident.id)
+      );
+      
+      console.log(`🔍 Found ${newIncidents.length} new nearby incident(s) (not yet processed)`);
+      
+      if (newIncidents.length > 0) {
+        // Mark new incidents as processed IMMEDIATELY to prevent duplicate processing
+        // This must happen BEFORE creating notifications to avoid race conditions
+        setProcessedNearbyIds(prev => {
+          const newSet = new Set(prev);
+          newIncidents.forEach(incident => {
+            newSet.add(incident.id);
+            console.log(`✅ Marked incident ${incident.id} as processed`);
+          });
+          return newSet;
+        });
+        
+        // Create notifications in Supabase for new nearby incidents
+        console.log(`🔔 Creating notifications for ${newIncidents.length} new nearby incident(s)`);
+        console.log('📋 New incidents details:', newIncidents.map(i => ({ 
+          id: i.id, 
+          distance: i.distanceText,
+          location: i.address || i.resolved_address || i.geotag_location,
+          reporterId: i.reporterId || i.user_id
+        })));
+        try {
+          const result = await createNearbyIncidentNotifications(currentUser.uid, newIncidents);
+          console.log('📊 Notification creation result:', result);
+          if (result.success) {
+            console.log(`✅ Created ${result.count} notification(s) for nearby incidents`);
+            console.log('✅ Push notifications sent - check your device!');
+            console.log('📱 Nearby users should now receive push notifications on their devices');
+          } else {
+            console.warn('⚠️ Some notifications failed to create:', result.errors);
+            console.warn('⚠️ Result details:', JSON.stringify(result, null, 2));
+          }
+        } catch (error) {
+          console.error('❌ Error creating nearby incident notifications:', error);
+          console.error('❌ Error stack:', error.stack);
+        }
+      } else {
+        console.log('ℹ️ All nearby incidents have already been processed');
+      }
+    } else {
+      console.log('ℹ️ No nearby incidents found within range');
     }
   };
 
@@ -139,20 +575,47 @@ const CStatus = () => {
         // Check if this is a status change notification (check both title and type)
         const isAcknowledgment = notification.title && (
           notification.title.includes('Acknowledged') || 
-          notification.title.includes('Under Control')
+          notification.title.includes('Under Control') ||
+          notification.title.toLowerCase().includes('under control')
         );
         const isFireOut = notification.title && (
           notification.title.includes('Resolved') ||
-          notification.title.includes('Fire Out')
+          notification.title.includes('Fire Out') ||
+          notification.title.includes('fire out') ||
+          notification.title.includes('Fire Resolved') ||
+          notification.title.includes('All Clear') ||
+          notification.title.toLowerCase().includes('fire out') ||
+          notification.title.toLowerCase().includes('fire resolved') ||
+          notification.message?.includes('Fire Out') ||
+          notification.message?.includes('fire out') ||
+          notification.message?.includes('Status: Fire Out')
         );
-        const isStatusChange = notification.type === 'status_change';
+        // Include 'user_action' type as web app uses this for Fire Out notifications
+        const isStatusChange = notification.type === 'status_change' || 
+                               notification.type === 'fire_alert' || 
+                               notification.type === 'user_action';
+        
+        console.log('🔍 Notification check:', {
+          title: notification.title,
+          type: notification.type,
+          isAcknowledgment,
+          isFireOut,
+          isStatusChange,
+          message: notification.message?.substring(0, 50)
+        });
         
         if ((isAcknowledgment || isFireOut || isStatusChange) && notification.related_report_id) {
           console.log('✅ STATUS CHANGE DETECTED for report:', notification.related_report_id);
+          console.log('🔥 Fire Out detected:', isFireOut, 'Type:', notification.type);
+          
+          // IMMEDIATELY refresh reports from API to get latest status
+          console.log('🔄 IMMEDIATELY fetching updated report from API...');
+          
+          // Also trigger a full report refresh
+          loadReportsFromAPI();
           
           // Fetch the updated report from API
           try {
-            console.log('🔄 Fetching updated report from API...');
             const response = await fetch('https://fire-detection-api-production-f55b.up.railway.app/get_reports', {
               headers: { 'Accept': 'application/json' }
             });
@@ -174,7 +637,7 @@ const CStatus = () => {
                   const newStatus = updatedReport.status || updatedReport.progress;
                   console.log('💫 Updating local state with new status:', newStatus);
                   
-                  // Update local state immediately
+                  // Update local state immediately with proper sorting
                   setYourReports(prev => {
                     const updated = prev.map(report => 
                       String(report.id) === String(updatedReport.id) 
@@ -187,18 +650,31 @@ const CStatus = () => {
                       updated.unshift(updatedReport);
                     }
                     
-                    console.log('✅ Local state updated');
-                    return updated;
+                    console.log('✅ Local state updated, sorting reports...');
+                    // Sort reports by date after update
+                    return sortReportsByDate(updated);
                   });
                   
-                  // Update all reports list too
+                  // Update all reports list too with proper sorting
                   setAllReports(prev => {
                     const updated = prev.map(report => 
                       String(report.id) === String(updatedReport.id) 
                         ? { ...report, status: newStatus, progress: newStatus, ...updatedReport }
                         : report
                     );
-                    return updated;
+                    // Sort reports by date after update
+                    return sortReportsByDate(updated);
+                  });
+                  
+                  // Also update nearby reports if this report is in that list
+                  setNearbyReports(prev => {
+                    const updated = prev.map(report => 
+                      String(report.id) === String(updatedReport.id) 
+                        ? { ...report, status: newStatus, progress: newStatus, ...updatedReport }
+                        : report
+                    );
+                    // Sort reports by date after update
+                    return sortReportsByDate(updated);
                   });
                   
                   // Show appropriate modal based on status
@@ -219,10 +695,59 @@ const CStatus = () => {
                     console.log('🎯 Checking modal key:', modalKey, 'Already shown?', shownModalKeys.has(modalKey));
                     
                     if (!shownModalKeys.has(modalKey)) {
-                      console.log('🎊 SHOWING FIRE OUT MODAL NOW!');
+                      console.log('🎊 SHOWING FIRE OUT MODAL NOW! (via real-time notification)');
+                      console.log('🎊 Modal state about to be set:', {
+                        reportId,
+                        modalKey,
+                        currentShowThankYouModal: showThankYouModal,
+                        updatedReport: updatedReport.id
+                      });
+                      
+                      // Send push notification for Fire Out status
+                      const location = updatedReport.resolved_address || 
+                                       updatedReport.address || 
+                                       updatedReport.geotag_location || 
+                                       'your reported location';
+                      
+                      const shortLocation = location.length > 50 
+                        ? location.substring(0, 47) + '...' 
+                        : location;
+                      
+                      const pushTitle = '✅ Fire Out - Report Resolved';
+                      const pushBody = `Great news! The fire at ${shortLocation} has been extinguished. Thank you for your report!`;
+                      
+                      console.log('📱 Sending push notification for Fire Out status (real-time):');
+                      console.log('   Title:', pushTitle);
+                      console.log('   Body:', pushBody);
+                      console.log('   Report ID:', reportId);
+                      
+                      sendPushNotification(
+                        pushTitle,
+                        pushBody,
+                        {
+                          type: 'fire_out',
+                          reportId: reportId,
+                          status: 'Fire Out',
+                          location: location,
+                        }
+                      ).then(pushResult => {
+                        if (pushResult) {
+                          console.log('✅ Push notification sent successfully for Fire Out status (real-time)');
+                        } else {
+                          console.warn('⚠️ Push notification returned false for Fire Out status (real-time)');
+                        }
+                      }).catch(pushError => {
+                        console.error('❌ Error sending push notification for Fire Out status (real-time):', pushError);
+                      });
+                      
+                      // CRITICAL: Set modal state
+                      console.log('🚀 Setting fireOutReport and showThankYouModal to true...');
                       setFireOutReport(updatedReport);
                       setShowThankYouModal(true);
                       setShownModalKeys(prev => new Set([...prev, modalKey]));
+                      console.log('✅ Modal state set! Fire Out modal should appear now.');
+                    } else {
+                      console.log('ℹ️ Modal already shown for this report:', modalKey);
                     }
                   }
                 } else {
@@ -243,24 +768,33 @@ const CStatus = () => {
       })
       .subscribe((status) => {
         console.log('📡 Notification channel status:', status);
+        if (status === 'SUBSCRIBED') {
+          console.log('✅ Successfully subscribed to real-time notifications - ready to receive Fire Out updates!');
+        } else if (status === 'CHANNEL_ERROR') {
+          console.error('❌ Error subscribing to real-time notifications');
+        } else if (status === 'TIMED_OUT') {
+          console.warn('⚠️ Real-time subscription timed out - will rely on polling');
+        }
       });
 
     // Approach 2: Periodic polling as fallback (every 5 seconds)
     console.log('⏰ Setting up polling fallback (5s interval)');
     let lastCheckTime = Date.now();
+    let lastReportCheckTime = Date.now();
     
     const pollInterval = setInterval(async () => {
       try {
-        // Check for new notifications since last check
+        // Method 1: Check for new notifications since last check
+        // Include 'user_action' type as web app uses this when Fire Out is confirmed
         const { data: newNotifications } = await supabase
           .from('notifications')
           .select('*')
           .eq('user_id', currentUser.uid)
           .eq('user_type', 'citizen')
-          .eq('type', 'status_change')
+          .in('type', ['status_change', 'fire_alert', 'user_action'])
           .gt('created_at', new Date(lastCheckTime).toISOString())
           .order('created_at', { ascending: false })
-          .limit(5);
+          .limit(10);
         
         if (newNotifications && newNotifications.length > 0) {
           console.log('🔄 Polling found new notifications:', newNotifications.length);
@@ -268,8 +802,31 @@ const CStatus = () => {
           
           // Process each new notification
           for (const notification of newNotifications) {
+            // Check if it's a Fire Out notification (matches web app notification format)
+            const isFireOutNotif = notification.title && (
+              notification.title.includes('Resolved') ||
+              notification.title.includes('Fire Out') ||
+              notification.title.includes('Fire Resolved') ||
+              notification.title.includes('All Clear') ||
+              notification.title.includes('fire out') ||
+              notification.title.toLowerCase().includes('fire resolved') ||
+              notification.message?.includes('Fire Out') ||
+              notification.message?.includes('Status: Fire Out')
+            );
+            
             if (notification.related_report_id) {
-              console.log('⚡ Processing polled notification for report:', notification.related_report_id);
+              console.log('⚡ Processing polled notification for report:', notification.related_report_id, 'isFireOut:', isFireOutNotif);
+              console.log('📋 Notification details:', {
+                title: notification.title,
+                type: notification.type,
+                message: notification.message?.substring(0, 100)
+              });
+              
+              // IMMEDIATELY trigger full report refresh
+              if (isFireOutNotif) {
+                console.log('🔥 Fire Out notification detected - triggering immediate refresh!');
+                loadReportsFromAPI();
+              }
               
               // Fetch updated report
               const response = await fetch('https://fire-detection-api-production-f55b.up.railway.app/get_reports');
@@ -310,6 +867,44 @@ const CStatus = () => {
                     const modalKey = `${reportId}:Fire Out`;
                     if (!shownModalKeys.has(modalKey)) {
                       console.log('🎊 SHOWING FIRE OUT MODAL (via polling)');
+                      
+                      // Send push notification for Fire Out status
+                      const location = updatedReport.resolved_address || 
+                                       updatedReport.address || 
+                                       updatedReport.geotag_location || 
+                                       'your reported location';
+                      
+                      const shortLocation = location.length > 50 
+                        ? location.substring(0, 47) + '...' 
+                        : location;
+                      
+                      const pushTitle = '✅ Fire Out - Report Resolved';
+                      const pushBody = `Great news! The fire at ${shortLocation} has been extinguished. Thank you for your report!`;
+                      
+                      console.log('📱 Sending push notification for Fire Out status (polling):');
+                      console.log('   Title:', pushTitle);
+                      console.log('   Body:', pushBody);
+                      console.log('   Report ID:', reportId);
+                      
+                      sendPushNotification(
+                        pushTitle,
+                        pushBody,
+                        {
+                          type: 'fire_out',
+                          reportId: reportId,
+                          status: 'Fire Out',
+                          location: location,
+                        }
+                      ).then(pushResult => {
+                        if (pushResult) {
+                          console.log('✅ Push notification sent successfully for Fire Out status (polling)');
+                        } else {
+                          console.warn('⚠️ Push notification returned false for Fire Out status (polling)');
+                        }
+                      }).catch(pushError => {
+                        console.error('❌ Error sending push notification for Fire Out status (polling):', pushError);
+                      });
+                      
                       setFireOutReport(updatedReport);
                       setShowThankYouModal(true);
                       setShownModalKeys(prev => new Set([...prev, modalKey]));
@@ -320,17 +915,293 @@ const CStatus = () => {
             }
           }
         }
+        
+        // Method 2: Directly check reports for status changes (every 5 seconds for faster Fire Out detection)
+        const now = Date.now();
+        if (now - lastReportCheckTime > 5000) {
+          console.log('🔄 Directly checking reports for status changes...');
+          lastReportCheckTime = now;
+          
+          try {
+            const response = await fetch('https://fire-detection-api-production-f55b.up.railway.app/get_reports', {
+              headers: { 'Accept': 'application/json' }
+            });
+            
+            if (response.ok) {
+              const allReports = await response.json();
+              
+              // Get current user's reports from state - use a function to get latest state
+              setYourReports(currentReports => {
+                // Check each current report for status changes
+                for (const currentReport of currentReports) {
+                  const updatedReport = allReports.find(r => 
+                    String(r.id) === String(currentReport.id) && 
+                    r.user_id === currentUser.uid
+                  );
+                  
+                  if (updatedReport) {
+                    const currentStatus = (currentReport.status || currentReport.progress || '').toString();
+                    const newStatus = (updatedReport.status || updatedReport.progress || '').toString();
+                    
+                    // Check if status changed to Fire Out
+                    if (newStatus === 'Fire Out' && currentStatus !== 'Fire Out') {
+                      console.log(`🔥 STATUS CHANGE DETECTED via direct check: Report ${updatedReport.id} changed to Fire Out!`);
+                      
+                      // Update all lists immediately
+                      const updatedReportData = { ...updatedReport, status: 'Fire Out', progress: 'Fire Out' };
+                      
+                      setYourReports(prev => {
+                        const updated = prev.map(report => 
+                          String(report.id) === String(updatedReport.id) 
+                            ? updatedReportData
+                            : report
+                        );
+                        return sortReportsByDate(updated);
+                      });
+                      
+                      setAllReports(prev => {
+                        const updated = prev.map(report => 
+                          String(report.id) === String(updatedReport.id) 
+                            ? updatedReportData
+                            : report
+                        );
+                        return sortReportsByDate(updated);
+                      });
+                      
+                      setNearbyReports(prev => {
+                        const updated = prev.map(report => 
+                          String(report.id) === String(updatedReport.id) 
+                            ? updatedReportData
+                            : report
+                        );
+                        return sortReportsByDate(updated);
+                      });
+                      
+                      // Check and show Fire Out modal
+                      const reportId = String(updatedReport.id);
+                      const modalKey = `${reportId}:Fire Out`;
+                      
+                      // Use a function to check shownModalKeys
+                      setShownModalKeys(prevKeys => {
+                        if (!prevKeys.has(modalKey)) {
+                          console.log('🎊 SHOWING FIRE OUT MODAL (via direct report check)!');
+                          
+                          // Send push notification
+                          const location = updatedReport.resolved_address || 
+                                           updatedReport.address || 
+                                           updatedReport.geotag_location || 
+                                           'your reported location';
+                          
+                          const shortLocation = location.length > 50 
+                            ? location.substring(0, 47) + '...' 
+                            : location;
+                          
+                          const pushTitle = '✅ Fire Out - Report Resolved';
+                          const pushBody = `Great news! The fire at ${shortLocation} has been extinguished. Thank you for your report!`;
+                          
+                          sendPushNotification(
+                            pushTitle,
+                            pushBody,
+                            {
+                              type: 'fire_out',
+                              reportId: reportId,
+                              status: 'Fire Out',
+                              location: location,
+                            }
+                          ).then(pushResult => {
+                            if (pushResult) {
+                              console.log('✅ Push notification sent successfully for Fire Out status (direct check)');
+                            }
+                          }).catch(pushError => {
+                            console.error('❌ Error sending push notification:', pushError);
+                          });
+                          
+                          setFireOutReport(updatedReportData);
+                          setShowThankYouModal(true);
+                          
+                          return new Set([...prevKeys, modalKey]);
+                        }
+                        return prevKeys;
+                      });
+                    }
+                  }
+                }
+                
+                // Return unchanged if no updates needed
+                return currentReports;
+              });
+            }
+          } catch (directCheckError) {
+            console.error('❌ Error in direct report check:', directCheckError);
+          }
+        }
       } catch (pollError) {
         console.error('❌ Polling error:', pollError);
       }
-    }, 5000); // Poll every 5 seconds
+    }, 5000); // Poll every 5 seconds - matches web app Fire Out confirmation timing
 
     return () => {
       console.log('🔌 Unsubscribing from real-time channels and stopping polling');
       notifChannel.unsubscribe();
       clearInterval(pollInterval);
     };
-  }, [currentUser?.uid, shownModalKeys]);
+  }, [currentUser?.uid]);
+
+  // Additional aggressive real-time listener specifically for Fire Out status changes
+  useEffect(() => {
+    if (!currentUser?.uid) return;
+
+    console.log('🔥 Setting up AGGRESSIVE Fire Out real-time listener for user:', currentUser.uid);
+    
+    // Create a faster polling interval (every 2 seconds) just for Fire Out detection
+    const fireOutCheckInterval = setInterval(async () => {
+      try {
+        // Fetch latest reports
+        const response = await fetch('https://fire-detection-api-production-f55b.up.railway.app/get_reports', {
+          headers: { 'Accept': 'application/json' }
+        });
+        
+        if (!response.ok) return;
+        
+        const allReports = await response.json();
+        const userReports = allReports.filter(r => r.user_id === currentUser.uid);
+        
+        console.log('🔍 AGGRESSIVE: Checking', userReports.length, 'user reports for Fire Out status...');
+        
+        // Check each user report for Fire Out status
+        for (const report of userReports) {
+          const reportId = String(report.id);
+          const status = (report.status || report.progress || '').toString();
+          
+          console.log('📊 AGGRESSIVE: Report', reportId, 'status:', status);
+          
+          if (status === 'Fire Out') {
+            console.log('🔥🔥🔥 FIRE OUT STATUS DETECTED for report:', reportId);
+            
+            // Update all report lists immediately - ALWAYS update to ensure UI refresh
+            const updatedReport = { ...report, status: 'Fire Out', progress: 'Fire Out' };
+            
+            console.log('🔥 AGGRESSIVE: Force updating yourReports list...');
+            setYourReports(prev => {
+              const existing = prev.find(r => String(r.id) === reportId);
+              console.log('   Existing report in yourReports:', existing ? `Found (status: ${existing.status})` : 'Not found');
+              
+              // Always update the report to trigger re-render
+              const updated = prev.map(r => 
+                String(r.id) === reportId ? updatedReport : r
+              );
+              
+              // If report not found, add it
+              if (!existing) {
+                console.log('   Adding report to yourReports');
+                updated.unshift(updatedReport);
+              }
+              
+              console.log('   ✅ yourReports updated, total reports:', updated.length);
+              return sortReportsByDate(updated);
+            });
+            
+            console.log('🔥 AGGRESSIVE: Force updating allReports list...');
+            setAllReports(prev => {
+              const updated = prev.map(r => 
+                String(r.id) === reportId ? updatedReport : r
+              );
+              
+              const existing = prev.find(r => String(r.id) === reportId);
+              if (!existing) {
+                updated.unshift(updatedReport);
+              }
+              
+              return sortReportsByDate(updated);
+            });
+            
+            console.log('🔥 AGGRESSIVE: Force updating nearbyReports list...');
+            setNearbyReports(prev => {
+              const updated = prev.map(r => 
+                String(r.id) === reportId ? updatedReport : r
+              );
+              return sortReportsByDate(updated);
+            });
+            
+            // Check if modal already shown using state updater
+            const modalKey = `${reportId}:Fire Out`;
+            
+            setShownModalKeys(prevKeys => {
+              const alreadyShown = prevKeys.has(modalKey);
+              console.log('🔍 AGGRESSIVE: Checking modal key:', modalKey);
+              console.log('🔍 AGGRESSIVE: Already shown?', alreadyShown);
+              console.log('🔍 AGGRESSIVE: Current shown keys:', Array.from(prevKeys));
+              
+              if (alreadyShown) {
+                console.log('⏭️ AGGRESSIVE: Skipping - Fire Out modal already shown for report:', reportId);
+                return prevKeys;
+              }
+              
+              console.log('🎊🎊🎊 AGGRESSIVE: SHOWING FIRE OUT MODAL AND NOTIFICATION NOW!');
+              console.log('🎊 AGGRESSIVE: This modal will ONLY show once for this report');
+              
+              const location = report.resolved_address || 
+                             report.address || 
+                             report.geotag_location || 
+                             'your reported location';
+              
+              const shortLocation = location.length > 50 
+                ? location.substring(0, 47) + '...' 
+                : location;
+              
+              // Send push notification FIRST
+              console.log('📱 AGGRESSIVE: Sending push notification for Fire Out');
+              console.log('📱 Title: ✅ Fire Out - Report Resolved');
+              console.log('📱 Body:', `Great news! The fire at ${shortLocation} has been extinguished.`);
+              
+              sendPushNotification(
+                '✅ Fire Out - Report Resolved',
+                `Great news! The fire at ${shortLocation} has been extinguished. Thank you for your report!`,
+                {
+                  type: 'fire_out',
+                  reportId: reportId,
+                  status: 'Fire Out',
+                  location: location,
+                }
+              ).then(result => {
+                console.log('✅ AGGRESSIVE: Push notification sent successfully:', result);
+              }).catch(err => {
+                console.error('❌ AGGRESSIVE: Push notification error:', err);
+                console.error('❌ Error details:', JSON.stringify(err, null, 2));
+              });
+              
+              // Show modal SECOND
+              console.log('🚀 AGGRESSIVE: Setting Fire Out modal state...');
+              console.log('🚀 fireOutReport will be set to:', updatedReport.id);
+              console.log('🚀 showThankYouModal will be set to: true');
+              
+              setFireOutReport(updatedReport);
+              setShowThankYouModal(true);
+              
+              console.log('✅ AGGRESSIVE: Modal and notification triggered!');
+              console.log('✅ Marking modal as shown (will be saved to storage):', modalKey);
+              
+              // TRIGGER FULL REFRESH to update all UI elements
+              console.log('🔄 AGGRESSIVE: Triggering full report refresh...');
+              setTimeout(() => loadReportsFromAPI(), 500);
+              
+              // Return new Set with this modal key added
+              const newKeys = new Set([...prevKeys, modalKey]);
+              console.log('✅ AGGRESSIVE: Total shown keys now:', Array.from(newKeys));
+              return newKeys;
+            });
+          }
+        }
+      } catch (error) {
+        console.error('❌ AGGRESSIVE: Error in Fire Out check:', error);
+      }
+    }, 2000); // Check every 2 seconds for faster detection
+    
+    return () => {
+      console.log('🔌 Stopping aggressive Fire Out checker');
+      clearInterval(fireOutCheckInterval);
+    };
+  }, [currentUser?.uid]);
 
   const loadReportsFromAPI = async (retryCount = 0) => {
     if (!currentUser?.uid) {
@@ -467,6 +1338,14 @@ const CStatus = () => {
         
         // Check for acknowledged (Under Control) reports to show Acknowledgment modal
         checkForAcknowledgedReports(sortedUserReports);
+        
+        // Check for nearby incidents and create notifications
+        // Filter out user's own reports before checking nearby incidents
+        const otherUsersReports = allActiveReports.filter(report => {
+          const reporterId = report.reporterId || report.user_id;
+          return reporterId !== currentUser.uid;
+        });
+        checkForNearbyIncidents(otherUsersReports);
       } else {
         throw new Error(`API returned status: ${response.status}`);
       }
@@ -600,6 +1479,12 @@ const CStatus = () => {
   const [showThankYouModal, setShowThankYouModal] = useState(false);
   const [fireOutReport, setFireOutReport] = useState(null);
   
+  // Debug effect to monitor showThankYouModal state changes
+  useEffect(() => {
+    console.log('🔔 showThankYouModal state changed:', showThankYouModal);
+    console.log('🔔 fireOutReport:', fireOutReport ? fireOutReport.id : 'null');
+  }, [showThankYouModal, fireOutReport]);
+  
   // Acknowledgment modal for "Under Control" status
   const [showAcknowledgmentModal, setShowAcknowledgmentModal] = useState(false);
   const [acknowledgedReport, setAcknowledgedReport] = useState(null);
@@ -650,6 +1535,12 @@ const CStatus = () => {
     image: null,
     numberOfStructures: ''
   });
+  const [showImagePickerModal, setShowImagePickerModal] = useState(false);
+  const [showErrorModal, setShowErrorModal] = useState(false);
+  const [errorModalConfig, setErrorModalConfig] = useState({ title: '', message: '' });
+  const [showConfirmSubmitModal, setShowConfirmSubmitModal] = useState(false);
+  const [showWaitModal, setShowWaitModal] = useState(false);
+  const [waitModalConfig, setWaitModalConfig] = useState({ title: '', message: '' });
   const [showLocationPicker, setShowLocationPicker] = useState(false);
   const [isLocationPickerForEdit, setIsLocationPickerForEdit] = useState(false);
   const [pickedLocation, setPickedLocation] = useState(null); // { latitude, longitude }
@@ -772,64 +1663,57 @@ const CStatus = () => {
   };
 
   const handleImagePicker = () => {
-    Alert.alert(
-      'Upload Picture',
-      'Choose an option',
-      [
-        {
-          text: 'Camera',
-          onPress: async () => {
-            const hasPermission = await requestCameraPermission();
-            if (!hasPermission) {
-              Alert.alert('Permission Denied', 'Camera permission is required to take a photo');
-              return;
-            }
-            
-            const result = await ImagePicker.launchCameraAsync({
-              mediaTypes: ImagePicker.MediaTypeOptions.Images,
-              allowsEditing: true,
-              aspect: [4, 3],
-              quality: 0.8,
-            });
+    setShowImagePickerModal(true);
+  };
 
-            if (!result.canceled && result.assets[0]) {
-              setEmergencyData({
-                ...emergencyData,
-                image: result.assets[0].uri
-              });
-            }
-          }
-        },
-        {
-          text: 'Gallery',
-          onPress: async () => {
-            const hasPermission = await requestMediaLibraryPermission();
-            if (!hasPermission) {
-              Alert.alert('Permission Denied', 'Gallery permission is required to select a photo');
-              return;
-            }
-            
-            const result = await ImagePicker.launchImageLibraryAsync({
-              mediaTypes: ImagePicker.MediaTypeOptions.Images,
-              allowsEditing: true,
-              aspect: [4, 3],
-              quality: 0.8,
-            });
+  const handleCameraOption = async () => {
+    setShowImagePickerModal(false);
+    setTimeout(async () => {
+      const hasPermission = await requestCameraPermission();
+      if (!hasPermission) {
+        Alert.alert('Permission Denied', 'Camera permission is required to take a photo');
+        return;
+      }
+      
+      const result = await ImagePicker.launchCameraAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        allowsEditing: true,
+        aspect: [4, 3],
+        quality: 0.8,
+      });
 
-            if (!result.canceled && result.assets[0]) {
-              setEmergencyData({
-                ...emergencyData,
-                image: result.assets[0].uri
-              });
-            }
-          }
-        },
-        {
-          text: 'Cancel',
-          style: 'cancel'
-        }
-      ]
-    );
+      if (!result.canceled && result.assets[0]) {
+        setEmergencyData({
+          ...emergencyData,
+          image: result.assets[0].uri
+        });
+      }
+    }, 300);
+  };
+
+  const handleGalleryOption = async () => {
+    setShowImagePickerModal(false);
+    setTimeout(async () => {
+      const hasPermission = await requestMediaLibraryPermission();
+      if (!hasPermission) {
+        Alert.alert('Permission Denied', 'Gallery permission is required to select a photo');
+        return;
+      }
+      
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        allowsEditing: true,
+        aspect: [4, 3],
+        quality: 0.8,
+      });
+
+      if (!result.canceled && result.assets[0]) {
+        setEmergencyData({
+          ...emergencyData,
+          image: result.assets[0].uri
+        });
+      }
+    }, 300);
   };
 
   const submitEmergencyToApi = async () => {
@@ -853,75 +1737,78 @@ const CStatus = () => {
         const now = Date.now();
         localSubmissions = localSubmissions.filter(timestamp => now - timestamp < 24 * 60 * 60 * 1000);
         
-        // Check local cache limits (IMMEDIATE CHECK)
-        const last5Minutes = now - 5 * 60 * 1000;
-        const recentSubmissions = localSubmissions.filter(timestamp => timestamp > last5Minutes);
+        // 🚫 RATE LIMITING - COMMENTED OUT FOR TESTING
+        // Uncomment the code below when ready to enable rate limiting
         
-        if (recentSubmissions.length >= 1) {
-          const lastSubmission = Math.max(...recentSubmissions);
-          const minutesLeft = Math.ceil((lastSubmission + 5 * 60 * 1000 - now) / 60000);
-          setIsSubmitting(false);
-          Alert.alert(
-            '⚠️ Please Wait',
-            `You just submitted a report ${Math.floor((now - lastSubmission) / 1000)} seconds ago.\n\nPlease wait ${minutesLeft} minute${minutesLeft !== 1 ? 's' : ''} before submitting another report. This helps prevent duplicate reports.`,
-            [{ text: 'OK' }]
-          );
-          return;
-        }
-        
-        // Check hour limit
-        const lastHour = now - 60 * 60 * 1000;
-        const submissionsLastHour = localSubmissions.filter(timestamp => timestamp > lastHour);
-        
-        if (submissionsLastHour.length >= 2) {
-          const oldestInHour = Math.min(...submissionsLastHour);
-          const minutesLeft = Math.ceil((oldestInHour + 60 * 60 * 1000 - now) / 60000);
-          setIsSubmitting(false);
-          Alert.alert(
-            '⚠️ Report Limit Reached',
-            `You have submitted 2 reports in the last hour.\n\nPlease wait ${minutesLeft} minute${minutesLeft !== 1 ? 's' : ''} before submitting another report.`,
-            [{ text: 'OK' }]
-          );
-          return;
-        }
-        
-        // Check 24 hour limit
-        if (localSubmissions.length >= 5) {
-          const oldestSubmission = Math.min(...localSubmissions);
-          const hoursLeft = Math.ceil((oldestSubmission + 24 * 60 * 60 * 1000 - now) / (60 * 60 * 1000));
-          setIsSubmitting(false);
-          Alert.alert(
-            '⚠️ Daily Limit Reached',
-            `You have reached the maximum of 5 reports per 24 hours.\n\nPlease wait ${hoursLeft} hour${hoursLeft !== 1 ? 's' : ''} before submitting another report.\n\nThis limit helps prevent spam and ensures quality reports.`,
-            [{ text: 'OK' }]
-          );
-          return;
-        }
-        
-        // Also check database as backup (check both reporterId and user_id fields)
-        const { data: recentReports, error: checkError } = await supabase
-          .from('fire_reports')
-          .select('id, created_at')
-          .or(`reporterId.eq.${currentUser.uid},user_id.eq.${currentUser.uid}`)
-          .order('created_at', { ascending: false })
-          .limit(10);
-
-        if (!checkError && recentReports && recentReports.length > 0) {
-          const last5MinutesDate = new Date(now - 5 * 60 * 1000);
-          const dbReportsLast5Min = recentReports.filter(r => new Date(r.created_at) > last5MinutesDate);
-          
-          if (dbReportsLast5Min.length >= 1) {
-            const lastReportTime = new Date(dbReportsLast5Min[0].created_at).getTime();
-            const minutesLeft = Math.ceil((lastReportTime + 5 * 60 * 1000 - now) / 60000);
-            setIsSubmitting(false);
-            Alert.alert(
-              '⚠️ Please Wait',
-              `Please wait ${minutesLeft} minute${minutesLeft !== 1 ? 's' : ''} before submitting another report.`,
-              [{ text: 'OK' }]
-            );
-            return;
-          }
-        }
+        // // Check local cache limits (IMMEDIATE CHECK)
+        // const last5Minutes = now - 5 * 60 * 1000;
+        // const recentSubmissions = localSubmissions.filter(timestamp => timestamp > last5Minutes);
+        // 
+        // if (recentSubmissions.length >= 1) {
+        //   const lastSubmission = Math.max(...recentSubmissions);
+        //   const minutesLeft = Math.ceil((lastSubmission + 5 * 60 * 1000 - now) / 60000);
+        //   setIsSubmitting(false);
+        //   setWaitModalConfig({
+        //     title: 'Please Wait',
+        //     message: `You just submitted a report ${Math.floor((now - lastSubmission) / 1000)} seconds ago.\n\nPlease wait ${minutesLeft} minute${minutesLeft !== 1 ? 's' : ''} before submitting another report. This helps prevent duplicate reports.`
+        //   });
+        //   setShowWaitModal(true);
+        //   return;
+        // }
+        // 
+        // // Check hour limit
+        // const lastHour = now - 60 * 60 * 1000;
+        // const submissionsLastHour = localSubmissions.filter(timestamp => timestamp > lastHour);
+        // 
+        // if (submissionsLastHour.length >= 2) {
+        //   const oldestInHour = Math.min(...submissionsLastHour);
+        //   const minutesLeft = Math.ceil((oldestInHour + 60 * 60 * 1000 - now) / 60000);
+        //   setIsSubmitting(false);
+        //   setWaitModalConfig({
+        //     title: 'Report Limit Reached',
+        //     message: `You have submitted 2 reports in the last hour.\n\nPlease wait ${minutesLeft} minute${minutesLeft !== 1 ? 's' : ''} before submitting another report.`
+        //   });
+        //   setShowWaitModal(true);
+        //   return;
+        // }
+        // 
+        // // Check 24 hour limit
+        // if (localSubmissions.length >= 5) {
+        //   const oldestSubmission = Math.min(...localSubmissions);
+        //   const hoursLeft = Math.ceil((oldestSubmission + 24 * 60 * 60 * 1000 - now) / (60 * 60 * 1000));
+        //   setIsSubmitting(false);
+        //   setWaitModalConfig({
+        //     title: 'Daily Limit Reached',
+        //     message: `You have reached the maximum of 5 reports per 24 hours.\n\nPlease wait ${hoursLeft} hour${hoursLeft !== 1 ? 's' : ''} before submitting another report.\n\nThis limit helps prevent spam and ensures quality reports.`
+        //   });
+        //   setShowWaitModal(true);
+        //   return;
+        // }
+        // 
+        // // Also check database as backup (check both reporterId and user_id fields)
+        // const { data: recentReports, error: checkError } = await supabase
+        //   .from('fire_reports')
+        //   .select('id, created_at')
+        //   .or(`reporterId.eq.${currentUser.uid},user_id.eq.${currentUser.uid}`)
+        //   .order('created_at', { ascending: false })
+        //   .limit(10);
+        // 
+        // if (!checkError && recentReports && recentReports.length > 0) {
+        //   const last5MinutesDate = new Date(now - 5 * 60 * 1000);
+        //   const dbReportsLast5Min = recentReports.filter(r => new Date(r.created_at) > last5MinutesDate);
+        //   
+        //   if (dbReportsLast5Min.length >= 1) {
+        //     const lastReportTime = new Date(dbReportsLast5Min[0].created_at).getTime();
+        //     const minutesLeft = Math.ceil((lastReportTime + 5 * 60 * 1000 - now) / 60000);
+        //     setIsSubmitting(false);
+        //     setWaitModalConfig({
+        //       title: 'Please Wait',
+        //       message: `Please wait ${minutesLeft} minute${minutesLeft !== 1 ? 's' : ''} before submitting another report.`
+        //     });
+        //     setShowWaitModal(true);
+        //     return;
+        //   }
+        // }
         
         // Record this submission attempt in local cache
         localSubmissions.push(now);
@@ -1163,6 +2050,131 @@ const CStatus = () => {
         // Don't fail the report submission if notification creation fails
       }
 
+      // ✅ Create notification for the citizen who submitted the report
+      try {
+        console.log('🔔 Creating notification for citizen who submitted report...');
+        const citizenNotification = {
+          user_id: currentUser.uid,
+          user_type: 'citizen',
+          title: 'Your report has been submitted!',
+          message: `AI has analyzed your report to have ${data?.confidence || 'N/A'}% fire confidence`,
+          type: 'user_action',
+          priority: 'high',
+          related_report_id: data?.id || String(newReport.id),
+          is_read: false,
+        };
+
+        const { data: citizenNotifData, error: citizenNotifError } = await supabase
+          .from('notifications')
+          .insert(citizenNotification)
+          .select();
+
+        if (citizenNotifError) {
+          console.error('❌ Error creating citizen notification:', citizenNotifError);
+        } else {
+          console.log('✅ Successfully created citizen notification:', citizenNotifData);
+          
+          // Send push notification to the device
+          await sendPushNotification(
+            'Your report has been submitted!',
+            `AI has analyzed your report to have ${data?.confidence || 'N/A'}% fire confidence`,
+            {
+              type: 'report_submitted',
+              reportId: data?.id || String(newReport.id),
+              confidence: data?.confidence,
+              address: pickedAddress || currentLocation,
+            }
+          );
+        }
+      } catch (citizenNotifErr) {
+        console.error('❌ Error creating citizen notification:', citizenNotifErr);
+        // Don't fail the report submission if notification creation fails
+      }
+
+      // ✅ Automatically notify nearby stations based on location
+      try {
+        console.log('🔔 Finding nearby stations for automatic notification...');
+        
+        // Get report coordinates
+        const reportLat = parseFloat(data?.latitude || pickedLocation?.latitude);
+        const reportLng = parseFloat(data?.longitude || pickedLocation?.longitude);
+        
+        if (!reportLat || !reportLng) {
+          console.warn('⚠️ Report location not available, skipping station notification');
+        } else {
+          console.log('📍 Report location:', { reportLat, reportLng });
+          
+          // Get all stations with their coverage areas
+          const { data: stations, error: stationsError } = await supabase
+            .from('station_users')
+            .select('id, station_name, latitude, longitude, coverage_radius')
+            .eq('account_status', 'active');
+          
+          if (stationsError) {
+            console.error('❌ Error fetching stations:', stationsError);
+          } else if (stations && stations.length > 0) {
+            console.log(`📊 Found ${stations.length} active station(s)`);
+            
+            // Calculate distance to each station and find those within coverage
+            const nearbyStations = stations.filter(station => {
+              if (!station.latitude || !station.longitude || !station.coverage_radius) {
+                return false;
+              }
+              
+              // Calculate distance using Haversine formula
+              const R = 6371; // Earth's radius in km
+              const dLat = (station.latitude - reportLat) * Math.PI / 180;
+              const dLon = (station.longitude - reportLng) * Math.PI / 180;
+              const a = 
+                Math.sin(dLat/2) * Math.sin(dLat/2) +
+                Math.cos(reportLat * Math.PI / 180) * Math.cos(station.latitude * Math.PI / 180) *
+                Math.sin(dLon/2) * Math.sin(dLon/2);
+              const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+              const distance = R * c; // Distance in km
+              
+              const isWithinCoverage = distance <= (station.coverage_radius / 1000); // Convert radius to km
+              
+              console.log(`📏 Station ${station.station_name}: ${distance.toFixed(2)}km away, coverage: ${(station.coverage_radius / 1000).toFixed(2)}km, within range: ${isWithinCoverage}`);
+              
+              return isWithinCoverage;
+            });
+            
+            if (nearbyStations.length > 0) {
+              console.log(`✅ Found ${nearbyStations.length} station(s) within coverage area`);
+              
+              // Create notifications for nearby stations
+              const stationNotifications = nearbyStations.map(station => ({
+                user_id: station.id,
+                user_type: 'station',
+                type: 'fire_alert',
+                related_report_id: String(data?.id || newReport.id),
+                title: `🚨 New Fire Report in Your Area`,
+                message: `A fire has been reported at ${pickedAddress || 'an unknown location'}.\n\nConfidence: ${data?.confidence || 'N/A'}%\nCause: ${emergencyData.cause || 'Not specified'}\n\nThis report is within your station's coverage area. Please review and respond.`,
+                priority: 'urgent',
+                is_read: false
+              }));
+              
+              const { data: stationNotifData, error: stationNotifError } = await supabase
+                .from('notifications')
+                .insert(stationNotifications)
+                .select();
+              
+              if (stationNotifError) {
+                console.error('❌ Error creating station notifications:', stationNotifError);
+              } else {
+                console.log(`✅ Successfully notified ${nearbyStations.length} station(s):`, 
+                  nearbyStations.map(s => s.station_name).join(', '));
+              }
+            } else {
+              console.log('ℹ️ No stations found within coverage area of this report');
+            }
+          }
+        }
+      } catch (stationNotifErr) {
+        console.error('❌ Error notifying nearby stations:', stationNotifErr);
+        // Don't fail the report submission if notification creation fails
+      }
+
       // Add to local state immediately for better UX, then sort
       setYourReports(prevReports => sortReportsByDate([newReport, ...prevReports]));
 
@@ -1215,26 +2227,17 @@ const CStatus = () => {
 
   const handleSubmitEmergency = () => {
     if (!emergencyData.cause.trim()) {
-      Alert.alert('Error', 'Please write the cause of fire');
+      setErrorModalConfig({ title: 'Error', message: 'Please write the cause of fire' });
+      setShowErrorModal(true);
       return;
     }
     if (!emergencyData.image) {
-      Alert.alert('Error', 'Please upload a picture');
+      setErrorModalConfig({ title: 'Error', message: 'Please upload a picture' });
+      setShowErrorModal(true);
       return;
     }
 
-    Alert.alert(
-      'Confirm Emergency Report',
-      'Are you sure you want to report this emergency? This will immediately notify emergency services.',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Submit',
-          style: 'destructive',
-          onPress: submitEmergencyToApi
-        }
-      ]
-    );
+    setShowConfirmSubmitModal(true);
   };
 
   const openReportModal = (report) => {
@@ -1430,30 +2433,65 @@ const CStatus = () => {
           <Text className="text-white font-semibold text-base mt-2">Report Emergency</Text>
         </TouchableOpacity>
 
-        {/* Tab Buttons */}
-        <View className="flex-row mb-4 bg-white rounded-lg p-1 shadow-sm">
+        {/* Clean Modern Tab Buttons */}
+        <View className="flex-row mb-4 gap-2">
           <TouchableOpacity
-            className={`flex-1 py-3 px-4 rounded-lg ${activeTab === 'Your Reports' ? 'bg-[#ff512f]' : 'bg-transparent'}`}
+            className={`flex-1 py-3.5 px-4 rounded-xl ${activeTab === 'Your Reports' ? 'bg-[#ff512f]' : 'bg-white'}`}
             onPress={() => setActiveTab('Your Reports')}
+            activeOpacity={0.7}
+            style={{
+              shadowColor: activeTab === 'Your Reports' ? '#ff512f' : '#000',
+              shadowOffset: { width: 0, height: 2 },
+              shadowOpacity: activeTab === 'Your Reports' ? 0.3 : 0.08,
+              shadowRadius: 4,
+              elevation: 3,
+            }}
           >
-            <Text className={`text-center font-semibold ${activeTab === 'Your Reports' ? 'text-white' : 'text-gray-600'}`}>
-              Your Reports ({yourReports.length})
+            <Text className={`text-center font-bold text-sm ${activeTab === 'Your Reports' ? 'text-white' : 'text-gray-700'}`}>
+              Your Reports
+            </Text>
+            <Text className={`text-center font-bold text-xs mt-0.5 ${activeTab === 'Your Reports' ? 'text-white/80' : 'text-gray-500'}`}>
+              ({yourReports.length})
             </Text>
           </TouchableOpacity>
+          
           <TouchableOpacity
-            className={`flex-1 py-3 px-4 rounded-lg ${activeTab === 'Nearby Reports' ? 'bg-[#ff512f]' : 'bg-transparent'}`}
+            className={`flex-1 py-3.5 px-4 rounded-xl ${activeTab === 'Nearby Reports' ? 'bg-[#ff512f]' : 'bg-white'}`}
             onPress={() => setActiveTab('Nearby Reports')}
+            activeOpacity={0.7}
+            style={{
+              shadowColor: activeTab === 'Nearby Reports' ? '#ff512f' : '#000',
+              shadowOffset: { width: 0, height: 2 },
+              shadowOpacity: activeTab === 'Nearby Reports' ? 0.3 : 0.08,
+              shadowRadius: 4,
+              elevation: 3,
+            }}
           >
-            <Text className={`text-center font-semibold ${activeTab === 'Nearby Reports' ? 'text-white' : 'text-gray-600'}`}>
-              Nearby ({nearbyReports.length})
+            <Text className={`text-center font-bold text-sm ${activeTab === 'Nearby Reports' ? 'text-white' : 'text-gray-700'}`}>
+              Nearby
+            </Text>
+            <Text className={`text-center font-bold text-xs mt-0.5 ${activeTab === 'Nearby Reports' ? 'text-white/80' : 'text-gray-500'}`}>
+              ({nearbyReports.length})
             </Text>
           </TouchableOpacity>
+          
           <TouchableOpacity
-            className={`flex-1 py-3 px-4 rounded-lg ${activeTab === 'All' ? 'bg-[#ff512f]' : 'bg-transparent'}`}
+            className={`flex-1 py-3.5 px-4 rounded-xl ${activeTab === 'All' ? 'bg-[#ff512f]' : 'bg-white'}`}
             onPress={() => setActiveTab('All')}
+            activeOpacity={0.7}
+            style={{
+              shadowColor: activeTab === 'All' ? '#ff512f' : '#000',
+              shadowOffset: { width: 0, height: 2 },
+              shadowOpacity: activeTab === 'All' ? 0.3 : 0.08,
+              shadowRadius: 4,
+              elevation: 3,
+            }}
           >
-            <Text className={`text-center font-semibold ${activeTab === 'All' ? 'text-white' : 'text-gray-600'}`}>
-              All ({allReports.length})
+            <Text className={`text-center font-bold text-sm ${activeTab === 'All' ? 'text-white' : 'text-gray-700'}`}>
+              All
+            </Text>
+            <Text className={`text-center font-bold text-xs mt-0.5 ${activeTab === 'All' ? 'text-white/80' : 'text-gray-500'}`}>
+              ({allReports.length})
             </Text>
           </TouchableOpacity>
         </View>
@@ -1468,6 +2506,255 @@ const CStatus = () => {
           {renderTabContent()}
         </ScrollView>
       </View>
+
+      {/* Image Picker Modal */}
+      <Modal
+        visible={showImagePickerModal}
+        animationType="fade"
+        transparent={true}
+        onRequestClose={() => setShowImagePickerModal(false)}
+      >
+        <View className="flex-1 bg-black/70 justify-center items-center px-4">
+          <View className="bg-white rounded-3xl w-full max-w-sm overflow-hidden shadow-2xl" style={{
+            shadowColor: '#000',
+            shadowOffset: { width: 0, height: 10 },
+            shadowOpacity: 0.3,
+            shadowRadius: 20,
+            elevation: 15,
+          }}>
+            {/* Header */}
+            <LinearGradient
+              colors={['#ff6b35', '#ff512f', '#dc2626']}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 0 }}
+              style={{
+                paddingTop: 24,
+                paddingBottom: 24,
+                paddingHorizontal: 20,
+                alignItems: 'center',
+              }}
+            >
+              <View className="bg-white/20 rounded-full p-3 mb-3" style={{
+                backgroundColor: 'rgba(255, 255, 255, 0.25)',
+                shadowColor: '#000',
+                shadowOffset: { width: 0, height: 2 },
+                shadowOpacity: 0.2,
+                shadowRadius: 4,
+                elevation: 4,
+              }}>
+                <MaterialIcons name="add-a-photo" size={32} color="#ffffff" />
+              </View>
+              <Text className="text-white text-2xl font-bold mb-1" style={{
+                textShadowColor: 'rgba(0, 0, 0, 0.2)',
+                textShadowOffset: { width: 0, height: 1 },
+                textShadowRadius: 3,
+              }}>Upload Picture</Text>
+              <Text className="text-sm text-center" style={{ 
+                color: 'rgba(255, 255, 255, 0.95)',
+                textShadowColor: 'rgba(0, 0, 0, 0.15)',
+                textShadowOffset: { width: 0, height: 1 },
+                textShadowRadius: 2,
+              }}>Choose an option to add your photo</Text>
+            </LinearGradient>
+
+            {/* Options */}
+            <View className="p-5">
+              <TouchableOpacity
+                className="bg-blue-500 rounded-2xl p-5 mb-3 items-center shadow-lg flex-row"
+                onPress={handleCameraOption}
+                activeOpacity={0.85}
+                style={{
+                  shadowColor: '#3b82f6',
+                  shadowOffset: { width: 0, height: 4 },
+                  shadowOpacity: 0.3,
+                  shadowRadius: 8,
+                  elevation: 6,
+                }}
+              >
+                <View className="bg-white/20 rounded-full p-2 mr-3">
+                  <MaterialIcons name="camera-alt" size={24} color="#ffffff" />
+                </View>
+                <Text className="text-white font-bold text-lg flex-1">Take Photo</Text>
+                <MaterialIcons name="chevron-right" size={24} color="#ffffff" />
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                className="bg-purple-500 rounded-2xl p-5 mb-3 items-center shadow-lg flex-row"
+                onPress={handleGalleryOption}
+                activeOpacity={0.85}
+                style={{
+                  shadowColor: '#a855f7',
+                  shadowOffset: { width: 0, height: 4 },
+                  shadowOpacity: 0.3,
+                  shadowRadius: 8,
+                  elevation: 6,
+                }}
+              >
+                <View className="bg-white/20 rounded-full p-2 mr-3">
+                  <MaterialIcons name="photo-library" size={24} color="#ffffff" />
+                </View>
+                <Text className="text-white font-bold text-lg flex-1">Choose from Gallery</Text>
+                <MaterialIcons name="chevron-right" size={24} color="#ffffff" />
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                className="bg-gray-100 rounded-2xl p-4 items-center border-2 border-gray-200"
+                onPress={() => setShowImagePickerModal(false)}
+                activeOpacity={0.7}
+              >
+                <Text className="text-gray-700 font-bold text-base">Cancel</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Error Modal */}
+      <Modal
+        visible={showErrorModal}
+        animationType="fade"
+        transparent={true}
+        onRequestClose={() => setShowErrorModal(false)}
+      >
+        <View className="flex-1 bg-black/70 justify-center items-center px-4">
+          <View className="bg-white rounded-3xl w-full max-w-sm overflow-hidden shadow-2xl" style={{
+            shadowColor: '#000',
+            shadowOffset: { width: 0, height: 10 },
+            shadowOpacity: 0.3,
+            shadowRadius: 20,
+            elevation: 15,
+          }}>
+            {/* Error Icon and Title */}
+            <View className="p-6 items-center">
+              <View className="bg-red-100 rounded-full p-4 mb-4">
+                <MaterialIcons name="error-outline" size={48} color="#ef4444" />
+              </View>
+              <Text className="text-2xl font-bold text-gray-800 mb-2">{errorModalConfig.title}</Text>
+              <Text className="text-gray-600 text-center text-base leading-6">{errorModalConfig.message}</Text>
+            </View>
+            
+            {/* OK Button */}
+            <View className="px-6 pb-6">
+              <TouchableOpacity
+                className="bg-red-500 rounded-2xl py-4 items-center shadow-lg"
+                onPress={() => setShowErrorModal(false)}
+                activeOpacity={0.85}
+                style={{
+                  shadowColor: '#ef4444',
+                  shadowOffset: { width: 0, height: 4 },
+                  shadowOpacity: 0.3,
+                  shadowRadius: 8,
+                  elevation: 6,
+                }}
+              >
+                <Text className="text-white font-bold text-lg">OK</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Confirm Submit Modal */}
+      <Modal
+        visible={showConfirmSubmitModal}
+        animationType="fade"
+        transparent={true}
+        onRequestClose={() => setShowConfirmSubmitModal(false)}
+      >
+        <View className="flex-1 bg-black/70 justify-center items-center px-4">
+          <View className="bg-white rounded-3xl w-full max-w-sm overflow-hidden shadow-2xl" style={{
+            shadowColor: '#000',
+            shadowOffset: { width: 0, height: 10 },
+            shadowOpacity: 0.3,
+            shadowRadius: 20,
+            elevation: 15,
+          }}>
+            {/* Warning Icon and Title */}
+            <View className="p-6 items-center">
+              <View className="bg-orange-100 rounded-full p-4 mb-4">
+                <MaterialIcons name="warning" size={48} color="#f59e0b" />
+              </View>
+              <Text className="text-2xl font-bold text-gray-800 mb-2">Confirm Emergency Report</Text>
+              <Text className="text-gray-600 text-center text-base leading-6">
+                Are you sure you want to report this emergency? This will immediately notify emergency services.
+              </Text>
+            </View>
+            
+            {/* Action Buttons */}
+            <View className="px-6 pb-6 flex-row gap-3">
+              <TouchableOpacity
+                className="flex-1 bg-gray-100 rounded-2xl py-4 items-center border-2 border-gray-200"
+                onPress={() => setShowConfirmSubmitModal(false)}
+                activeOpacity={0.7}
+              >
+                <Text className="text-gray-700 font-bold text-base">Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                className="flex-1 bg-red-500 rounded-2xl py-4 items-center shadow-lg"
+                onPress={() => {
+                  setShowConfirmSubmitModal(false);
+                  submitEmergencyToApi();
+                }}
+                activeOpacity={0.85}
+                style={{
+                  shadowColor: '#ef4444',
+                  shadowOffset: { width: 0, height: 4 },
+                  shadowOpacity: 0.3,
+                  shadowRadius: 8,
+                  elevation: 6,
+                }}
+              >
+                <Text className="text-white font-bold text-base">Submit</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Wait/Rate Limit Modal */}
+      <Modal
+        visible={showWaitModal}
+        animationType="fade"
+        transparent={true}
+        onRequestClose={() => setShowWaitModal(false)}
+      >
+        <View className="flex-1 bg-black/70 justify-center items-center px-4">
+          <View className="bg-white rounded-3xl w-full max-w-sm overflow-hidden shadow-2xl" style={{
+            shadowColor: '#000',
+            shadowOffset: { width: 0, height: 10 },
+            shadowOpacity: 0.3,
+            shadowRadius: 20,
+            elevation: 15,
+          }}>
+            {/* Warning Icon and Title */}
+            <View className="p-6 items-center">
+              <View className="bg-amber-100 rounded-full p-4 mb-4">
+                <MaterialIcons name="schedule" size={48} color="#f59e0b" />
+              </View>
+              <Text className="text-2xl font-bold text-gray-800 mb-2">{waitModalConfig.title}</Text>
+              <Text className="text-gray-600 text-center text-base leading-6">{waitModalConfig.message}</Text>
+            </View>
+            
+            {/* OK Button */}
+            <View className="px-6 pb-6">
+              <TouchableOpacity
+                className="bg-amber-500 rounded-2xl py-4 items-center shadow-lg"
+                onPress={() => setShowWaitModal(false)}
+                activeOpacity={0.85}
+                style={{
+                  shadowColor: '#f59e0b',
+                  shadowOffset: { width: 0, height: 4 },
+                  shadowOpacity: 0.3,
+                  shadowRadius: 8,
+                  elevation: 6,
+                }}
+              >
+                <Text className="text-white font-bold text-base">OK</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
 
       {/* Emergency Reporting Modal */}
       <Modal
@@ -1653,7 +2940,7 @@ const CStatus = () => {
             </View>
 
             {/* Enhanced Action Buttons */}
-            <View className="flex-row gap-4 mt-4 mb-2">
+            <View className="flex-row gap-4 mt-4 mb-6">
               <TouchableOpacity
                 className="flex-1 bg-gray-100 rounded-2xl py-4 px-4 border-2 border-gray-200 shadow-md"
                 onPress={() => setShowEmergencyModal(false)}
@@ -2066,7 +3353,10 @@ const CStatus = () => {
             elevation: 15,
           }}>
             {selectedReport && (
-              <ScrollView showsVerticalScrollIndicator={false}>
+              <ScrollView 
+                showsVerticalScrollIndicator={false}
+                contentContainerStyle={{ paddingBottom: 20 }}
+              >
                 {/* Enhanced Header */}
                 <LinearGradient
                   colors={['#ff6b35', '#ff512f', '#dc2626']}
@@ -2100,7 +3390,7 @@ const CStatus = () => {
                   </TouchableOpacity>
                 </LinearGradient>
 
-                <View className="px-5 pt-5 pb-6">
+                <View className="px-5 pt-5 pb-16">
                   {/* Fire Image */}
                   <View className="mb-5">
                     <Image
@@ -2297,7 +3587,7 @@ const CStatus = () => {
 
                   {/* Action Buttons */}
                   {selectedReport && (
-                    <View className="flex-row gap-3 mt-2">
+                    <View className="flex-row gap-3 mt-2 mb-6">
                       <TouchableOpacity
                         className="flex-1 bg-gray-100 rounded-2xl py-4 px-4 border-2 border-gray-200"
                         onPress={() => openEditFromReport(selectedReport)}
@@ -2699,7 +3989,7 @@ const CStatus = () => {
               ) : null}
 
               {/* Enhanced Action Buttons */}
-              <View className="flex-row gap-4 mt-4">
+              <View className="flex-row gap-4 mt-4 mb-6">
                 <TouchableOpacity 
                   className="flex-1 bg-gray-100 rounded-2xl py-4 px-4 border-2 border-gray-200"
                   onPress={() => setShowEditModal(false)}

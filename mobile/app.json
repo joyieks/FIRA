@@ -50,7 +50,15 @@
         }
       ],
       "expo-web-browser",
-      "expo-font"
+      "expo-font",
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/images/mobilelogo.png",
+          "color": "#ff512f",
+          "sounds": []
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true

@@ -50,6 +50,7 @@ export async function notifyResponderOnAssignment(responderId, reportId, reportD
         title: title,
         message: message,
         priority: 'high',
+        status: 'pending',
         is_read: false
       })
       .select()
@@ -86,9 +87,7 @@ export async function notifyRespondersOnBulkAssignment(responderIds, reportId, r
     const { data: responders, error: responderError } = await supabase
       .from('responders')
       .select('id, first_name, last_name, station_id')
-      .in('id', responderIds)
-      .eq('active', true)
-      .eq('status', 'active');
+      .in('id', responderIds);
 
     if (responderError) {
       console.error('❌ Error fetching responder details:', responderError);
@@ -96,8 +95,8 @@ export async function notifyRespondersOnBulkAssignment(responderIds, reportId, r
     }
 
     if (!responders || responders.length === 0) {
-      console.log('⚠️ No active responders found');
-      return { success: false, message: 'No active responders found' };
+      console.log('⚠️ No responders found with provided IDs');
+      return { success: false, message: 'No responders found' };
     }
 
     // Get report location if available
@@ -119,6 +118,7 @@ export async function notifyRespondersOnBulkAssignment(responderIds, reportId, r
         title: title,
         message: message,
         priority: 'high',
+        status: 'pending',
         is_read: false
       }));
 

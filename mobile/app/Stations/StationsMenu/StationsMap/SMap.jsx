@@ -4,7 +4,7 @@ import MapView, { Marker, PROVIDER_GOOGLE, Circle, Callout } from 'react-native-
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { supabase } from '../../../config/supabase';
 
-export default function SMap() {
+export default function SMap({ reportIdToOpen, onReportOpened }) {
   const [isLoading, setIsLoading] = useState(true);
   const [stations, setStations] = useState([]);
   const [myStation, setMyStation] = useState(null);
@@ -16,6 +16,57 @@ export default function SMap() {
   const [responders, setResponders] = useState([]);
   const [isNotifying, setIsNotifying] = useState(false);
   const [currentStationId, setCurrentStationId] = useState(null);
+
+  // Helper function to clean alarm level text
+  const cleanAlarmLevel = (alarmLevel) => {
+    if (!alarmLevel) return alarmLevel;
+    if (typeof alarmLevel === 'string' && alarmLevel.includes('- structure count not provided')) {
+      return alarmLevel.split('- structure count not provided')[0].trim();
+    }
+    return alarmLevel;
+  };
+
+  // Determine suggested alarm based on number of structures
+  const determineSuggestedAlarm = (numStructures) => {
+    const count = Number(numStructures);
+    if (!count || isNaN(count)) return null;
+    if (count >= 80) return 'GENERAL ALARM';
+    if (count >= 36) return 'TASK FORCE DELTA';
+    if (count >= 32) return 'TASK FORCE CHARLIE';
+    if (count >= 28) return 'TASK FORCE BRAVO';
+    if (count >= 24) return 'TASK FORCE ALPHA';
+    if (count >= 20) return '5th Alarm';
+    if (count >= 16) return '4th Alarm';
+    if (count >= 12) return '3rd Alarm';
+    if (count >= 8) return '2nd Alarm';
+    if (count >= 4) return '1st Alarm';
+    return 'Under Control';
+  };
+
+  // Resolve the best available alarm level
+  const resolveAlarmLevel = (report) => {
+    const normalize = (value) => {
+      if (!value) return null;
+      const cleaned = cleanAlarmLevel(String(value).trim());
+      if (!cleaned) return null;
+      const lower = cleaned.toLowerCase();
+      if (lower === 'unknown' || lower === 'none') return null;
+      return cleaned;
+    };
+
+    const candidates = [
+      normalize(report?.final_fire_alarm_level),
+      normalize(report?.recommended_alarm_level),
+      normalize(report?.suggested_alarm_level),
+      normalize(report?.ai_suggested_alarm),
+      normalize(report?.alarm_level)
+    ].filter(Boolean);
+
+    if (candidates.length > 0) return candidates[0];
+
+    const computed = determineSuggestedAlarm(report?.number_of_structures_on_fire || report?.structures_affected);
+    return computed || '1st Alarm';
+  };
 
   // Color helpers (mirror web/admin)
   const getAlarmLevelColor = (alarmLevel) => {
@@ -38,8 +89,8 @@ export default function SMap() {
   };
 
   const getMarkerColor = (report) => {
-    const alarm = report?.recommended_alarm_level || report?.alarm_level || report?.final_fire_alarm_level;
-    if (alarm) return getAlarmLevelColor(alarm);
+    const resolved = resolveAlarmLevel(report);
+    if (resolved) return getAlarmLevelColor(resolved);
     const pred = report?.prediction;
     if (pred === 'Fire') return '#ef4444';
     if (pred === 'No Fire') return '#93c5fd';
@@ -47,7 +98,7 @@ export default function SMap() {
   };
 
   const formatAlarm = (report) => {
-    const level = report?.recommended_alarm_level || report?.alarm_level || report?.final_fire_alarm_level;
+    const level = resolveAlarmLevel(report);
     if (!level) return null;
     const l = String(level).toLowerCase();
     if (l.includes('fifth')) return 'Fifth Alarm - 20 fire trucks';
@@ -103,7 +154,10 @@ export default function SMap() {
 🔥 Alarm Level: ${toStr(formatAlarm(fireReport), 'Not specified')}
 📊 AI Detection: ${toStr(formatPrediction(fireReport), 'Not analyzed')}
 👤 Reporter: ${toStr(fireReport.reporter_name || fireReport.reporter || fireReport.reported_by, 'Unknown Reporter')}
-📝 Cause: ${toStr(fireReport.cause || fireReport.possible_cause || fireReport.fire_cause, 'Under investigation')}
+📝 Cause: ${toStr(
+        fireReport.cause_of_fire || fireReport.cause || fireReport.possible_cause || fireReport.fire_cause,
+        'Under investigation'
+      )}
 💨 Smoke Analysis: ${fireReport.smoke_intensity ? toStr(`${fireReport.smoke_intensity}${fireReport.smoke_confidence ? ` ${fireReport.smoke_confidence}` : ''}`) : 'Not analyzed'}
 🏠 Structure: ${toStr(fireReport.structure || fireReport.building_type, 'Not specified')}
 🏘️ Structures Affected: ${fireReport.number_of_structures_on_fire != null ? toStr(fireReport.number_of_structures_on_fire) : 'Unknown'}
@@ -168,7 +222,34 @@ Please respond immediately to this assignment.`;
         const myId = parsed?.uid || parsed?.id;
         setCurrentStationId(myId);
 
-        // 2) Load all stations with lat/lng
+        // 2) Check if there's a selected fire report from notification
+        const selectedReportStr = await AsyncStorage.getItem('selectedFireReport');
+        let initialRegion = null;
+        
+        if (selectedReportStr) {
+          try {
+            const selectedReport = JSON.parse(selectedReportStr);
+            console.log('📍 Found selected fire report from notification:', selectedReport);
+            
+            // Set region to fire location
+            if (selectedReport.latitude && selectedReport.longitude) {
+              initialRegion = {
+                latitude: selectedReport.latitude,
+                longitude: selectedReport.longitude,
+                latitudeDelta: 0.01,
+                longitudeDelta: 0.01,
+              };
+              setRegion(initialRegion);
+            }
+            
+            // Clear the selected report from storage after using it
+            await AsyncStorage.removeItem('selectedFireReport');
+          } catch (parseError) {
+            console.error('Error parsing selected fire report:', parseError);
+          }
+        }
+
+        // 3) Load all stations with lat/lng
         const { data, error } = await supabase
           .from('station_users')
           .select('id, station_name, lat, lng');
@@ -196,7 +277,9 @@ Please respond immediately to this assignment.`;
         setStations(uniqueStations);
         const mine = uniqueStations.find(s => s.id === myId) || uniqueStations[0] || null;
         setMyStation(mine);
-        if (mine) {
+        
+        // Only set region to station if we didn't already set it to fire location
+        if (!initialRegion && mine) {
           setRegion({
             latitude: mine.lat,
             longitude: mine.lng,
@@ -238,6 +321,132 @@ Please respond immediately to this assignment.`;
 
     fetchResponders();
   }, [currentStationId]);
+
+  // Handle opening a specific report from notification
+  useEffect(() => {
+    if (!reportIdToOpen) return;
+
+    const openReport = async () => {
+      try {
+        console.log('📍 Opening report from notification:', reportIdToOpen);
+        
+        // First, check if the report is already in assignedReports
+        const existingReport = assignedReports.find(r => String(r.id) === String(reportIdToOpen));
+        
+        if (existingReport) {
+          console.log('✅ Found report in local data:', existingReport);
+          
+          // Center map on the fire location
+          if (existingReport.latitude && existingReport.longitude) {
+            setRegion({
+              latitude: existingReport.latitude,
+              longitude: existingReport.longitude,
+              latitudeDelta: 0.01,
+              longitudeDelta: 0.01,
+            });
+          }
+          
+          // Load assigned responders
+          const { data: assignedResponders, error: respError } = await supabase
+            .from('report_assignments')
+            .select('assignee_id')
+            .eq('report_id', reportIdToOpen)
+            .eq('assignee_type', 'responder');
+
+          const assignedResponderIds = (assignedResponders || []).map(a => a.assignee_id);
+
+          const { data: notifiedResponders, error: notifError } = await supabase
+            .from('responder_notifications')
+            .select('responder_id')
+            .eq('fire_report_id', reportIdToOpen);
+
+          const notifiedResponderIds = (notifiedResponders || []).map(n => n.responder_id);
+          const allAssignedIds = [...new Set([...assignedResponderIds, ...notifiedResponderIds])];
+
+          const assignedRespondersData = responders.filter(r => allAssignedIds.includes(r.id));
+          
+          // Open the modal with the report
+          setSelectedReport({
+            ...existingReport,
+            assignedResponders: assignedRespondersData
+          });
+          setShowReportModal(true);
+          
+          // Notify parent that we've opened the report
+          if (onReportOpened) {
+            onReportOpened();
+          }
+          return;
+        }
+        
+        // If not found locally, fetch from API
+        console.log('🔍 Report not found locally, fetching from API...');
+        const resp = await fetch('https://fire-detection-api-production-f55b.up.railway.app/get_reports');
+        if (!resp.ok) throw new Error('Failed to fetch reports from API');
+        
+        const apiData = await resp.json();
+        const report = apiData.find(r => String(r.id) === String(reportIdToOpen));
+        
+        if (!report) {
+          console.error('❌ Report not found in API');
+          alert('Report not found');
+          if (onReportOpened) onReportOpened();
+          return;
+        }
+        
+        console.log('✅ Found report in API:', report);
+        
+        // Center map on the fire location
+        if (report.latitude && report.longitude) {
+          setRegion({
+            latitude: report.latitude,
+            longitude: report.longitude,
+            latitudeDelta: 0.01,
+            longitudeDelta: 0.01,
+          });
+        }
+        
+        // Load assigned responders
+        const { data: assignedResponders } = await supabase
+          .from('report_assignments')
+          .select('assignee_id')
+          .eq('report_id', reportIdToOpen)
+          .eq('assignee_type', 'responder');
+
+        const assignedResponderIds = (assignedResponders || []).map(a => a.assignee_id);
+
+        const { data: notifiedResponders } = await supabase
+          .from('responder_notifications')
+          .select('responder_id')
+          .eq('fire_report_id', reportIdToOpen);
+
+        const notifiedResponderIds = (notifiedResponders || []).map(n => n.responder_id);
+        const allAssignedIds = [...new Set([...assignedResponderIds, ...notifiedResponderIds])];
+
+        const assignedRespondersData = responders.filter(r => allAssignedIds.includes(r.id));
+        
+        // Open the modal
+        setSelectedReport({
+          ...report,
+          assignedResponders: assignedRespondersData
+        });
+        setShowReportModal(true);
+        
+        // Notify parent that we've opened the report
+        if (onReportOpened) {
+          onReportOpened();
+        }
+      } catch (error) {
+        console.error('❌ Error opening report:', error);
+        alert(`Error opening report: ${error.message}`);
+        if (onReportOpened) {
+          onReportOpened();
+        }
+      }
+    };
+
+    openReport();
+  }, [reportIdToOpen, assignedReports, responders, onReportOpened]);
 
   // Load assigned reports for this station
   useEffect(() => {
@@ -554,7 +763,7 @@ Please respond immediately to this assignment.`;
               {/* Reporter */}
               <Text style={{ marginBottom: 4 }}>Reporter: {toStr(selectedReport?.reporter_name || selectedReport?.reporter || selectedReport?.reported_by)}</Text>
               {/* Cause */}
-              <Text style={{ marginBottom: 4 }}>Cause: {toStr(selectedReport?.cause || selectedReport?.possible_cause || selectedReport?.fire_cause)}</Text>
+              <Text style={{ marginBottom: 4 }}>Cause: {toStr(selectedReport?.cause_of_fire || selectedReport?.cause || selectedReport?.possible_cause || selectedReport?.fire_cause)}</Text>
               {/* Alarm */}
               <Text style={{ marginBottom: 4 }}>Alarm Level: {toStr(formatAlarm(selectedReport))}</Text>
               {/* AI Detection */}
@@ -584,44 +793,6 @@ Please respond immediately to this assignment.`;
                 );
               })()}
               
-              {/* Notify Responders Button */}
-              <View style={{ marginTop: 16, paddingTop: 12, borderTopWidth: 1, borderTopColor: '#e5e7eb' }}>
-                <TouchableOpacity
-                  onPress={() => handleNotifyResponders(selectedReport)}
-                  disabled={isNotifying || !responders.length}
-                  style={{
-                    width: '100%',
-                    paddingVertical: 12,
-                    paddingHorizontal: 16,
-                    borderRadius: 8,
-                    backgroundColor: isNotifying || !responders.length ? '#9ca3af' : '#ef4444',
-                    flexDirection: 'row',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    marginBottom: 8
-                  }}
-                >
-                  {isNotifying ? (
-                    <>
-                      <ActivityIndicator size="small" color="white" style={{ marginRight: 8 }} />
-                      <Text style={{ color: 'white', fontWeight: 'bold', fontSize: 16 }}>Notifying...</Text>
-                    </>
-                  ) : (
-                    <>
-                      <Text style={{ fontSize: 16, marginRight: 8 }}>🚨</Text>
-                      <Text style={{ color: 'white', fontWeight: 'bold', fontSize: 16 }}>
-                        Notify Responders ({responders.length})
-                      </Text>
-                    </>
-                  )}
-                </TouchableOpacity>
-                {!responders.length && (
-                  <Text style={{ fontSize: 12, color: '#6b7280', textAlign: 'center', marginBottom: 8 }}>
-                    No responders assigned to this station
-                  </Text>
-                )}
-              </View>
-
               <TouchableOpacity onPress={() => setShowReportModal(false)} style={{ alignSelf: 'flex-end', marginTop: 8, backgroundColor: '#6b7280', paddingVertical: 8, paddingHorizontal: 16, borderRadius: 8 }}>
                 <Text style={{ color: 'white', fontWeight: 'bold' }}>Close</Text>
               </TouchableOpacity>

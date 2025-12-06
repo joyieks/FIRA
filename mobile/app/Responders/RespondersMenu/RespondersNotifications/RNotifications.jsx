@@ -466,9 +466,37 @@ export default function RNotifications({ onUnreadCountChange }) {
                     )}
                   </View>
                   
+                  {/* Fire Report ID Badge (if available) */}
+                  {notification.fire_report_id && (
+                    <View className="bg-orange-100 px-2 py-1 rounded mb-2 self-start">
+                      <Text className="text-orange-700 text-xs font-bold">
+                        🔥 Report ID: {notification.fire_report_id.substring(0, 8).toUpperCase()}
+                      </Text>
+                    </View>
+                  )}
+                  
                   <Text className="text-gray-600 text-sm mb-2 leading-5">
                     {notification.message}
                   </Text>
+                  
+                  {/* Assignment Status Badge */}
+                  {notification.status && (
+                    <View className={`px-2 py-1 rounded mb-2 self-start ${
+                      notification.status === 'pending' ? 'bg-yellow-100' :
+                      notification.status === 'accepted' ? 'bg-green-100' :
+                      notification.status === 'declined' ? 'bg-red-100' :
+                      'bg-gray-100'
+                    }`}>
+                      <Text className={`text-xs font-medium ${
+                        notification.status === 'pending' ? 'text-yellow-700' :
+                        notification.status === 'accepted' ? 'text-green-700' :
+                        notification.status === 'declined' ? 'text-red-700' :
+                        'text-gray-700'
+                      }`}>
+                        Status: {notification.status.toUpperCase()}
+                      </Text>
+                    </View>
+                  )}
                   
                   <View className="flex-row items-center justify-between">
                     <Text className="text-gray-400 text-xs">
@@ -483,7 +511,7 @@ export default function RNotifications({ onUnreadCountChange }) {
                           <MaterialIcons name="check-circle" size={20} color="#10b981" />
                         </TouchableOpacity>
                       )}
-                      {notification.priority === 'high' && (
+                      {notification.priority === 'urgent' && (
                         <View className="bg-red-100 px-2 py-1 rounded mr-2">
                           <Text className="text-red-600 text-xs font-medium">URGENT</Text>
                         </View>

@@ -1,8 +1,10 @@
 import React, { useEffect, useMemo, useState, useCallback } from 'react';
-import { FiBell, FiCheck, FiTrash2 } from 'react-icons/fi';
+import { FiBell, FiCheck, FiTrash2, FiMapPin } from 'react-icons/fi';
+import { useNavigate } from 'react-router-dom';
 import { supabase } from '../../../../config/supabase';
 
 const Station_Notification = () => {
+  const navigate = useNavigate();
   const [notifications, setNotifications] = useState([]);
   const [filter, setFilter] = useState('all'); // all | unread | read
 
@@ -56,6 +58,27 @@ const Station_Notification = () => {
     } catch (_) {}
   };
 
+  // Handle notification click - navigate to fire location on map
+  const handleNotificationClick = async (notification) => {
+    try {
+      // Mark as read
+      await markAsRead(notification.id);
+      
+      // Check if notification has related report
+      if (notification.related_report_id) {
+        console.log('📍 Navigating to fire report on map:', notification.related_report_id);
+        
+        // Store the report ID in localStorage for the map to pick up
+        localStorage.setItem('selectedReportId', notification.related_report_id);
+        
+        // Navigate to the station map dashboard
+        navigate('/station-dashboard');
+      }
+    } catch (error) {
+      console.error('❌ Error handling notification click:', error);
+    }
+  };
+
   const filtered = useMemo(() => {
     if (filter === 'unread') return notifications.filter(n => !n.is_read);
     if (filter === 'read') return notifications.filter(n => n.is_read);
@@ -79,13 +102,22 @@ const Station_Notification = () => {
       {/* Notifications List */}
       <div className="space-y-4">
         {filtered.map((notification) => (
-          <div key={notification.id} className={`bg-white rounded-lg shadow-sm border-l-4 border-l-red-600 p-4 ${!notification.is_read ? 'ring-2 ring-red-100' : ''}`}>
+          <div 
+            key={notification.id} 
+            className={`bg-white rounded-lg shadow-sm border-l-4 border-l-red-600 p-4 ${!notification.is_read ? 'ring-2 ring-red-100' : ''} ${notification.related_report_id ? 'cursor-pointer hover:shadow-md transition-shadow' : ''}`}
+            onClick={() => notification.related_report_id && handleNotificationClick(notification)}
+          >
             <div className="flex items-start justify-between">
               <div className="flex-1 min-w-0">
                 <div className="flex items-center space-x-2 mb-1">
                   <h3 className="text-sm font-medium text-gray-900">{notification.title}</h3>
                   {!notification.is_read && (
                     <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-red-100 text-red-800">New</span>
+                  )}
+                  {notification.related_report_id && (
+                    <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-blue-100 text-blue-800">
+                      <FiMapPin className="mr-1" size={12} /> View Location
+                    </span>
                   )}
                 </div>
                 <p className="text-sm text-gray-600 mb-2">{notification.message}</p>
@@ -94,7 +126,13 @@ const Station_Notification = () => {
                 </div>
               </div>
               {!notification.is_read && (
-                <button onClick={() => markAsRead(notification.id)} className="text-xs px-3 py-1 bg-gray-100 text-gray-700 rounded hover:bg-gray-200 inline-flex items-center">
+                <button 
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    markAsRead(notification.id);
+                  }} 
+                  className="text-xs px-3 py-1 bg-gray-100 text-gray-700 rounded hover:bg-gray-200 inline-flex items-center"
+                >
                   <FiCheck className="mr-1" /> Mark as read
                 </button>
               )}

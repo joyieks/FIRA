@@ -44,11 +44,62 @@ const Adashboard = () => {
 
   const [mapCenter, setMapCenter] = useState(adminLocation); // State for map center
 
+  // Helper function to clean alarm level text
+  const cleanAlarmLevel = (alarmLevel) => {
+    if (!alarmLevel) return alarmLevel;
+    if (typeof alarmLevel === 'string' && alarmLevel.includes('- structure count not provided')) {
+      return alarmLevel.split('- structure count not provided')[0].trim();
+    }
+    return alarmLevel;
+  };
+
+  // Derive alarm level consistently across admin views
+  const determineSuggestedAlarm = (numStructures) => {
+    const count = Number(numStructures);
+    if (!count || isNaN(count)) return null;
+    if (count >= 80) return 'GENERAL ALARM';
+    if (count >= 36) return 'TASK FORCE DELTA';
+    if (count >= 32) return 'TASK FORCE CHARLIE';
+    if (count >= 28) return 'TASK FORCE BRAVO';
+    if (count >= 24) return 'TASK FORCE ALPHA';
+    if (count >= 20) return '5th Alarm';
+    if (count >= 16) return '4th Alarm';
+    if (count >= 12) return '3rd Alarm';
+    if (count >= 8) return '2nd Alarm';
+    if (count >= 4) return '1st Alarm';
+    return 'Under Control';
+  };
+
+  const resolveAlarmLevel = (report) => {
+    const normalize = (value) => {
+      if (!value) return null;
+      const cleaned = cleanAlarmLevel(String(value).trim());
+      if (!cleaned) return null;
+      const lower = cleaned.toLowerCase();
+      if (lower === 'unknown' || lower === 'none') return null;
+      return cleaned;
+    };
+
+    const candidates = [
+      normalize(report?.final_fire_alarm_level),
+      normalize(report?.recommended_alarm_level),
+      normalize(report?.suggested_alarm_level),
+      normalize(report?.ai_suggested_alarm),
+      normalize(report?.alarm_level)
+    ].filter(Boolean);
+
+    if (candidates.length > 0) return candidates[0];
+
+    const computed = determineSuggestedAlarm(report?.number_of_structures_on_fire || report?.structures_affected);
+    return computed || '1st Alarm';
+  };
+
   // Color mapping based on Philippines Bureau of Fire Protection alarm levels
   const getAlarmLevelColor = (alarmLevel) => {
     if (!alarmLevel) return '#6b7280'; // Gray for unknown
     
-    const level = alarmLevel.toLowerCase();
+    const cleanedLevel = cleanAlarmLevel(alarmLevel);
+    const level = cleanedLevel.toLowerCase();
     
     // Fire alarm levels with appropriate colors
     if (level.includes('first alarm')) return '#fef3c7'; // Light yellow
@@ -72,10 +123,9 @@ const Adashboard = () => {
 
   // Get marker color - prioritize alarm level over prediction
   const getMarkerColor = (report) => {
-    // First check for alarm level
-    if (report.recommended_alarm_level || report.alarm_level) {
-      return getAlarmLevelColor(report.recommended_alarm_level || report.alarm_level);
-    }
+    // First check for alarm level (prioritize final_fire_alarm_level)
+    const resolved = resolveAlarmLevel(report);
+    if (resolved) return getAlarmLevelColor(resolved);
     
     // Fallback to prediction-based colors
     switch (report.prediction) {
@@ -400,6 +450,38 @@ const Adashboard = () => {
         .from('report_assignments')
         .upsert({ ...payload, note: assignmentNote && assignmentNote.trim() ? assignmentNote.trim() : null }, { onConflict: 'report_id,assignee_id' });
       if (error) throw error;
+      
+      // Create notification for the assigned station
+      if (assigneeType === 'station') {
+        try {
+          const locationInfo = selectedReport.address || selectedReport.geotag_location || 'Location unavailable';
+          const reporterName = selectedReport.reporter_name || selectedReport.reporter || 'Unknown Reporter';
+          const title = `🚨 New Fire Report Assigned to Your Station`;
+          const message = `A fire report has been assigned to your station.\n\nLocation: ${locationInfo}\nReporter: ${reporterName}\n\nPlease review the incident details and take appropriate action.`;
+          
+          const { error: notifError } = await supabase
+            .from('notifications')
+            .insert({
+              user_id: assigneeId,
+              user_type: 'station',
+              type: 'assignment',
+              related_report_id: String(selectedReport.id),
+              title: title,
+              message: message,
+              priority: 'urgent',
+              is_read: false
+            });
+          
+          if (notifError) {
+            console.error('❌ Error creating station notification:', notifError);
+          } else {
+            console.log('✅ Created notification for station:', assigneeId);
+          }
+        } catch (notifErr) {
+          console.error('❌ Failed to create notification:', notifErr);
+        }
+      }
+      
       // Snapshot report coordinates so station dashboards can render reliably
       try {
         const lat = parseFloat(selectedReport.latitude);
@@ -446,6 +528,40 @@ const Adashboard = () => {
         .from('report_routes')
         .insert(payload);
       if (error) throw error;
+      
+      // Create notification for forwarded station
+      if (redirectTarget && redirectTarget.startsWith('station:')) {
+        try {
+          const stationId = redirectTarget.split(':')[1];
+          const locationInfo = selectedReport.address || selectedReport.geotag_location || 'Location unavailable';
+          const reporterName = selectedReport.reporter_name || selectedReport.reporter || 'Unknown Reporter';
+          const noteText = redirectNote ? `\n\nNote: ${redirectNote}` : '';
+          const title = `📬 Fire Report Forwarded to Your Station`;
+          const message = `A fire report has been forwarded to your station.\n\nLocation: ${locationInfo}\nReporter: ${reporterName}${noteText}\n\nPlease review the incident details.`;
+          
+          const { error: notifError } = await supabase
+            .from('notifications')
+            .insert({
+              user_id: stationId,
+              user_type: 'station',
+              type: 'assignment',
+              related_report_id: String(selectedReport.id),
+              title: title,
+              message: message,
+              priority: 'high',
+              is_read: false
+            });
+          
+          if (notifError) {
+            console.error('❌ Error creating forwarding notification:', notifError);
+          } else {
+            console.log('✅ Created forwarding notification for station:', stationId);
+          }
+        } catch (notifErr) {
+          console.error('❌ Failed to create forwarding notification:', notifErr);
+        }
+      }
+      
       alert('Report forwarded successfully.');
       setRedirectNote('');
       // Reload the forwarding info
@@ -795,39 +911,67 @@ const Adashboard = () => {
               }}
               onCloseClick={() => setSelectedReport(null)}
             >
-              <div className="p-3 max-w-sm">
-                <h3 className="font-bold text-lg mb-2 text-red-600">🔥 Fire Report</h3>
-                <div className="space-y-2 text-sm">
-                  <p><strong>Reporter:</strong> {selectedReport.reporter}</p>
-                  <p><strong>Cause:</strong> {selectedReport.cause_of_fire || 'Not specified'}</p>
-                  {(selectedReport.recommended_alarm_level || selectedReport.alarm_level) && (
-                    <p><strong>Alarm Level:</strong> 
-                      <span 
-                        className="ml-1 px-2 py-1 rounded text-xs font-semibold"
-                        style={{ 
-                          backgroundColor: getMarkerColor(selectedReport),
-                          color: getAlarmLevelTextColor(selectedReport.recommended_alarm_level || selectedReport.alarm_level)
-                        }}
-                      >
-                        {selectedReport.recommended_alarm_level || selectedReport.alarm_level}
-                      </span>
-                    </p>
-                  )}
-                  <p><strong>AI Fire Detection:</strong> 
-                    <span className={`ml-1 px-2 py-1 rounded text-xs font-semibold ${
-                      selectedReport.prediction === 'Fire' ? 'bg-red-100 text-red-800' : 'bg-orange-100 text-orange-800'
+              <div className="p-0 max-w-md" style={{ minWidth: '420px' }}>
+                {/* Header */}
+                <div className="bg-red-600 text-white px-4 py-3 rounded-t-lg">
+                  <div className="flex items-center space-x-2">
+                    <span className="text-2xl">🔥</span>
+                    <h3 className="font-bold text-lg">Fire Report</h3>
+                  </div>
+                </div>
+
+                <div className="p-4 space-y-3 text-sm bg-white"  style={{ maxHeight: '500px', overflowY: 'auto' }}>
+                  {/* Reporter Info */}
+                  <div className="flex items-start space-x-2">
+                    <span className="text-gray-500">Reporter:</span>
+                    <span className="font-medium text-gray-900">{selectedReport.reporter}</span>
+                  </div>
+
+                  {/* Cause */}
+                  <div className="flex items-start space-x-2">
+                    <span className="text-gray-500">Cause:</span>
+                    <span className="font-medium text-gray-900">{selectedReport.cause_of_fire || 'Hayssjshs'}</span>
+                  </div>
+
+                  {/* Fire Alarm Level */}
+                  <div className="flex items-start space-x-2">
+                    <span className="text-gray-500">Fire Alarm Level:</span>
+                    <span 
+                      className="px-3 py-1 rounded-full text-xs font-bold text-white"
+                      style={{ backgroundColor: getMarkerColor(selectedReport) }}
+                    >
+                      {cleanAlarmLevel(resolveAlarmLevel(selectedReport))}
+                    </span>
+                  </div>
+
+                  {/* AI Fire Detection */}
+                  <div className="flex items-start space-x-2">
+                    <span className="text-gray-500">AI Fire Detection:</span>
+                    <span className={`px-3 py-1 rounded-full text-xs font-bold ${
+                      selectedReport.prediction === 'Fire' ? 'bg-red-600 text-white' : 'bg-orange-500 text-white'
                     }`}>
                       {selectedReport.prediction}{selectedReport.confidence ? ` (${selectedReport.confidence})` : ''}
                     </span>
-                  </p>
+                  </div>
+
+                  {/* Smoke Analysis */}
                   {(selectedReport.smoke_intensity || selectedReport.smoke_confidence) && (
-                    <p><strong>Smoke Analysis:</strong> {selectedReport.smoke_intensity || ''} {selectedReport.smoke_confidence || ''}</p>
+                    <div className="flex items-start space-x-2">
+                      <span className="text-gray-500">Smoke Analysis:</span>
+                      <span className="font-medium text-gray-900">{selectedReport.smoke_intensity || ''} {selectedReport.smoke_confidence || ''}</span>
+                    </div>
                   )}
+
+                  {/* Structure */}
                   {selectedReport.structure && (
-                    <p><strong>Structure:</strong> {selectedReport.structure}{selectedReport.structure_confidence ? ` (${selectedReport.structure_confidence})` : ''}</p>
+                    <div className="flex items-start space-x-2">
+                      <span className="text-gray-500">Structure:</span>
+                      <span className="font-medium text-gray-900">{selectedReport.structure}{selectedReport.structure_confidence ? ` (${selectedReport.structure_confidence})` : ''}</span>
+                    </div>
                   )}
+
+                  {/* Structures Affected */}
                   {(() => {
-                    // Helper function to clean up "Unknown - count not provided" text
                     const cleanStructuresValue = (value) => {
                       if (!value) return null;
                       const str = String(value);
@@ -844,102 +988,141 @@ const Adashboard = () => {
                     };
                     const structures = cleanStructuresValue(selectedReport.number_of_structures_on_fire);
                     return structures != null ? (
-                      <p><strong>Structures Affected:</strong> {structures} structure(s)</p>
+                      <div className="flex items-start space-x-2">
+                        <span className="text-gray-500">Structures Affected:</span>
+                        <span className="font-medium text-gray-900">{structures} structure(s)</span>
+                      </div>
                     ) : null;
                   })()}
-                  <p><strong>Location:</strong> {selectedReport.address || selectedReport.geotag_location}</p>
-                  <p><strong>Reported:</strong> {selectedReport.formatted_timestamp}</p>
+
+                  {/* Location */}
+                  <div className="flex items-start space-x-2">
+                    <span className="text-gray-500">Location:</span>
+                    <span className="font-medium text-gray-900">{selectedReport.address || selectedReport.geotag_location}</span>
+                  </div>
+
+                  {/* Reported Time */}
+                  <div className="flex items-start space-x-2">
+                    <span className="text-gray-500">Reported:</span>
+                    <span className="font-medium text-gray-900">{selectedReport.formatted_timestamp}</span>
+                  </div>
+
+                  {/* Fire Image */}
                   {selectedReport.image_url && (
                     <div className="mt-2">
                       <img 
                         src={selectedReport.image_url} 
                         alt="Fire report" 
-                        className="w-full h-32 object-cover rounded"
+                        className="w-full h-48 object-cover rounded-lg shadow-sm"
                       />
                     </div>
                   )}
                   {/* Current Assignment Display */}
                   {currentAssignment && (
-                    <div className="mt-3 border-t pt-3">
-                      <div className="bg-blue-50 border-l-4 border-blue-500 p-3 rounded">
-                        <p className="font-semibold text-blue-900 mb-1">📍 Currently Assigned To:</p>
-                        <p className="text-blue-800 text-sm">
-                          <strong>{currentAssignment.name}</strong>
-                        </p>
-                        <p className="text-blue-600 text-xs mt-1">
-                          Assigned: {new Date(currentAssignment.assigned_at).toLocaleString()}
-                        </p>
-                        {currentAssignment.note && (
-                          <p className="text-blue-700 text-xs mt-1">
-                            <em>Note: {currentAssignment.note}</em>
+                    <div className="mt-4 bg-blue-50 border-l-4 border-blue-500 p-3 rounded">
+                      <div className="flex items-start space-x-2">
+                        <span className="text-lg">📍</span>
+                        <div className="flex-1">
+                          <p className="font-bold text-blue-900 text-sm mb-1">Currently Assigned To:</p>
+                          <p className="text-blue-800 font-semibold">{currentAssignment.name}</p>
+                          <p className="text-blue-600 text-xs mt-1">
+                            Assigned: {new Date(currentAssignment.assigned_at).toLocaleString()}
                           </p>
-                        )}
+                          {currentAssignment.note && (
+                            <p className="text-blue-700 text-xs mt-1 italic">
+                              Note: {currentAssignment.note}
+                            </p>
+                          )}
+                        </div>
                       </div>
                     </div>
                   )}
 
                   {/* Forwarded To Display */}
                   {forwardedTo.length > 0 && (
-                    <div className="mt-3">
-                      <div className="bg-amber-50 border-l-4 border-amber-500 p-3 rounded">
-                        <p className="font-semibold text-amber-900 mb-2">📨 Forwarded To:</p>
-                        {forwardedTo.map((forward, index) => (
-                          <div key={index} className={`${index > 0 ? 'mt-2 pt-2 border-t border-amber-200' : ''}`}>
-                            <p className="text-amber-800 text-sm">
-                              <strong>{forward.name}</strong>
-                            </p>
-                            {forward.note && (
-                              <p className="text-amber-700 text-xs mt-1">
-                                <em>Note: {forward.note}</em>
+                    <div className="mt-3 bg-amber-50 border-l-4 border-amber-500 p-3 rounded">
+                      <div className="flex items-start space-x-2">
+                        <span className="text-lg">📨</span>
+                        <div className="flex-1">
+                          <p className="font-bold text-amber-900 text-sm mb-2">Forwarded To:</p>
+                          {forwardedTo.map((forward, index) => (
+                            <div key={index} className={`${index > 0 ? 'mt-2 pt-2 border-t border-amber-200' : ''}`}>
+                              <p className="text-amber-800 font-semibold">{forward.name}</p>
+                              {forward.note && (
+                                <p className="text-amber-700 text-xs mt-1 italic">
+                                  Note: {forward.note}
+                                </p>
+                              )}
+                              <p className="text-amber-600 text-xs mt-1">
+                                Forwarded: {new Date(forward.forwarded_at).toLocaleString()}
                               </p>
-                            )}
-                            <p className="text-amber-600 text-xs mt-1">
-                              Forwarded: {new Date(forward.forwarded_at).toLocaleString()}
-                            </p>
-                          </div>
-                        ))}
+                            </div>
+                          ))}
+                        </div>
                       </div>
                     </div>
                   )}
 
-                  {/* Assignment controls */}
-                  <div className="mt-3 border-t pt-3">
-                    <p className="font-semibold mb-2">Assignment</p>
-                    <div className="flex items-center gap-2 mb-2">
-                      <select className="border rounded px-2 py-1" value={assigneeId} onChange={(e) => setAssigneeId(e.target.value)}>
+                  {/* Assignment Section */}
+                  <div className="mt-4 pt-4 border-t border-gray-200">
+                    <p className="font-bold text-gray-900 mb-3">Assignment</p>
+                    <div className="space-y-2">
+                      <select 
+                        className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" 
+                        value={assigneeId} 
+                        onChange={(e) => setAssigneeId(e.target.value)}
+                      >
                         <option value="">Select station…</option>
                         {allStations.map(s => (
                           <option key={s.id} value={s.id}>{s.station_name || 'Station'}</option>
                         ))}
                       </select>
-                      <button className="bg-blue-600 text-white px-3 py-1 rounded" onClick={handleAssign}>Assign</button>
+                      <textarea
+                        className="w-full border border-gray-300 rounded-lg p-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        rows="3"
+                        placeholder="Assignment note (optional)"
+                        value={assignmentNote || ''}
+                        onChange={(e) => setAssignmentNote((e.target.value || '').toString())}
+                      ></textarea>
+                      <button 
+                        className="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium px-4 py-2 rounded-lg transition-colors" 
+                        onClick={handleAssign}
+                      >
+                        Assign
+                      </button>
+                      <p className="text-xs text-gray-500 mt-1">You can reassign anytime — the latest assignment is active.</p>
                     </div>
-                    <textarea
-                      className="w-full border rounded p-2 text-sm"
-                      rows="2"
-                      placeholder="Assignment note (optional)"
-                      value={assignmentNote || ''}
-                      onChange={(e) => setAssignmentNote((e.target.value || '').toString())}
-                    ></textarea>
-                    <p className="text-xs text-gray-500">You can reassign anytime — the latest assignment is active.</p>
                   </div>
 
-                  {/* Redirect controls */}
-                  <div className="mt-3 border-t pt-3">
-                    <p className="font-semibold mb-2">Redirect/Forward</p>
-                    <div className="flex items-center gap-2 mb-2">
-                      <select className="border rounded px-2 py-1" value={redirectTarget} onChange={(e) => setRedirectTarget(e.target.value)}>
+                  {/* Redirect/Forward Section */}
+                  <div className="mt-4 pt-4 border-t border-gray-200">
+                    <p className="font-bold text-gray-900 mb-3">Redirect/Forward</p>
+                    <div className="space-y-2">
+                      <select 
+                        className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500" 
+                        value={redirectTarget} 
+                        onChange={(e) => setRedirectTarget(e.target.value)}
+                      >
                         <option value="">Choose station…</option>
                         {allStations.map(s => (
                           <option key={`st-${s.id}`} value={`station:${s.id}`}>{s.station_name || 'Station'}</option>
                         ))}
                       </select>
+                      <textarea 
+                        className="w-full border border-gray-300 rounded-lg p-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500" 
+                        rows="3" 
+                        placeholder="Note (optional)" 
+                        value={redirectNote} 
+                        onChange={(e) => setRedirectNote(e.target.value)}
+                      ></textarea>
+                      <button 
+                        className="w-full bg-orange-500 hover:bg-orange-600 text-white font-medium px-4 py-2 rounded-lg transition-colors" 
+                        onClick={handleRedirect}
+                      >
+                        Forward
+                      </button>
+                      <p className="text-xs text-gray-500 mt-1">Forwarding keeps the original assignment and records provenance.</p>
                     </div>
-                    <textarea className="w-full border rounded p-2 text-sm" rows="2" placeholder="Note (optional)" value={redirectNote} onChange={(e) => setRedirectNote(e.target.value)}></textarea>
-                    <div className="mt-2">
-                      <button className="bg-amber-600 text-white px-3 py-1 rounded" onClick={handleRedirect}>Forward</button>
-                    </div>
-                    <p className="text-xs text-gray-500 mt-1">Forwarding keeps the original assignment and records provenance.</p>
                   </div>
                 </div>
               </div>

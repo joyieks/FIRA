@@ -26,25 +26,53 @@ export default function RStatus({ onNavigateToMap }) {
     }
 
     try {
-      // Load active notifications for this responder (pending or accepted only)
+      console.log('🔄 Loading assignments for responder:', userData.id);
+      
+      // APPROACH 1: Load active notifications from responder_notifications table
+      // Include 'completed' status so assignments remain visible after status changes (Under Control, Fire Out)
       const { data: notificationData, error } = await supabase
         .from('responder_notifications')
         .select('*')
         .eq('responder_id', userData.id)
-        .in('status', ['pending', 'accepted'])
+        .in('status', ['pending', 'accepted', 'completed']) // Include completed for status updates
         .order('created_at', { ascending: false });
 
       if (error) {
-        console.error('Error loading notifications:', error);
-        return;
+        console.error('❌ Error loading notifications:', error);
       }
 
-      // Get report IDs from active notifications only
-      const uniqueReportIds = (notificationData || [])
+      // APPROACH 2: ALSO check report_assignments table (when station assigns via web)
+      const { data: assignmentData, error: assignError } = await supabase
+        .from('report_assignments')
+        .select('report_id, assigned_at, note')
+        .eq('assignee_type', 'responder')
+        .eq('assignee_id', userData.id);
+
+      if (assignError) {
+        console.error('❌ Error loading report_assignments:', assignError);
+      }
+
+      console.log('📊 Notifications found:', notificationData?.length || 0);
+      console.log('📊 Notification details:', JSON.stringify(notificationData, null, 2));
+      console.log('📊 Direct assignments found:', assignmentData?.length || 0);
+      console.log('📊 Assignment details:', JSON.stringify(assignmentData, null, 2));
+
+      // Combine report IDs from both sources
+      const reportIdsFromNotifications = (notificationData || [])
         .map(n => n.fire_report_id)
         .filter(Boolean)
         .map(String);
       
+      const reportIdsFromAssignments = (assignmentData || [])
+        .map(a => a.report_id)
+        .filter(Boolean)
+        .map(String);
+
+      // Use Set to get unique report IDs
+      const uniqueReportIds = [...new Set([...reportIdsFromNotifications, ...reportIdsFromAssignments])];
+      
+      console.log('📋 Report IDs from notifications:', reportIdsFromNotifications);
+      console.log('📋 Report IDs from assignments:', reportIdsFromAssignments);
       console.log('📋 Unique report IDs to load:', uniqueReportIds);
 
       if (uniqueReportIds.length === 0) {
@@ -67,12 +95,14 @@ export default function RStatus({ onNavigateToMap }) {
         const report = reportsById.get(String(rid));
         if (!report) {
           console.warn(`⚠️ Report not found in API response: ${rid}`);
+          console.warn(`⚠️ Available report IDs in API:`, Array.from(reportsById.keys()));
           return null;
         }
         
-        // Filter out Fire Out and Under Control reports
+        // Filter out Fire Out reports (but keep Under Control - responders should see those)
         const status = report.status?.toLowerCase();
-        if (status === 'fire out' || status === 'under control') {
+        console.log(`📊 Report ${rid} status: "${status}"`);
+        if (status === 'fire out') {
           console.log(`⏭️ Skipping ${status} report: ${rid}`);
           return null;
         }
@@ -80,6 +110,7 @@ export default function RStatus({ onNavigateToMap }) {
         console.log(`✅ Found active report: ${rid} - ${report.location || report.address || 'Unknown location'}`);
         // Try to find a notification for status/accepted flag
         const notif = (notificationData || []).find(n => String(n.fire_report_id) === String(rid));
+        console.log(`🔔 Notification for report ${rid}:`, notif ? 'FOUND' : 'NOT FOUND');
         return buildAssignmentFromReport(report, notif);
       }));
 
@@ -89,7 +120,7 @@ export default function RStatus({ onNavigateToMap }) {
       setAssignments(validAssignments);
       console.log('✅ Loaded assignments for responder:', validAssignments.length);
     } catch (error) {
-      console.error('Error in loadNotifications:', error);
+      console.error('❌ Error in loadNotifications:', error);
     }
   };
 
@@ -97,7 +128,20 @@ export default function RStatus({ onNavigateToMap }) {
   const buildAssignmentFromReport = (fireReport, notification) => {
     const reporterFromAPI = fireReport.reporter_name || fireReport.reporter || fireReport.reported_by || fireReport.user_name || 'Unknown Reporter';
     const location = fireReport.address || fireReport.geotag_location || fireReport.location || 'Unknown location';
-    const alarmLevel = fireReport.final_fire_alarm_level || fireReport.alarm_level || fireReport.recommended_alarm_level || 'Unknown alarm';
+    
+    // Helper to clean alarm level text (remove "- structure count not provided" suffix)
+    const cleanAlarmLevel = (level) => {
+      if (!level) return level;
+      if (typeof level === 'string' && level.includes('- structure count not provided')) {
+        return level.split('- structure count not provided')[0].trim();
+      }
+      return level;
+    };
+    
+    // Use final_fire_alarm_level (set by admin) as primary, NOT recommended_alarm_level (AI suggestion)
+    const rawAlarmLevel = fireReport.final_fire_alarm_level || fireReport.alarm_level || fireReport.recommended_alarm_level || '1st Alarm';
+    const alarmLevel = cleanAlarmLevel(rawAlarmLevel);
+    
     const aiDetection = (fireReport.prediction ? `${fireReport.prediction}` : 'Not analyzed') + (fireReport.confidence ? ` (${fireReport.confidence})` : '');
     const smokeIntensity = fireReport.smoke_intensity || fireReport.smoke_level || '';
     const smokeConfidence = fireReport.smoke_confidence || fireReport.smoke_analysis || '';
@@ -136,7 +180,7 @@ export default function RStatus({ onNavigateToMap }) {
     loadNotifications();
 
     // Set up real-time subscription for new notifications
-    const subscription = supabase
+    const notificationSubscription = supabase
       .channel(`responder_notifications:${userData?.id}`)
       .on('postgres_changes', {
         event: 'INSERT',
@@ -144,16 +188,75 @@ export default function RStatus({ onNavigateToMap }) {
         table: 'responder_notifications',
         filter: `responder_id=eq.${userData?.id}`
       }, (payload) => {
+        console.log('🔔 NEW NOTIFICATION INSERT detected:', payload);
+        loadNotifications(); // Reload notifications
+      })
+      .on('postgres_changes', {
+        event: 'UPDATE',
+        schema: 'public',
+        table: 'responder_notifications',
+        filter: `responder_id=eq.${userData?.id}`
+      }, (payload) => {
+        console.log('🔄 NOTIFICATION UPDATE detected:', payload);
         loadNotifications(); // Reload notifications
       })
       .subscribe();
 
+    // Set up real-time subscription for report_assignments (when station assigns via web)
+    const assignmentSubscription = supabase
+      .channel(`report_assignments:responder:${userData?.id}`)
+      .on('postgres_changes', {
+        event: 'INSERT',
+        schema: 'public',
+        table: 'report_assignments',
+        filter: `assignee_id=eq.${userData?.id}`
+      }, (payload) => {
+        console.log('🆕 NEW ASSIGNMENT detected via report_assignments:', payload);
+        loadNotifications(); // Reload notifications to fetch new assignment
+      })
+      .on('postgres_changes', {
+        event: 'DELETE',
+        schema: 'public',
+        table: 'report_assignments',
+        filter: `assignee_id=eq.${userData?.id}`
+      }, (payload) => {
+        console.log('🗑️ ASSIGNMENT REMOVED detected via report_assignments:', payload);
+        loadNotifications(); // Reload notifications to remove assignment
+      })
+      .subscribe();
+
+    // Set up polling as backup mechanism (every 10 seconds)
+    console.log('⏰ Setting up 10-second polling for new assignments');
+    const pollingInterval = setInterval(() => {
+      console.log('🔄 POLLING: Checking for new assignments...');
+      loadNotifications();
+    }, 10000); // 10 seconds
+
     return () => {
-      subscription.unsubscribe();
+      notificationSubscription.unsubscribe();
+      assignmentSubscription.unsubscribe();
+      clearInterval(pollingInterval);
+      console.log('🛑 Cleaned up subscriptions and polling');
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [userData?.id]);
 
+  // Update selectedAssignment when assignments change (for real-time alarm level updates)
+  useEffect(() => {
+    if (selectedAssignment && showFullReport) {
+      // Find the updated assignment data
+      const updatedAssignment = assignments.find(
+        a => a.fireReportId === selectedAssignment.fireReportId
+      );
+      
+      if (updatedAssignment) {
+        console.log('🔄 Updating selected assignment with latest data');
+        console.log('🔄 Old alarm level:', selectedAssignment.alarmLevel);
+        console.log('🔄 New alarm level:', updatedAssignment.alarmLevel);
+        setSelectedAssignment(updatedAssignment);
+      }
+    }
+  }, [assignments, selectedAssignment, showFullReport]);
 
   const getFireReportStatusColor = (status) => {
     switch (status) {

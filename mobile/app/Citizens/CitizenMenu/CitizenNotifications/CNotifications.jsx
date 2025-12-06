@@ -4,6 +4,7 @@ import { MaterialIcons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { supabase } from '../../../config/supabase';
+import { registerForPushNotificationsAsync, sendPushNotification, setBadgeCount } from '../../../services/pushNotificationService';
 
 const CNotifications = ({ onUnreadCountChange, setActiveTab, setReportIdToFocus }) => {
   const [refreshing, setRefreshing] = useState(false);
@@ -39,6 +40,9 @@ const CNotifications = ({ onUnreadCountChange, setActiveTab, setReportIdToFocus 
           console.log('✅ Current user ID:', userId);
           console.log('📧 User email:', userData.email);
           setCurrentUserId(userId);
+          
+          // Register for push notifications
+          await registerForPushNotificationsAsync();
         } else {
           console.warn('⚠️ No user ID found in userData:', userData);
           setLoading(false);
@@ -137,6 +141,10 @@ const CNotifications = ({ onUnreadCountChange, setActiveTab, setReportIdToFocus 
       }
       
       setNotifications(formattedNotifications);
+      
+      // Update badge count
+      const unreadCount = formattedNotifications.filter(n => !n.read).length;
+      await setBadgeCount(unreadCount);
     } catch (error) {
       console.error('💥 Exception loading notifications:', error);
       setNotifications([]);
@@ -240,8 +248,27 @@ const CNotifications = ({ onUnreadCountChange, setActiveTab, setReportIdToFocus 
         schema: 'public',
         table: 'notifications',
         filter: `user_id=eq.${currentUserId}&user_type=eq.citizen`
-      }, (payload) => {
+      }, async (payload) => {
         console.log('📱 New notification received:', payload.new);
+        const newNotification = payload.new;
+        
+        // Send push notification (skip for nearby incidents as they're handled by the service)
+        // Nearby incidents are handled directly in citizenNotificationService.js
+        if (newNotification.type !== 'fire_alert' || !newNotification.title?.includes('Nearby')) {
+          await sendPushNotification(
+            newNotification.title || 'New Notification',
+            newNotification.message || 'You have a new notification',
+            {
+              type: newNotification.type,
+              notificationId: newNotification.id,
+              reportId: newNotification.related_report_id,
+              priority: newNotification.priority,
+            }
+          );
+        } else {
+          console.log('ℹ️ Skipping push notification for nearby incident (already sent by service)');
+        }
+        
         // Reload notifications to get the latest
         loadNotifications();
       })

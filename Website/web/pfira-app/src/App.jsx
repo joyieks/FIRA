@@ -37,7 +37,11 @@ const App = () => {
           <Adashboard />
         </NotificationProvider>
       } />
-      <Route path="/station-map" element={<Sdashboard />} />
+      <Route path="/station-map" element={
+        <NotificationProvider>
+          <Sdashboard />
+        </NotificationProvider>
+      } />
 
       {/* Admin routes without protection */}
       <Route path="/admin-dashboard" element={
@@ -55,7 +59,11 @@ const App = () => {
       </Route>
 
       {/* Station routes without protection */}
-      <Route path="/station-dashboard" element={<StationLayout />}>
+      <Route path="/station-dashboard" element={
+        <NotificationProvider>
+          <StationLayout />
+        </NotificationProvider>
+      }>
         <Route index element={<Sdashboard />} />
         <Route path="overall" element={<Station_Overview />} />
         <Route path="notification" element={<Station_Notification />} />
