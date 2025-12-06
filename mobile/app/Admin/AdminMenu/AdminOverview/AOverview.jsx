@@ -100,6 +100,7 @@ export default function AOverview() {
   }, []);
 
   // Load AI suggestions from messages table
+  // Optimized: Only query messages that have a report_id (fire report context)
   useEffect(() => {
     const loadAiSuggestions = async () => {
       try {
@@ -107,17 +108,24 @@ export default function AOverview() {
           .from('messages')
           .select('id, ai_suggested_alarm, suggested_alarm_level, created_at, report_id')
           .not('ai_suggested_alarm', 'is', null)
+          .not('report_id', 'is', null)  // Only get messages linked to fire reports
           .order('created_at', { ascending: false })
-          .limit(200);
-        if (!error) setAiChatSuggestions(data || []);
-      } catch (_) {}
+          .limit(150);  // Reduced from 200 since we're filtering more
+        
+        if (!error) {
+          console.log(`📱 Admin AI Suggestions: Loaded ${data?.length || 0} report-linked suggestions`);
+          setAiChatSuggestions(data || []);
+        }
+      } catch (err) {
+        console.error('📱 Error loading AI suggestions:', err);
+      }
     };
     loadAiSuggestions();
     
-    // Faster polling - every 5 seconds
-    const interval = setInterval(loadAiSuggestions, 5000);
+    // Fast polling - every 2 seconds for real-time operations
+    const interval = setInterval(loadAiSuggestions, 2000);
     
-    // Real-time subscription for instant updates
+    // Real-time subscription for instant updates - only report-linked messages
     const subscription = supabase
       .channel('ai_suggestions_mobile_admin')
       .on('postgres_changes', {
@@ -125,9 +133,12 @@ export default function AOverview() {
         schema: 'public',
         table: 'messages',
         filter: 'ai_suggested_alarm=not.is.null'
-      }, () => {
-        console.log('🔔 Real-time: AI suggestion detected, reloading...');
-        loadAiSuggestions();
+      }, (payload) => {
+        // Only reload if the message has a report_id
+        if (payload.new?.report_id) {
+          console.log('🔔 Real-time: Report-linked AI suggestion detected, reloading...');
+          loadAiSuggestions();
+        }
       })
       .subscribe();
     
@@ -168,19 +179,36 @@ export default function AOverview() {
       return null;
     };
 
+    // Use MOST RECENT suggestion per report (not strongest) to match real-time chat context
     const bestByReport = {};
+    const messageTimestamps = {};
     (aiChatSuggestions || []).forEach((m) => {
       const reportId = m.report_id;
       if (!reportId) return;
+      const reportIdStr = String(reportId);
       const label = normalizeAiLabel(m.ai_suggested_alarm, m.suggested_alarm_level);
       if (!label) return;
-      const current = bestByReport[reportId];
-      if (!current || toStrength(label) > toStrength(current)) {
-        bestByReport[reportId] = label;
+      
+      const currentTimestamp = messageTimestamps[reportIdStr];
+      const newTimestamp = new Date(m.created_at).getTime();
+      
+      // Keep the most recent message (highest timestamp)
+      if (!currentTimestamp || newTimestamp > currentTimestamp) {
+        bestByReport[reportIdStr] = label;
+        messageTimestamps[reportIdStr] = newTimestamp;
       }
     });
     setChatAlarmByReport(bestByReport);
   }, [aiChatSuggestions]);
+
+  // When AI overrides change, update suggestedAlarmLevel in current list
+  useEffect(() => {
+    if (!reports || reports.length === 0 || Object.keys(chatAlarmByReport).length === 0) return;
+    setReports(prev => prev.map(r => ({
+      ...r,
+      recommended_alarm_level: chatAlarmByReport[String(r.id)] || r.recommended_alarm_level
+    })));
+  }, [chatAlarmByReport]);
 
   useEffect(() => {
     fetchReports();

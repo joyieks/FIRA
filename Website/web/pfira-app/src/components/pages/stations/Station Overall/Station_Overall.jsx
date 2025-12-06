@@ -238,24 +238,87 @@ const Station_Overview = () => {
   }, []);
 
   // Load AI suggestions from messages table to override suggested alarm level
+  // Optimized: Only query messages for reports assigned to this station or its responders
   useEffect(() => {
+    if (!currentStationId) return;
+    
     const loadAiSuggestions = async () => {
       try {
+        // Get all report IDs assigned to this station and its responders
+        const [stationAssignments, responderData] = await Promise.all([
+          supabase
+            .from('report_assignments')
+            .select('report_id')
+            .eq('assignee_type', 'station')
+            .eq('assignee_id', currentStationId),
+          supabase
+            .from('responders')
+            .select('id')
+            .eq('station_id', currentStationId)
+        ]);
+
+        let reportIds = new Set();
+        
+        // Add station's directly assigned reports
+        if (stationAssignments.data) {
+          stationAssignments.data.forEach(a => reportIds.add(String(a.report_id)));
+        }
+
+        // Get responder assignments
+        if (responderData.data && responderData.data.length > 0) {
+          const responderIds = responderData.data.map(r => r.id);
+          const { data: responderAssignments } = await supabase
+            .from('responder_notifications')
+            .select('fire_report_id')
+            .in('responder_id', responderIds)
+            .in('status', ['pending', 'accepted']);
+          
+          if (responderAssignments) {
+            responderAssignments.forEach(a => reportIds.add(String(a.fire_report_id)));
+          }
+        }
+
+        // Add forwarded reports
+        const { data: forwarded } = await supabase
+          .from('report_routes')
+          .select('report_id')
+          .eq('target', `station:${currentStationId}`);
+        
+        if (forwarded) {
+          forwarded.forEach(f => reportIds.add(String(f.report_id)));
+        }
+
+        // If no reports assigned, return early
+        if (reportIds.size === 0) {
+          setAiChatSuggestions([]);
+          return;
+        }
+
+        // Query only messages for these specific reports
+        const reportIdsArray = Array.from(reportIds);
         const { data, error } = await supabase
           .from('messages')
           .select('id, ai_suggested_alarm, suggested_alarm_level, created_at, report_id')
           .not('ai_suggested_alarm', 'is', null)
+          .in('report_id', reportIdsArray)
           .order('created_at', { ascending: false })
-          .limit(300);
-        if (!error) setAiChatSuggestions(data || []);
-      } catch (_) {}
+          .limit(100);
+        
+        if (!error) {
+          console.log(`🤖 AI Suggestions: Loaded ${data?.length || 0} suggestions for ${reportIds.size} assigned reports`);
+          setAiChatSuggestions(data || []);
+        }
+      } catch (err) {
+        console.error('Error loading AI suggestions:', err);
+      }
     };
+    
     loadAiSuggestions();
     
-    // Faster polling - every 5 seconds instead of 30
-    const interval = setInterval(loadAiSuggestions, 5000);
+    // Fast polling - every 2 seconds for real-time operations
+    const interval = setInterval(loadAiSuggestions, 2000);
     
-    // Real-time subscription for instant updates
+    // Real-time subscription for instant updates - filter by report context
     const subscription = supabase
       .channel('ai_suggestions_station')
       .on('postgres_changes', {
@@ -263,7 +326,7 @@ const Station_Overview = () => {
         schema: 'public',
         table: 'messages',
         filter: 'ai_suggested_alarm=not.is.null'
-      }, () => {
+      }, (payload) => {
         console.log('🔔 Real-time: AI suggestion detected, reloading...');
         loadAiSuggestions();
       })
@@ -273,7 +336,7 @@ const Station_Overview = () => {
       clearInterval(interval);
       subscription.unsubscribe();
     };
-  }, []);
+  }, [currentStationId]);
 
   // Normalize and keep strongest AI suggested alarm per report
   useEffect(() => {
@@ -329,15 +392,23 @@ const Station_Overview = () => {
       return map[suggested] || suggested;
     };
 
+    // Use MOST RECENT suggestion per report (not strongest) to match real-time chat context
     const bestByReport = {};
+    const messageTimestamps = {};
     (aiChatSuggestions || []).forEach((m) => {
       const reportId = m.report_id;
       if (!reportId) return;
+      const reportIdStr = String(reportId);
       const label = normalizeAiLabel(m.ai_suggested_alarm, m.suggested_alarm_level);
       if (!label) return;
-      const current = bestByReport[reportId];
-      if (!current || toStrength(label) > toStrength(current)) {
-        bestByReport[reportId] = label;
+      
+      const currentTimestamp = messageTimestamps[reportIdStr];
+      const newTimestamp = new Date(m.created_at).getTime();
+      
+      // Keep the most recent message (highest timestamp)
+      if (!currentTimestamp || newTimestamp > currentTimestamp) {
+        bestByReport[reportIdStr] = label;
+        messageTimestamps[reportIdStr] = newTimestamp;
       }
     });
     setChatAlarmByReport(bestByReport);

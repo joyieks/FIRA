@@ -75,13 +75,16 @@ const Overview = () => {
       }
       
       // Transform Railway API data to match the expected format
-      const transformedReports = data.map(report => ({
+      const transformedReports = data.map(report => {
+        const aiOverride = chatAlarmByReport[String(report.id)];
+        const suggested = aiOverride || report.recommended_alarm_level || report.alarm_level || determineSuggestedAlarm(report.number_of_structures_on_fire);
+        return {
         id: report.id,
         time: formatTime(report.formatted_timestamp || report.created_at || report.timestamp),
         reporter: report.reporter || 'Unknown Reporter',
         location: report.address || report.geotag_location || 'Location unavailable',
         status: report.status || determineStatus(report.prediction),
-        suggestedAlarmLevel: chatAlarmByReport[report.id] || report.recommended_alarm_level || report.alarm_level || determineSuggestedAlarm(report.number_of_structures_on_fire),
+        suggestedAlarmLevel: suggested,
         finalAlarmLevel: report.final_fire_alarm_level || '1st Alarm',
         description: report.cause_of_fire || 'No cause specified',
         picture: report.image_url,
@@ -103,7 +106,8 @@ const Overview = () => {
         // Cancellation info
         cancelled_by: report.cancelled_by,
         cancellation_reason: report.cancellation_reason
-      }));
+      };
+      });
       
       console.log('Transformed reports:', transformedReports);
       setReports(transformedReports);
@@ -329,6 +333,7 @@ const Overview = () => {
   }, [selectedReport?.id]);
 
   // Load recent AI suggestions from chat messages
+  // Optimized: Only query messages that have a report_id (fire report context)
   useEffect(() => {
     const loadAiSuggestions = async () => {
       try {
@@ -336,19 +341,24 @@ const Overview = () => {
           .from('messages')
           .select('id, text, ai_suggested_alarm, suggested_alarm_level, created_at, sender_type, report_id')
           .not('ai_suggested_alarm', 'is', null)
+          .not('report_id', 'is', null)  // Only get messages linked to fire reports
           .order('created_at', { ascending: false })
-          .limit(200);
-        if (!error) setAiChatSuggestions(data || []);
-      } catch (_) {
+          .limit(300);  // Increased to ensure we get all recent messages
+        
+        if (!error) {
+          setAiChatSuggestions(data || []);
+        }
+      } catch (err) {
+        console.error('Error loading AI suggestions:', err);
         // ignore; UI degrades gracefully
       }
     };
     loadAiSuggestions();
     
-    // Faster polling - every 5 seconds instead of 30
-    const interval = setInterval(loadAiSuggestions, 5000);
+    // Fast polling - every 2 seconds for real-time operations
+    const interval = setInterval(loadAiSuggestions, 2000);
     
-    // Real-time subscription for instant updates
+    // Real-time subscription for instant updates - only report-linked messages
     const subscription = supabase
       .channel('ai_suggestions_admin')
       .on('postgres_changes', {
@@ -356,9 +366,12 @@ const Overview = () => {
         schema: 'public',
         table: 'messages',
         filter: 'ai_suggested_alarm=not.is.null'
-      }, () => {
-        console.log('🔔 Real-time: AI suggestion detected, reloading...');
-        loadAiSuggestions();
+      }, (payload) => {
+        // Only reload if the message has a report_id
+        if (payload.new?.report_id) {
+          console.log('🔔 Real-time: Report-linked AI suggestion detected, reloading...');
+          loadAiSuggestions();
+        }
       })
       .subscribe();
     
@@ -438,19 +451,37 @@ const Overview = () => {
       return map[suggested] || suggested;
     };
 
+    // Use MOST RECENT suggestion per report (not strongest) to match real-time chat context
     const bestByReport = {};
+    const messageTimestamps = {};
     (aiChatSuggestions || []).forEach((m) => {
       const reportId = m.report_id;
       if (!reportId) return;
+      const reportIdStr = String(reportId);
       const label = normalizeAiLabelLocal(m.ai_suggested_alarm, m.suggested_alarm_level);
       if (!label) return;
-      const current = bestByReport[reportId];
-      if (!current || toStrength(label) > toStrength(current)) {
-        bestByReport[reportId] = label;
+      
+      const currentTimestamp = messageTimestamps[reportIdStr];
+      const newTimestamp = new Date(m.created_at).getTime();
+      
+      // Keep the most recent message (highest timestamp)
+      if (!currentTimestamp || newTimestamp > currentTimestamp) {
+        bestByReport[reportIdStr] = label;
+        messageTimestamps[reportIdStr] = newTimestamp;
       }
     });
     setChatAlarmByReport(bestByReport);
   }, [aiChatSuggestions]);
+
+  // When AI overrides change, update suggestedAlarmLevel in current list
+  useEffect(() => {
+    if (!reports || reports.length === 0) return;
+    
+    setReports(prev => prev.map(r => ({
+      ...r,
+      suggestedAlarmLevel: chatAlarmByReport[String(r.id)] || r.suggestedAlarmLevel
+    })));
+  }, [chatAlarmByReport]);
 
   // Normalize AI labels across variants
   const normalizeAiLabel = (aiValue) => {

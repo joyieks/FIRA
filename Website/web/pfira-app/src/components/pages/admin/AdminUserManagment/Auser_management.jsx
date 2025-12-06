@@ -2,9 +2,24 @@ import React, { useState, useEffect } from 'react';
 import { FiUsers, FiHome, FiUserCheck, FiUserX, FiEdit2, FiTrash2, FiSearch, FiChevronDown, FiEye, FiFileText, FiX, FiPlus, FiClock, FiUser, FiLoader } from 'react-icons/fi';
 import { supabase } from '../../../../config/supabase';
 import emailjs from '@emailjs/browser';
+import { GoogleMap, Marker, useJsApiLoader } from '@react-google-maps/api';
 
 
 const Auser_management = () => {
+  const GOOGLE_MAPS_API_KEY = 'AIzaSyBX5taF1AgNhicxw5_BXUJDs6ouniAuiQI';
+  
+  const { isLoaded: isMapLoaded, loadError } = useJsApiLoader({
+    googleMapsApiKey: GOOGLE_MAPS_API_KEY,
+    libraries: ['places']
+  });
+
+  // Log map loading errors
+  useEffect(() => {
+    if (loadError) {
+      console.error('Google Maps load error:', loadError);
+    }
+  }, [loadError]);
+
   // Initialize EmailJS
   useEffect(() => {
     emailjs.init('N_WM9SM_s6cRQPVgT');
@@ -28,6 +43,15 @@ const Auser_management = () => {
 
   const [selectedUser, setSelectedUser] = useState(null);
   const [selectedResponder, setSelectedResponder] = useState(null);
+  const [showMapPicker, setShowMapPicker] = useState(false);
+  const [mapCenter, setMapCenter] = useState({ lat: 10.3157, lng: 123.8854 }); // Cebu City default
+  const [mapZoom, setMapZoom] = useState(13);
+  const [locationSearchQuery, setLocationSearchQuery] = useState('');
+  const [searchResults, setSearchResults] = useState([]);
+  const [showSearchResults, setShowSearchResults] = useState(false);
+  const [isSearching, setIsSearching] = useState(false);
+  const [mapInstance, setMapInstance] = useState(null);
+  const [placesService, setPlacesService] = useState(null);
   const [newStation, setNewStation] = useState({
     name: '',
     stationId: '',
@@ -940,8 +964,11 @@ const Auser_management = () => {
               </div>
             )}
           </div>
-                    {/* Citizen Profile Modal */}
-          {showCitizenProfileModal && selectedCitizen && (
+        </div>
+      </div>
+
+      {/* Citizen Profile Modal */}
+      {showCitizenProfileModal && selectedCitizen && (
             <div 
               className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 backdrop-blur-lg"
               onClick={() => setShowCitizenProfileModal(false)}
@@ -1346,14 +1373,24 @@ const Auser_management = () => {
                       <label className="block text-sm font-medium text-gray-700 mb-2">
                         Location <span className="text-red-500">*</span>
                       </label>
-                      <input
-                        type="text"
-                        value={newStation.location}
-                        onChange={(e) => setNewStation({...newStation, location: e.target.value})}
-                        className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-red-500 focus:border-red-500 transition-all duration-200 bg-gray-50 focus:bg-white"
-                        placeholder="Enter station location"
-                        required
-                      />
+                      <div className="relative">
+                        <input
+                          type="text"
+                          value={newStation.location}
+                          onChange={(e) => setNewStation({...newStation, location: e.target.value})}
+                          className="w-full px-4 py-3 pr-24 border border-gray-200 rounded-xl focus:ring-2 focus:ring-red-500 focus:border-red-500 transition-all duration-200 bg-gray-50 focus:bg-white"
+                          placeholder="Click 'Pick on Map' or enter manually"
+                          required
+                          readOnly={showMapPicker}
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setShowMapPicker(!showMapPicker)}
+                          className="absolute right-2 top-1/2 -translate-y-1/2 px-3 py-1.5 bg-red-600 text-white text-xs rounded-lg hover:bg-red-700 transition-colors"
+                        >
+                          {showMapPicker ? 'Close Map' : 'Pick on Map'}
+                        </button>
+                      </div>
                     </div>
 
                     <div>
@@ -1411,68 +1448,664 @@ const Auser_management = () => {
                       />
                     </div>
 
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-2">
-                        Latitude
-                      </label>
-                      <input
-                        type="number"
-                        step="any"
-                        value={newStation.lat}
-                        onChange={(e) => setNewStation({...newStation, lat: e.target.value})}
-                        className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-red-500 focus:border-red-500 transition-all duration-200 bg-gray-50 focus:bg-white"
-                        placeholder="e.g., 10.3157"
-                      />
-                    </div>
-
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-2">
-                        Longitude
-                      </label>
-                      <input
-                        type="number"
-                        step="any"
-                        value={newStation.lng}
-                        onChange={(e) => setNewStation({...newStation, lng: e.target.value})}
-                        className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-red-500 focus:border-red-500 transition-all duration-200 bg-gray-50 focus:bg-white"
-                        placeholder="e.g., 123.8854"
-                      />
-                    </div>
                   </div>
 
-                  <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
-                    <div className="flex items-start">
-                      <div className="flex-shrink-0">
-                        <FiUser className="w-5 h-5 text-blue-600" />
+                  {/* Map Picker */}
+                  {showMapPicker && (
+                    <div className="mt-4 border border-gray-200 rounded-xl overflow-hidden">
+                      <div className="bg-gradient-to-r from-red-50 to-orange-50 px-4 py-3 border-b border-gray-200">
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <h3 className="text-sm font-semibold text-gray-900">📍 Click on the Map to Set Location</h3>
+                            <p className="text-xs text-gray-600 mt-0.5">Click anywhere on the map to pin the station location</p>
+                          </div>
+                          {newStation.lat && newStation.lng && (
+                            <div className="text-xs text-gray-600 bg-white px-3 py-1.5 rounded-lg border border-gray-200">
+                              📍 {parseFloat(newStation.lat).toFixed(4)}, {parseFloat(newStation.lng).toFixed(4)}
+                            </div>
+                          )}
+                        </div>
                       </div>
-                      <div className="ml-3">
-                        <h3 className="text-sm font-medium text-blue-800">Station Account Creation</h3>
-                        <p className="text-sm text-blue-700 mt-1">
-                          The password you enter will be sent to the station's email address along with their login credentials. 
-                          The station will be able to log in to the FIRA mobile application with these credentials.
-                        </p>
+                      
+                      {/* Search Bar */}
+                      <div className="p-4 bg-white border-b border-gray-200">
+                        <div className="relative">
+                          <div className="relative">
+                            <FiSearch className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" />
+                            <input
+                              type="text"
+                              value={locationSearchQuery}
+                              onChange={(e) => {
+                                const query = e.target.value;
+                                setLocationSearchQuery(query);
+                                
+                                if (query.length > 2 && isMapLoaded && window.google) {
+                                  setIsSearching(true);
+                                  setShowSearchResults(true);
+                                  
+                                  // Use Google Maps Places Service
+                                  const service = new window.google.maps.places.PlacesService(document.createElement('div'));
+                                  
+                                  const request = {
+                                    query: query,
+                                    fields: ['name', 'formatted_address', 'geometry'],
+                                    locationBias: {
+                                      center: mapCenter,
+                                      radius: 50000
+                                    }
+                                  };
+                                  
+                                  service.textSearch(request, (results, status) => {
+                                    setIsSearching(false);
+                                    
+                                    if (status === window.google.maps.places.PlacesServiceStatus.OK && results) {
+                                      setSearchResults(results.slice(0, 5));
+                                    } else if (status === window.google.maps.places.PlacesServiceStatus.ZERO_RESULTS) {
+                                      // Fallback to Geocoder
+                                      const geocoder = new window.google.maps.Geocoder();
+                                      geocoder.geocode({ address: query, region: 'ph' }, (geoResults, geoStatus) => {
+                                        if (geoStatus === 'OK' && geoResults) {
+                                          const transformedResults = geoResults.map(result => ({
+                                            name: result.formatted_address,
+                                            formatted_address: result.formatted_address,
+                                            geometry: result.geometry
+                                          }));
+                                          setSearchResults(transformedResults.slice(0, 5));
+                                        } else {
+                                          setSearchResults([]);
+                                        }
+                                      });
+                                    } else {
+                                      console.error('Places search failed:', status);
+                                      setSearchResults([]);
+                                    }
+                                  });
+                                } else {
+                                  setSearchResults([]);
+                                  setShowSearchResults(false);
+                                }
+                              }}
+                              onFocus={() => {
+                                if (searchResults.length > 0) {
+                                  setShowSearchResults(true);
+                                }
+                              }}
+                              className="w-full pl-10 pr-10 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:border-red-500"
+                              placeholder="Search for a location (e.g., Fire Station, City Hall, Cebu...)"
+                            />
+                            {locationSearchQuery && (
+                              <button
+                                onClick={() => {
+                                  setLocationSearchQuery('');
+                                  setSearchResults([]);
+                                  setShowSearchResults(false);
+                                }}
+                                className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                              >
+                                <FiX />
+                              </button>
+                            )}
+                          </div>
+                          
+                          {/* Search Results Dropdown */}
+                          {showSearchResults && (
+                            <div className="absolute z-10 w-full mt-2 bg-white border border-gray-200 rounded-lg shadow-lg max-h-60 overflow-y-auto">
+                              {isSearching ? (
+                                <div className="p-4 text-center text-gray-500">
+                                  <FiLoader className="animate-spin inline-block mr-2" />
+                                  Searching...
+                                </div>
+                              ) : searchResults.length > 0 ? (
+                                searchResults.map((result, index) => {
+                                  // Handle both Google Maps LatLng objects and plain objects
+                                  const getLat = () => {
+                                    if (typeof result.geometry.location.lat === 'function') {
+                                      return result.geometry.location.lat();
+                                    }
+                                    return result.geometry.location.lat;
+                                  };
+                                  
+                                  const getLng = () => {
+                                    if (typeof result.geometry.location.lng === 'function') {
+                                      return result.geometry.location.lng();
+                                    }
+                                    return result.geometry.location.lng;
+                                  };
+                                  
+                                  const displayLat = getLat();
+                                  const displayLng = getLng();
+                                  
+                                  return (
+                                    <button
+                                      key={index}
+                                      onClick={() => {
+                                        const lat = getLat();
+                                        const lng = getLng();
+                                        
+                                        setMapCenter({ lat, lng });
+                                        setMapZoom(17); // Zoom closer for precise location
+                                        
+                                        // Set the location immediately with place name
+                                        const locationName = result.name !== result.formatted_address 
+                                          ? `${result.name}, ${result.formatted_address}`
+                                          : result.formatted_address;
+                                        
+                                        setNewStation({
+                                          ...newStation,
+                                          location: locationName,
+                                          lat: lat.toString(),
+                                          lng: lng.toString()
+                                        });
+                                        
+                                        setShowSearchResults(false);
+                                        setLocationSearchQuery('');
+                                      }}
+                                      className="w-full px-4 py-3 text-left hover:bg-gray-50 border-b border-gray-100 last:border-b-0 transition-colors"
+                                    >
+                                      <div className="flex items-start space-x-3">
+                                        <span className="text-red-500 mt-1">📍</span>
+                                        <div className="flex-1">
+                                          {result.name && result.name !== result.formatted_address && (
+                                            <p className="font-semibold text-gray-900">{result.name}</p>
+                                          )}
+                                          <p className={`${result.name && result.name !== result.formatted_address ? 'text-gray-600' : 'text-gray-900 font-medium'}`}>
+                                            {result.formatted_address}
+                                          </p>
+                                          <p className="text-xs text-gray-500 mt-0.5">
+                                            {displayLat.toFixed(6)}, {displayLng.toFixed(6)}
+                                          </p>
+                                        </div>
+                                      </div>
+                                    </button>
+                                  );
+                                })
+                              ) : (
+                                <div className="p-4 text-center text-gray-500">
+                                  No results found
+                                </div>
+                              )}
+                            </div>
+                          )}
+                        </div>
                       </div>
+                      
+                      {isMapLoaded ? (
+                        <GoogleMap
+                          mapContainerStyle={{ width: '100%', height: '500px' }}
+                          center={mapCenter}
+                          zoom={mapZoom}
+                          onLoad={(map) => {
+                            setMapInstance(map);
+                            setPlacesService(new window.google.maps.places.PlacesService(map));
+                          }}
+                          onClick={(e) => {
+                            const lat = e.latLng.lat();
+                            const lng = e.latLng.lng();
+                            
+                            setMapCenter({ lat, lng });
+                            
+                            // Use Geocoder from Google Maps API
+                            if (window.google) {
+                              const geocoder = new window.google.maps.Geocoder();
+                              geocoder.geocode({ location: { lat, lng } }, (results, status) => {
+                                if (status === 'OK' && results[0]) {
+                                  const address = results[0].formatted_address;
+                                  setNewStation({
+                                    ...newStation,
+                                    location: address,
+                                    lat: lat.toString(),
+                                    lng: lng.toString()
+                                  });
+                                } else {
+                                  setNewStation({
+                                    ...newStation,
+                                    location: `${lat.toFixed(6)}, ${lng.toFixed(6)}`,
+                                    lat: lat.toString(),
+                                    lng: lng.toString()
+                                  });
+                                }
+                              });
+                            }
+                          }}
+                          options={{
+                            streetViewControl: false,
+                            mapTypeControl: true,
+                            fullscreenControl: true,
+                          }}
+                        >
+                          {newStation.lat && newStation.lng && (
+                            <Marker
+                              position={{ 
+                                lat: parseFloat(newStation.lat), 
+                                lng: parseFloat(newStation.lng) 
+                              }}
+                            />
+                          )}
+                        </GoogleMap>
+                      ) : (
+                        <div className="h-96 bg-gray-100 flex items-center justify-center">
+                          <div className="text-center">
+                            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-red-600 mx-auto mb-4"></div>
+                            <p className="text-gray-600">Loading map...</p>
+                          </div>
+                        </div>
+                      )}
+                      
+                      <div className="bg-gray-50 px-4 py-3 border-t border-gray-200">
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs text-gray-600">💡 Tip: Click anywhere on the map to set the station location</span>
+                          {newStation.lat && newStation.lng && (
+                            <div className="flex items-center space-x-2">
+                              <span className="text-xs font-medium text-green-600">✅ Location pinned</span>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setShowMapPicker(false);
+                                }}
+                                className="px-4 py-1.5 text-xs bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors font-medium"
+                              >
+                                Use Location
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                      
+                      {newStation.lat && newStation.lng && (
+                        <div className="bg-green-50 border-t border-green-200 px-4 py-3">
+                          <div className="flex items-start space-x-3">
+                            <span className="text-xl">✅</span>
+                            <div className="flex-1">
+                              <h4 className="font-semibold text-green-900 text-sm mb-1">Location Selected</h4>
+                              <p className="text-sm text-green-700">{newStation.location}</p>
+                              <p className="text-xs text-green-600 mt-1">
+                                Coordinates: {parseFloat(newStation.lat).toFixed(6)}, {parseFloat(newStation.lng).toFixed(6)}
+                              </p>
+                            </div>
+                          </div>
+                        </div>
+                      )}
                     </div>
-                  </div>
+                  )}
 
-                  <div className="flex justify-end space-x-4 pt-6 border-t border-gray-200">
+                  <div className="flex items-center justify-between pt-6 border-t border-gray-200 mt-6">
                     <button
                       type="button"
-                      onClick={() => setShowAddStationModal(false)}
-                      className="px-6 py-3 text-gray-600 border border-gray-300 rounded-xl hover:bg-gray-50 transition-all duration-200 font-medium"
+                      onClick={() => {
+                        setShowAddStationModal(false);
+                        setShowMapPicker(false);
+                        setNewStation({
+                          name: '',
+                          stationId: '',
+                          location: '',
+                          email: '',
+                          phone: '',
+                          position: '',
+                          password: '',
+                          lat: '',
+                          lng: ''
+                        });
+                        setLocationSearchQuery('');
+                        setSearchResults([]);
+                        setShowSearchResults(false);
+                      }}
+                      className="px-6 py-2.5 border border-gray-300 text-gray-700 font-medium rounded-xl hover:bg-gray-50 transition-all duration-200"
                     >
                       Cancel
                     </button>
                     <button
                       type="submit"
-                      className="px-6 py-3 bg-gradient-to-r from-red-600 to-red-700 text-white rounded-xl hover:from-red-700 hover:to-red-800 transition-all duration-200 font-medium shadow-lg hover:shadow-xl"
+                      className="px-8 py-2.5 bg-gradient-to-r from-red-600 to-red-700 text-white font-medium rounded-xl hover:from-red-700 hover:to-red-800 transition-all duration-200 shadow-lg hover:shadow-xl"
                     >
-                      Create Station
+                      Create Station Account
                     </button>
                   </div>
                 </form>
               </div>
             </div>
+          )}
+
+      {/* History Modal */}
+      {showHistoryModal && selectedUser && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto">
+            <div className="sticky top-0 bg-gradient-to-r from-red-600 to-red-700 text-white px-6 py-4 rounded-t-2xl flex items-center justify-between">
+              <div className="flex items-center space-x-3">
+                <FiClock className="text-2xl" />
+                <div>
+                  <h2 className="text-xl font-bold">{selectedUser.name}</h2>
+                  <p className="text-sm text-red-100">Activity History</p>
+                </div>
+              </div>
+              <button
+                onClick={() => {
+                  setShowHistoryModal(false);
+                  setSelectedUser(null);
+                }}
+                className="text-white hover:bg-white hover:bg-opacity-20 rounded-lg p-2 transition-all duration-200"
+              >
+                <FiX className="text-xl" />
+              </button>
+            </div>
+
+            <div className="p-6 space-y-4">
+              {/* Placeholder for history items */}
+              <div className="text-center text-gray-500 py-8">
+                <FiClock className="text-4xl mx-auto mb-3 text-gray-300" />
+                <p>No activity history available</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Citizen Profile Modal */}
+      {showCitizenProfileModal && selectedCitizen && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-4xl max-h-[90vh] overflow-hidden flex flex-col">
+            {/* Modal Header */}
+            <div className="bg-gradient-to-r from-red-600 to-red-700 text-white px-6 py-4 flex items-center justify-between">
+              <div className="flex items-center space-x-3">
+                <FiUser className="text-2xl" />
+                <div>
+                  <h2 className="text-xl font-bold">{selectedCitizen.name}</h2>
+                  <p className="text-sm text-red-100">{selectedCitizen.email}</p>
+                </div>
+              </div>
+              <button
+                onClick={() => {
+                  setShowCitizenProfileModal(false);
+                  setSelectedCitizen(null);
+                  setActiveProfileSection('profile');
+                }}
+                className="text-white hover:bg-white hover:bg-opacity-20 rounded-lg p-2 transition-all duration-200"
+              >
+                <FiX className="text-xl" />
+              </button>
+            </div>
+
+            {/* Tabs */}
+            <div className="flex border-b border-gray-200 px-6 bg-gray-50">
+              <button
+                onClick={() => setActiveProfileSection('profile')}
+                className={`px-4 py-3 font-medium transition-all duration-200 border-b-2 ${
+                  activeProfileSection === 'profile'
+                    ? 'border-red-600 text-red-600'
+                    : 'border-transparent text-gray-600 hover:text-gray-800'
+                }`}
+              >
+                Profile
+              </button>
+              <button
+                onClick={() => setActiveProfileSection('reports')}
+                className={`px-4 py-3 font-medium transition-all duration-200 border-b-2 ${
+                  activeProfileSection === 'reports'
+                    ? 'border-red-600 text-red-600'
+                    : 'border-transparent text-gray-600 hover:text-gray-800'
+                }`}
+              >
+                Reports
+              </button>
+              <button
+                onClick={() => {
+                  setActiveProfileSection('edit');
+                  setEditFormData({
+                    firstName: selectedCitizen.firstName || '',
+                    lastName: selectedCitizen.lastName || '',
+                    email: selectedCitizen.email || '',
+                    phoneNumber: selectedCitizen.phoneNumber || '',
+                    displayName: selectedCitizen.displayName || ''
+                  });
+                }}
+                className={`px-4 py-3 font-medium transition-all duration-200 border-b-2 ${
+                  activeProfileSection === 'edit'
+                    ? 'border-red-600 text-red-600'
+                    : 'border-transparent text-gray-600 hover:text-gray-800'
+                }`}
+              >
+                Edit
+              </button>
+            </div>
+
+            {/* Tab Content */}
+            <div className="flex-1 overflow-y-auto p-6">
+              {activeProfileSection === 'profile' && (
+                <div className="space-y-6">
+                  <div className="grid grid-cols-2 gap-6">
+                    <div>
+                      <label className="text-sm font-medium text-gray-500">First Name</label>
+                      <p className="mt-1 text-gray-900 font-medium">{selectedCitizen.firstName || 'N/A'}</p>
+                    </div>
+                    <div>
+                      <label className="text-sm font-medium text-gray-500">Last Name</label>
+                      <p className="mt-1 text-gray-900 font-medium">{selectedCitizen.lastName || 'N/A'}</p>
+                    </div>
+                    <div>
+                      <label className="text-sm font-medium text-gray-500">Email</label>
+                      <p className="mt-1 text-gray-900 font-medium">{selectedCitizen.email}</p>
+                    </div>
+                    <div>
+                      <label className="text-sm font-medium text-gray-500">Phone Number</label>
+                      <p className="mt-1 text-gray-900 font-medium">{selectedCitizen.phoneNumber || 'N/A'}</p>
+                    </div>
+                    <div>
+                      <label className="text-sm font-medium text-gray-500">Display Name</label>
+                      <p className="mt-1 text-gray-900 font-medium">{selectedCitizen.displayName || 'N/A'}</p>
+                    </div>
+                    <div>
+                      <label className="text-sm font-medium text-gray-500">Status</label>
+                      <p className="mt-1">
+                        <span className={`inline-flex px-2 py-1 text-xs font-semibold rounded-full ${
+                          selectedCitizen.status === 'active'
+                            ? 'bg-green-100 text-green-800'
+                            : 'bg-red-100 text-red-800'
+                        }`}>
+                          {selectedCitizen.status}
+                        </span>
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {activeProfileSection === 'reports' && (
+                <div className="text-center text-gray-500 py-8">
+                  <FiFileText className="text-4xl mx-auto mb-3 text-gray-300" />
+                  <p>No reports available for this user</p>
+                </div>
+              )}
+
+              {activeProfileSection === 'edit' && (
+                <form
+                  onSubmit={async (e) => {
+                    e.preventDefault();
+                    try {
+                      const { data, error } = await supabase
+                        .from('citizen_users')
+                        .update({
+                          first_name: editFormData.firstName,
+                          last_name: editFormData.lastName,
+                          email: editFormData.email,
+                          phone: editFormData.phone,
+                          display_name: editFormData.displayName
+                        })
+                        .eq('id', selectedCitizen.id);
+
+                      if (error) throw error;
+
+                      setUsers(prev => ({
+                        ...prev,
+                        citizens: prev.citizens.map(citizen =>
+                          citizen.id === selectedCitizen.id
+                            ? {
+                                ...citizen,
+                                firstName: editFormData.firstName,
+                                lastName: editFormData.lastName,
+                                email: editFormData.email,
+                                phone: editFormData.phone,
+                                phoneNumber: editFormData.phone,
+                                displayName: editFormData.displayName,
+                                name: `${editFormData.firstName} ${editFormData.lastName}`
+                              }
+                            : citizen
+                        )
+                      }));
+
+                      setSelectedCitizen(prev => ({
+                        ...prev,
+                        firstName: editFormData.firstName,
+                        lastName: editFormData.lastName,
+                        email: editFormData.email,
+                        phone: editFormData.phone,
+                        phoneNumber: editFormData.phone,
+                        displayName: editFormData.displayName,
+                        name: `${editFormData.firstName} ${editFormData.lastName}`
+                      }));
+
+                      setActiveProfileSection('profile');
+                      alert('Profile updated successfully!');
+                    } catch (error) {
+                      console.error('Error updating profile:', error);
+                      alert('Failed to update profile');
+                    }
+                  }}
+                  className="space-y-6"
+                >
+                  <div className="grid grid-cols-2 gap-6">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">First Name</label>
+                      <input
+                        type="text"
+                        value={editFormData.firstName || ''}
+                        onChange={(e) => setEditFormData({ ...editFormData, firstName: e.target.value })}
+                        className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:border-red-500"
+                        required
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">Last Name</label>
+                      <input
+                        type="text"
+                        value={editFormData.lastName || ''}
+                        onChange={(e) => setEditFormData({ ...editFormData, lastName: e.target.value })}
+                        className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:border-red-500"
+                        required
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">Email</label>
+                      <input
+                        type="email"
+                        value={editFormData.email || ''}
+                        onChange={(e) => setEditFormData({ ...editFormData, email: e.target.value })}
+                        className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:border-red-500"
+                        required
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">Phone Number</label>
+                      <input
+                        type="tel"
+                        value={editFormData.phoneNumber || ''}
+                        onChange={(e) => setEditFormData({ ...editFormData, phoneNumber: e.target.value })}
+                        className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:border-red-500"
+                      />
+                    </div>
+                    <div className="col-span-2">
+                      <label className="block text-sm font-medium text-gray-700 mb-2">Display Name</label>
+                      <input
+                        type="text"
+                        value={editFormData.displayName || ''}
+                        onChange={(e) => setEditFormData({ ...editFormData, displayName: e.target.value })}
+                        className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:border-red-500"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="flex justify-end space-x-3 pt-4 border-t border-gray-200">
+                    <button
+                      type="button"
+                      onClick={handleCancelEdit}
+                      className="px-6 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="submit"
+                      className="px-6 py-2 bg-gradient-to-r from-red-600 to-red-700 text-white rounded-lg hover:from-red-700 hover:to-red-800 transition-colors"
+                    >
+                      Save Changes
+                    </button>
+                  </div>
+                </form>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Responder Profile Modal */}
+      {showResponderProfileModal && selectedResponder && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-4xl max-h-[90vh] overflow-hidden flex flex-col">
+            {/* Modal Header */}
+            <div className="bg-gradient-to-r from-red-600 to-red-700 text-white px-6 py-4 flex items-center justify-between">
+              <div className="flex items-center space-x-3">
+                <FiUser className="text-2xl" />
+                <div>
+                  <h2 className="text-xl font-bold">{selectedResponder.name}</h2>
+                  <p className="text-sm text-red-100">{selectedResponder.email}</p>
+                </div>
+              </div>
+              <button
+                onClick={() => {
+                  setShowResponderProfileModal(false);
+                  setSelectedResponder(null);
+                }}
+                className="text-white hover:bg-white hover:bg-opacity-20 rounded-lg p-2 transition-all duration-200"
+              >
+                <FiX className="text-xl" />
+              </button>
+            </div>
+
+            {/* Responder Details */}
+            <div className="flex-1 overflow-y-auto p-6">
+              <div className="space-y-6">
+                <div className="grid grid-cols-2 gap-6">
+                  <div>
+                    <label className="text-sm font-medium text-gray-500">Name</label>
+                    <p className="mt-1 text-gray-900 font-medium">{selectedResponder.name || 'N/A'}</p>
+                  </div>
+                  <div>
+                    <label className="text-sm font-medium text-gray-500">Email</label>
+                    <p className="mt-1 text-gray-900 font-medium">{selectedResponder.email || 'N/A'}</p>
+                  </div>
+                  <div>
+                    <label className="text-sm font-medium text-gray-500">Phone</label>
+                    <p className="mt-1 text-gray-900 font-medium">{selectedResponder.phone || 'N/A'}</p>
+                  </div>
+                  <div>
+                    <label className="text-sm font-medium text-gray-500">Position</label>
+                    <p className="mt-1 text-gray-900 font-medium">{selectedResponder.position || 'N/A'}</p>
+                  </div>
+                  <div>
+                    <label className="text-sm font-medium text-gray-500">Status</label>
+                    <p className="mt-1">
+                      <span className={`inline-flex px-2 py-1 text-xs font-semibold rounded-full ${
+                        selectedResponder.status === 'active'
+                          ? 'bg-green-100 text-green-800'
+                          : 'bg-red-100 text-red-800'
+                      }`}>
+                        {selectedResponder.status || 'N/A'}
+                      </span>
+                    </p>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
           )}
 
           {/* Responders Modal */}
@@ -1666,11 +2299,6 @@ const Auser_management = () => {
               </div>
             </div>
           )}
-
-          {/* Edit Profile Modal */}
-          {/* History Modal */}
-        </div>
-      </div>
     </>
   );
 };
