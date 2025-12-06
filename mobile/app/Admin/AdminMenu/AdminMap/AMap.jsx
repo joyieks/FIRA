@@ -417,33 +417,34 @@ export default function AMap({ isSidebarOpen = false }) {
         {/* User Location Marker removed */}
 
         {/* Fire Report Markers */}
-        {fireReports.map((report, index) => (
-          <Marker
-            key={`${report.id}-${index}`}
-            coordinate={{
-              latitude: parseFloat(report.latitude),
-              longitude: parseFloat(report.longitude),
-            }}
-            title={`Fire Report #${report.id}`}
-            description={report.address || report.geotag_location || 'No address'}
-            onPress={(e) => {
-              e.stopPropagation();
-              handleMarkerPress(report);
-            }}
-            tracksViewChanges={false}
-          >
-            <TouchableOpacity
-              style={[styles.fireMarker, { backgroundColor: getMarkerColor(report) }]}
-              onPress={(e) => {
-                e.stopPropagation();
+        {fireReports.map((report, index) => {
+          const latNum = typeof report?.latitude === 'number' ? report.latitude : parseFloat(report?.latitude);
+          const lngNum = typeof report?.longitude === 'number' ? report.longitude : parseFloat(report?.longitude);
+          
+          if (isNaN(latNum) || isNaN(lngNum)) return null;
+
+          const color = getMarkerColor(report);
+          
+          return (
+            <Marker
+              key={`fire-${report.id}-${index}`}
+              coordinate={{
+                latitude: latNum,
+                longitude: lngNum,
+              }}
+              title={`Fire Report #${report.id}`}
+              description={report.address || report.geotag_location || 'No address'}
+              onPress={() => {
                 handleMarkerPress(report);
               }}
-              activeOpacity={0.7}
+              tracksViewChanges={false}
             >
-              <Text style={styles.fireMarkerText}>🔥</Text>
-            </TouchableOpacity>
-          </Marker>
-        ))}
+              <View style={[styles.fireMarker, { backgroundColor: color }]}>
+                <Text style={styles.fireMarkerText}>🔥</Text>
+              </View>
+            </Marker>
+          );
+        })}
         {/* Station markers and jurisdiction circles from lat/lng */}
         {stations.map((s) => (
           <React.Fragment key={s.id}>

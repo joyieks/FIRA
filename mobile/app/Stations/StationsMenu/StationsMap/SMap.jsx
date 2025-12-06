@@ -1,6 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { View, Text, ActivityIndicator, Dimensions, StatusBar, Platform, StyleSheet, Modal, TouchableOpacity, Image, ScrollView } from 'react-native';
 import MapView, { Marker, PROVIDER_GOOGLE, Circle, Callout } from 'react-native-maps';
+import { LinearGradient } from 'expo-linear-gradient';
+import { MaterialIcons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { supabase } from '../../../config/supabase';
 
@@ -13,9 +15,8 @@ export default function SMap({ reportIdToOpen, onReportOpened }) {
   const [assignedReports, setAssignedReports] = useState([]);
   const [selectedReport, setSelectedReport] = useState(null);
   const [showReportModal, setShowReportModal] = useState(false);
-  const [responders, setResponders] = useState([]);
-  const [isNotifying, setIsNotifying] = useState(false);
   const [currentStationId, setCurrentStationId] = useState(null);
+  const [assignmentInfo, setAssignmentInfo] = useState(null); // Store assignment info including note
 
   // Helper function to clean alarm level text
   const cleanAlarmLevel = (alarmLevel) => {
@@ -129,88 +130,6 @@ export default function SMap({ reportIdToOpen, onReportOpened }) {
     }
   };
 
-  // Handle notifying responders about fire report
-  const handleNotifyResponders = async (fireReport) => {
-    console.log('🚨 Notify Responders clicked:', { fireReport, responders: responders.length, currentStationId });
-    
-    if (!fireReport || !responders.length) {
-      alert('No responders available to notify.');
-      return;
-    }
-
-    if (!currentStationId) {
-      alert('Station information not available. Please try again.');
-      return;
-    }
-
-    if (isNotifying) return;
-
-    setIsNotifying(true);
-    
-    try {
-      // Create comprehensive notification message with fire report details
-      const notificationMessage = `🔥 FIRE REPORT ASSIGNED 🔥
-📍 Location: ${toStr(fireReport.address || fireReport.geotag_location || fireReport.location, 'Location not specified')}
-🔥 Alarm Level: ${toStr(formatAlarm(fireReport), 'Not specified')}
-📊 AI Detection: ${toStr(formatPrediction(fireReport), 'Not analyzed')}
-👤 Reporter: ${toStr(fireReport.reporter_name || fireReport.reporter || fireReport.reported_by, 'Unknown Reporter')}
-📝 Cause: ${toStr(
-        fireReport.cause_of_fire || fireReport.cause || fireReport.possible_cause || fireReport.fire_cause,
-        'Under investigation'
-      )}
-💨 Smoke Analysis: ${fireReport.smoke_intensity ? toStr(`${fireReport.smoke_intensity}${fireReport.smoke_confidence ? ` ${fireReport.smoke_confidence}` : ''}`) : 'Not analyzed'}
-🏠 Structure: ${toStr(fireReport.structure || fireReport.building_type, 'Not specified')}
-🏘️ Structures Affected: ${fireReport.number_of_structures_on_fire != null ? toStr(fireReport.number_of_structures_on_fire) : 'Unknown'}
-⏰ Reported: ${toStr(fireReport.formatted_timestamp || fireReport.timestamp, 'Time not specified')}
-
-Please respond immediately to this assignment.`;
-
-      // Notify all responders for this station
-      const notificationPromises = responders.map(async (responder) => {
-        try {
-          const { error: notificationError } = await supabase
-            .from('responder_notifications')
-            .insert({
-              responder_id: responder.id,
-              station_id: currentStationId,
-              fire_report_id: fireReport.id,
-              title: `Fire Report #${fireReport.id} - ${toStr(formatAlarm(fireReport), 'Emergency')}`,
-              message: notificationMessage,
-              priority: 'high',
-              is_read: false
-            });
-
-          if (notificationError) {
-            console.error(`❌ Error notifying responder ${responder.id}:`, notificationError);
-            return false;
-          }
-
-          console.log(`✅ Notification sent to responder ${responder.id}`);
-          return true;
-        } catch (error) {
-          console.error(`❌ Error notifying responder ${responder.id}:`, error);
-          return false;
-        }
-      });
-
-      const results = await Promise.all(notificationPromises);
-      const successCount = results.filter(Boolean).length;
-      
-      console.log('📊 Notification results:', { successCount, totalResponders: responders.length, results });
-      
-      if (successCount > 0) {
-        alert(`✅ Successfully notified ${successCount} responder(s) about the fire report.`);
-        setShowReportModal(false); // Close the modal
-      } else {
-        alert('❌ Failed to notify responders. Please try again.');
-      }
-    } catch (error) {
-      console.error('❌ Error notifying responders:', error);
-      alert(`❌ Error notifying responders: ${error.message}`);
-    } finally {
-      setIsNotifying(false);
-    }
-  };
 
   useEffect(() => {
     (async () => {
@@ -295,32 +214,39 @@ Please respond immediately to this assignment.`;
     })();
   }, []);
 
-  // Fetch responders for the current station
+
+  // Load assignment info when a report is selected
   useEffect(() => {
-    const fetchResponders = async () => {
-      if (!currentStationId) return;
+    const loadAssignmentInfo = async () => {
+      if (!selectedReport?.id || !currentStationId) {
+        setAssignmentInfo(null);
+        return;
+      }
 
       try {
-        console.log('👥 Fetching responders for station:', currentStationId);
-        const { data: respondersData, error } = await supabase
-          .from('responders')
-          .select('id, first_name, last_name, email, phone')
-          .eq('station_id', currentStationId);
+        const { data: assignment, error } = await supabase
+          .from('report_assignments')
+          .select('note, assigned_at')
+          .eq('report_id', String(selectedReport.id))
+          .eq('assignee_type', 'station')
+          .eq('assignee_id', currentStationId)
+          .single();
 
-        if (error) {
-          console.error('❌ Error fetching responders:', error);
+        if (error && error.code !== 'PGRST116') {
+          console.error('Error fetching assignment info:', error);
+          setAssignmentInfo(null);
           return;
         }
 
-        setResponders(respondersData || []);
-        console.log('👥 Loaded responders for station:', respondersData?.length || 0);
-      } catch (e) {
-        console.error('❌ Error loading responders:', e);
+        setAssignmentInfo(assignment || null);
+      } catch (err) {
+        console.error('Error loading assignment info:', err);
+        setAssignmentInfo(null);
       }
     };
 
-    fetchResponders();
-  }, [currentStationId]);
+    loadAssignmentInfo();
+  }, [selectedReport?.id, currentStationId]);
 
   // Handle opening a specific report from notification
   useEffect(() => {
@@ -346,30 +272,8 @@ Please respond immediately to this assignment.`;
             });
           }
           
-          // Load assigned responders
-          const { data: assignedResponders, error: respError } = await supabase
-            .from('report_assignments')
-            .select('assignee_id')
-            .eq('report_id', reportIdToOpen)
-            .eq('assignee_type', 'responder');
-
-          const assignedResponderIds = (assignedResponders || []).map(a => a.assignee_id);
-
-          const { data: notifiedResponders, error: notifError } = await supabase
-            .from('responder_notifications')
-            .select('responder_id')
-            .eq('fire_report_id', reportIdToOpen);
-
-          const notifiedResponderIds = (notifiedResponders || []).map(n => n.responder_id);
-          const allAssignedIds = [...new Set([...assignedResponderIds, ...notifiedResponderIds])];
-
-          const assignedRespondersData = responders.filter(r => allAssignedIds.includes(r.id));
-          
           // Open the modal with the report
-          setSelectedReport({
-            ...existingReport,
-            assignedResponders: assignedRespondersData
-          });
+          setSelectedReport(existingReport);
           setShowReportModal(true);
           
           // Notify parent that we've opened the report
@@ -406,30 +310,8 @@ Please respond immediately to this assignment.`;
           });
         }
         
-        // Load assigned responders
-        const { data: assignedResponders } = await supabase
-          .from('report_assignments')
-          .select('assignee_id')
-          .eq('report_id', reportIdToOpen)
-          .eq('assignee_type', 'responder');
-
-        const assignedResponderIds = (assignedResponders || []).map(a => a.assignee_id);
-
-        const { data: notifiedResponders } = await supabase
-          .from('responder_notifications')
-          .select('responder_id')
-          .eq('fire_report_id', reportIdToOpen);
-
-        const notifiedResponderIds = (notifiedResponders || []).map(n => n.responder_id);
-        const allAssignedIds = [...new Set([...assignedResponderIds, ...notifiedResponderIds])];
-
-        const assignedRespondersData = responders.filter(r => allAssignedIds.includes(r.id));
-        
         // Open the modal
-        setSelectedReport({
-          ...report,
-          assignedResponders: assignedRespondersData
-        });
+        setSelectedReport(report);
         setShowReportModal(true);
         
         // Notify parent that we've opened the report
@@ -446,7 +328,7 @@ Please respond immediately to this assignment.`;
     };
 
     openReport();
-  }, [reportIdToOpen, assignedReports, responders, onReportOpened]);
+  }, [reportIdToOpen, assignedReports, onReportOpened]);
 
   // Load assigned reports for this station
   useEffect(() => {
@@ -726,77 +608,320 @@ Please respond immediately to this assignment.`;
         </MapView>
 
 
-      {/* Modal detail to avoid Callout-related crashes */}
+      {/* Modal detail - Styled like Citizen Map */}
       <Modal
         visible={!!showReportModal && !!selectedReport}
-        transparent
-        animationType="fade"
+        animationType="slide"
+        transparent={true}
         onRequestClose={() => setShowReportModal(false)}
       >
-        <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center' }}>
-          <View style={{ backgroundColor: 'white', borderRadius: 12, width: '92%', maxHeight: '85%' }}>
-            <ScrollView contentContainerStyle={{ padding: 16 }}>
-              <Text style={{ fontWeight: 'bold', fontSize: 16, marginBottom: 8 }}>🔥 Fire Report</Text>
-              
-              {/* Show forwarding information if this report was forwarded */}
-              {selectedReport?.is_forwarded && (
-                <View style={{ backgroundColor: '#fef3c7', borderWidth: 1, borderColor: '#fbbf24', borderRadius: 8, padding: 10, marginBottom: 12 }}>
-                  <Text style={{ fontSize: 12, fontWeight: 'bold', color: '#92400e', marginBottom: 4 }}>📨 Forwarded Report</Text>
-                  {selectedReport?.original_assignee && (
-                    <Text style={{ fontSize: 12, color: '#78350f', marginBottom: 2 }}>
-                      <Text style={{ fontWeight: 'bold' }}>Originally assigned to:</Text> {selectedReport.original_assignee.name}
-                    </Text>
+        <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'center', alignItems: 'center' }}>
+          <View style={{ backgroundColor: 'white', borderRadius: 24, width: '92%', maxHeight: '85%', overflow: 'hidden', shadowColor: '#000', shadowOffset: { width: 0, height: 10 }, shadowOpacity: 0.3, shadowRadius: 20, elevation: 15 }}>
+            {selectedReport && (
+              <ScrollView showsVerticalScrollIndicator={false}>
+                {/* Enhanced Header with Gradient */}
+                <LinearGradient
+                  colors={['#ff6b35', '#ff512f', '#dc2626']}
+                  start={{ x: 0, y: 0 }}
+                  end={{ x: 1, y: 0 }}
+                  style={{
+                    paddingTop: 16,
+                    paddingBottom: 16,
+                    paddingHorizontal: 20,
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                  }}
+                >
+                  <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                    <MaterialIcons name="description" size={24} color="#ffffff" />
+                    <Text style={{ color: 'white', fontSize: 20, fontWeight: 'bold', marginLeft: 8, textShadowColor: 'rgba(0, 0, 0, 0.2)', textShadowOffset: { width: 0, height: 1 }, textShadowRadius: 3 }}>Report Details</Text>
+                  </View>
+                  <TouchableOpacity
+                    onPress={() => setShowReportModal(false)}
+                    style={{
+                      backgroundColor: 'rgba(255, 255, 255, 0.2)',
+                      borderRadius: 20,
+                      padding: 8,
+                    }}
+                  >
+                    <MaterialIcons name="close" size={20} color="#ffffff" />
+                  </TouchableOpacity>
+                </LinearGradient>
+
+                <View style={{ paddingHorizontal: 20, paddingTop: 20, paddingBottom: 24 }}>
+                  {/* Auto-Assignment Badge */}
+                  {assignmentInfo?.note && assignmentInfo.note.includes('Auto-assigned') && (
+                    <View style={{ backgroundColor: '#dbeafe', borderWidth: 2, borderColor: '#3b82f6', borderRadius: 12, padding: 12, marginBottom: 16 }}>
+                      <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 4 }}>
+                        <MaterialIcons name="auto-awesome" size={18} color="#3b82f6" />
+                        <Text style={{ fontSize: 13, fontWeight: 'bold', color: '#1e40af', marginLeft: 6 }}>Auto-Assigned to Your Station</Text>
+                      </View>
+                      <Text style={{ fontSize: 12, color: '#1e3a8a', marginTop: 4 }}>
+                        {assignmentInfo.note}
+                      </Text>
+                      {assignmentInfo.assigned_at && (
+                        <Text style={{ fontSize: 11, color: '#3b82f6', marginTop: 4 }}>
+                          Assigned: {new Date(assignmentInfo.assigned_at).toLocaleString()}
+                        </Text>
+                      )}
+                    </View>
                   )}
-                  {selectedReport?.forwarding_note && (
-                    <Text style={{ fontSize: 12, color: '#78350f', marginBottom: 2 }}>
-                      <Text style={{ fontWeight: 'bold' }}>Note:</Text> {selectedReport.forwarding_note}
-                    </Text>
+
+                  {/* Forwarding Information */}
+                  {selectedReport?.is_forwarded && (
+                    <View style={{ backgroundColor: '#fef3c7', borderWidth: 1, borderColor: '#fbbf24', borderRadius: 12, padding: 12, marginBottom: 16 }}>
+                      <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 4 }}>
+                        <MaterialIcons name="forward" size={18} color="#92400e" />
+                        <Text style={{ fontSize: 13, fontWeight: 'bold', color: '#92400e', marginLeft: 6 }}>Forwarded Report</Text>
+                      </View>
+                      {selectedReport?.original_assignee && (
+                        <Text style={{ fontSize: 12, color: '#78350f', marginBottom: 2 }}>
+                          <Text style={{ fontWeight: 'bold' }}>Originally assigned to:</Text> {selectedReport.original_assignee.name}
+                        </Text>
+                      )}
+                      {selectedReport?.forwarding_note && (
+                        <Text style={{ fontSize: 12, color: '#78350f', marginBottom: 2 }}>
+                          <Text style={{ fontWeight: 'bold' }}>Note:</Text> {selectedReport.forwarding_note}
+                        </Text>
+                      )}
+                      {selectedReport?.forwarded_at && (
+                        <Text style={{ fontSize: 11, color: '#a16207', marginTop: 2 }}>
+                          Forwarded: {new Date(selectedReport.forwarded_at).toLocaleString()}
+                        </Text>
+                      )}
+                    </View>
                   )}
-                  {selectedReport?.forwarded_at && (
-                    <Text style={{ fontSize: 11, color: '#a16207', marginTop: 2 }}>
-                      Forwarded: {new Date(selectedReport.forwarded_at).toLocaleString()}
-                    </Text>
+
+                  {/* Fire Image */}
+                  <View style={{ marginBottom: 20 }}>
+                    {(() => {
+                      const r = selectedReport || {};
+                      const payload = r || {};
+                      const candidate = payload.image_url || payload.image || payload.photo_url || payload.media_url || (Array.isArray(payload.images) && payload.images[0]) || null;
+                      if (!candidate || typeof candidate !== 'string') return null;
+                      return (
+                        <Image 
+                          source={{ uri: candidate }} 
+                          resizeMode="cover" 
+                          style={{ 
+                            width: '100%', 
+                            height: 224, 
+                            borderRadius: 16, 
+                            backgroundColor: '#e5e7eb',
+                            shadowColor: '#000',
+                            shadowOffset: { width: 0, height: 4 },
+                            shadowOpacity: 0.2,
+                            shadowRadius: 8,
+                            elevation: 8,
+                          }} 
+                        />
+                      );
+                    })()}
+                  </View>
+
+                  {/* Status Badge */}
+                  {(() => {
+                    const progress = selectedReport.status || selectedReport.progress ||
+                      (selectedReport.prediction === 'Fire' ? 'On Going' : 'Under Control') ||
+                      'Unknown';
+                    const getProgressColor = (p) => {
+                      switch (p) {
+                        case 'On Going': return '#ef4444';
+                        case 'Under Control': return '#f59e0b';
+                        case 'Fire Out': return '#10b981';
+                        default: return '#6b7280';
+                      }
+                    };
+                    const color = getProgressColor(progress);
+                    return (
+                      <View style={{ marginBottom: 20, alignItems: 'center' }}>
+                        <View
+                          style={{ 
+                            paddingHorizontal: 20,
+                            paddingVertical: 8,
+                            borderRadius: 20,
+                            backgroundColor: color + '20',
+                            borderWidth: 2,
+                            borderColor: color,
+                          }}
+                        >
+                          <Text
+                            style={{ 
+                              fontSize: 16, 
+                              fontWeight: 'bold',
+                              color: color
+                            }}
+                          >
+                            {progress}
+                          </Text>
+                        </View>
+                      </View>
+                    );
+                  })()}
+
+                  {/* Map Preview */}
+                  {selectedReport.latitude && selectedReport.longitude && (
+                    <View style={{ marginBottom: 20, borderRadius: 16, overflow: 'hidden', height: 180 }}>
+                      <MapView
+                        style={{ flex: 1 }}
+                        provider={PROVIDER_GOOGLE}
+                        initialRegion={{
+                          latitude: parseFloat(selectedReport.latitude),
+                          longitude: parseFloat(selectedReport.longitude),
+                          latitudeDelta: 0.01,
+                          longitudeDelta: 0.01,
+                        }}
+                        scrollEnabled={false}
+                        zoomEnabled={false}
+                        pitchEnabled={false}
+                        rotateEnabled={false}
+                      >
+                        <Marker
+                          coordinate={{
+                            latitude: parseFloat(selectedReport.latitude),
+                            longitude: parseFloat(selectedReport.longitude),
+                          }}
+                        />
+                      </MapView>
+                    </View>
                   )}
+
+                  {/* Basic Information Section */}
+                  <View style={{ marginBottom: 20 }}>
+                    <Text style={{ color: '#6b7280', fontSize: 11, fontWeight: '600', textTransform: 'uppercase', marginBottom: 12, letterSpacing: 1 }}>Basic Information</Text>
+                    <View style={{ backgroundColor: '#f9fafb', borderRadius: 16, padding: 16 }}>
+                      <View style={{ flexDirection: 'row', alignItems: 'flex-start', marginBottom: 12 }}>
+                        <MaterialIcons name="person" size={18} color="#6b7280" />
+                        <View style={{ flex: 1, marginLeft: 12 }}>
+                          <Text style={{ color: '#6b7280', fontSize: 11, marginBottom: 4 }}>Reporter</Text>
+                          <Text style={{ color: '#1f2937', fontWeight: '600', fontSize: 16 }}>
+                            {toStr(selectedReport?.reporter_name || selectedReport?.reporter || selectedReport?.reported_by, 'Unknown Reporter')}
+                          </Text>
+                        </View>
+                      </View>
+                      <View style={{ height: 1, backgroundColor: '#e5e7eb', marginBottom: 12 }} />
+                      <View style={{ flexDirection: 'row', alignItems: 'flex-start', marginBottom: 12 }}>
+                        <MaterialIcons name="place" size={18} color="#6b7280" />
+                        <View style={{ flex: 1, marginLeft: 12 }}>
+                          <Text style={{ color: '#6b7280', fontSize: 11, marginBottom: 4 }}>Location</Text>
+                          <Text style={{ color: '#1f2937', fontWeight: '600', fontSize: 16 }}>
+                            {toStr(selectedReport?.address || selectedReport?.geotag_location || selectedReport?.location || 'Not specified')}
+                          </Text>
+                        </View>
+                      </View>
+                      <View style={{ height: 1, backgroundColor: '#e5e7eb', marginBottom: 12 }} />
+                      <View style={{ flexDirection: 'row', alignItems: 'flex-start' }}>
+                        <MaterialIcons name="schedule" size={18} color="#6b7280" />
+                        <View style={{ flex: 1, marginLeft: 12 }}>
+                          <Text style={{ color: '#6b7280', fontSize: 11, marginBottom: 4 }}>Reported</Text>
+                          <Text style={{ color: '#1f2937', fontWeight: '600', fontSize: 16 }}>
+                            {toStr(selectedReport?.formatted_timestamp || selectedReport?.timestamp, 'Unknown time')}
+                          </Text>
+                        </View>
+                      </View>
+                    </View>
+                  </View>
+
+                  {/* Fire Details Section */}
+                  {(selectedReport.cause || selectedReport.cause_of_fire || selectedReport.number_of_structures_on_fire) && (
+                    <View style={{ marginBottom: 20 }}>
+                      <Text style={{ color: '#6b7280', fontSize: 11, fontWeight: '600', textTransform: 'uppercase', marginBottom: 12, letterSpacing: 1 }}>Fire Details</Text>
+                      <View style={{ borderRadius: 16, padding: 16, backgroundColor: 'rgba(255, 81, 47, 0.05)' }}>
+                        {selectedReport.cause || selectedReport.cause_of_fire ? (
+                          <>
+                            <View style={{ flexDirection: 'row', alignItems: 'flex-start', marginBottom: 12 }}>
+                              <MaterialIcons name="warning" size={18} color="#ff512f" />
+                              <View style={{ flex: 1, marginLeft: 12 }}>
+                                <Text style={{ color: '#6b7280', fontSize: 11, marginBottom: 4 }}>Cause of Fire</Text>
+                                <Text style={{ color: '#1f2937', fontWeight: '600', fontSize: 16 }}>
+                                  {toStr(selectedReport?.cause_of_fire || selectedReport?.cause || selectedReport?.possible_cause || selectedReport?.fire_cause, 'No cause specified')}
+                                </Text>
+                              </View>
+                            </View>
+                            {selectedReport.number_of_structures_on_fire && <View style={{ height: 1, marginBottom: 12, backgroundColor: 'rgba(255, 81, 47, 0.2)' }} />}
+                          </>
+                        ) : null}
+                        {selectedReport.number_of_structures_on_fire != null && (
+                          <View style={{ flexDirection: 'row', alignItems: 'flex-start' }}>
+                            <MaterialIcons name="business" size={18} color="#ff512f" />
+                            <View style={{ flex: 1, marginLeft: 12 }}>
+                              <Text style={{ color: '#6b7280', fontSize: 11, marginBottom: 4 }}>Structures Affected</Text>
+                              <Text style={{ color: '#1f2937', fontWeight: '600', fontSize: 16 }}>
+                                {toStr(selectedReport.number_of_structures_on_fire)} structure(s)
+                              </Text>
+                            </View>
+                          </View>
+                        )}
+                      </View>
+                    </View>
+                  )}
+
+                  {/* AI Analysis Section */}
+                  {(selectedReport.prediction || selectedReport.structure || selectedReport.smoke_intensity || formatAlarm(selectedReport)) && (
+                    <View style={{ marginBottom: 20 }}>
+                      <Text style={{ color: '#6b7280', fontSize: 11, fontWeight: '600', textTransform: 'uppercase', marginBottom: 12, letterSpacing: 1 }}>AI Analysis</Text>
+                      <View style={{ borderRadius: 16, padding: 16, backgroundColor: 'rgba(59, 130, 246, 0.05)' }}>
+                        {selectedReport.prediction && (
+                          <>
+                            <View style={{ flexDirection: 'row', alignItems: 'flex-start', marginBottom: 12 }}>
+                              <MaterialIcons name="psychology" size={18} color="#3b82f6" />
+                              <View style={{ flex: 1, marginLeft: 12 }}>
+                                <Text style={{ color: '#6b7280', fontSize: 11, marginBottom: 4 }}>AI Confidence</Text>
+                                <Text style={{ color: '#1f2937', fontWeight: '600', fontSize: 16 }}>
+                                  {toStr(formatPrediction(selectedReport), 'Not analyzed')}
+                                </Text>
+                              </View>
+                            </View>
+                            {(selectedReport.structure || selectedReport.smoke_intensity || formatAlarm(selectedReport)) && <View style={{ height: 1, marginBottom: 12, backgroundColor: 'rgba(59, 130, 246, 0.2)' }} />}
+                          </>
+                        )}
+                        {selectedReport.structure && (
+                          <>
+                            <View style={{ flexDirection: 'row', alignItems: 'flex-start', marginBottom: 12 }}>
+                              <MaterialIcons name="domain" size={18} color="#3b82f6" />
+                              <View style={{ flex: 1, marginLeft: 12 }}>
+                                <Text style={{ color: '#6b7280', fontSize: 11, marginBottom: 4 }}>Structure Type</Text>
+                                <Text style={{ color: '#1f2937', fontWeight: '600', fontSize: 16 }}>
+                                  {toStr(selectedReport?.structure || selectedReport?.building_type)}{selectedReport?.structure_confidence ? ` (${selectedReport.structure_confidence})` : ''}
+                                </Text>
+                              </View>
+                            </View>
+                            {(selectedReport.smoke_intensity || formatAlarm(selectedReport)) && <View style={{ height: 1, marginBottom: 12, backgroundColor: 'rgba(59, 130, 246, 0.2)' }} />}
+                          </>
+                        )}
+                        {selectedReport.smoke_intensity && (
+                          <>
+                            <View style={{ flexDirection: 'row', alignItems: 'flex-start', marginBottom: 12 }}>
+                              <MaterialIcons name="cloud" size={18} color="#3b82f6" />
+                              <View style={{ flex: 1, marginLeft: 12 }}>
+                                <Text style={{ color: '#6b7280', fontSize: 11, marginBottom: 4 }}>Smoke Intensity</Text>
+                                <Text style={{ color: '#1f2937', fontWeight: '600', fontSize: 16 }}>
+                                  {toStr(`${selectedReport.smoke_intensity}${selectedReport.smoke_confidence ? ` ${selectedReport.smoke_confidence}` : ''}`)}
+                                </Text>
+                              </View>
+                            </View>
+                            {formatAlarm(selectedReport) && <View style={{ height: 1, marginBottom: 12, backgroundColor: 'rgba(59, 130, 246, 0.2)' }} />}
+                          </>
+                        )}
+                        {formatAlarm(selectedReport) && (
+                          <View style={{ flexDirection: 'row', alignItems: 'flex-start' }}>
+                            <MaterialIcons name="notifications-active" size={18} color="#3b82f6" />
+                            <View style={{ flex: 1, marginLeft: 12 }}>
+                              <Text style={{ color: '#6b7280', fontSize: 11, marginBottom: 4 }}>Alarm Level</Text>
+                              <Text style={{ color: '#1f2937', fontWeight: '600', fontSize: 16 }}>
+                                {toStr(formatAlarm(selectedReport))}
+                              </Text>
+                            </View>
+                          </View>
+                        )}
+                      </View>
+                    </View>
+                  )}
+
                 </View>
-              )}
-              
-              {/* Reporter */}
-              <Text style={{ marginBottom: 4 }}>Reporter: {toStr(selectedReport?.reporter_name || selectedReport?.reporter || selectedReport?.reported_by)}</Text>
-              {/* Cause */}
-              <Text style={{ marginBottom: 4 }}>Cause: {toStr(selectedReport?.cause_of_fire || selectedReport?.cause || selectedReport?.possible_cause || selectedReport?.fire_cause)}</Text>
-              {/* Alarm */}
-              <Text style={{ marginBottom: 4 }}>Alarm Level: {toStr(formatAlarm(selectedReport))}</Text>
-              {/* AI Detection */}
-              <Text style={{ marginBottom: 4 }}>AI Fire Detection: {toStr(formatPrediction(selectedReport))}</Text>
-              {/* Smoke */}
-              {selectedReport?.smoke_intensity ? (
-                <Text style={{ marginBottom: 4 }}>Smoke Analysis: {toStr(`${selectedReport.smoke_intensity}${selectedReport.smoke_confidence ? ` ${selectedReport.smoke_confidence}` : ''}`)}</Text>
-              ) : null}
-              {/* Structure */}
-              <Text style={{ marginBottom: 4 }}>Structure: {toStr(selectedReport?.structure || selectedReport?.building_type)}{selectedReport?.structure_confidence ? ` (${selectedReport.structure_confidence})` : ''}</Text>
-              {/* Structures affected */}
-              {selectedReport?.number_of_structures_on_fire != null ? (
-                <Text style={{ marginBottom: 4 }}>Structures Affected: {toStr(selectedReport.number_of_structures_on_fire)}</Text>
-              ) : null}
-              {/* Location */}
-              <Text style={{ marginBottom: 4 }}>Location: {toStr(selectedReport?.address || selectedReport?.geotag_location || selectedReport?.location || 'Not specified')}</Text>
-              {/* Reported */}
-              <Text style={{ marginBottom: 8 }}>Reported: {toStr(selectedReport?.formatted_timestamp || selectedReport?.timestamp)}</Text>
-              {/* Image */}
-              {(() => {
-                const r = selectedReport || {};
-                const payload = r || {};
-                const candidate = payload.image_url || payload.image || payload.photo_url || payload.media_url || (Array.isArray(payload.images) && payload.images[0]) || null;
-                if (!candidate || typeof candidate !== 'string') return null;
-                return (
-                  <Image source={{ uri: candidate }} resizeMode="cover" style={{ width: '100%', height: 220, borderRadius: 8, backgroundColor: '#e5e7eb' }} />
-                );
-              })()}
-              
-              <TouchableOpacity onPress={() => setShowReportModal(false)} style={{ alignSelf: 'flex-end', marginTop: 8, backgroundColor: '#6b7280', paddingVertical: 8, paddingHorizontal: 16, borderRadius: 8 }}>
-                <Text style={{ color: 'white', fontWeight: 'bold' }}>Close</Text>
-              </TouchableOpacity>
-            </ScrollView>
+              </ScrollView>
+            )}
           </View>
         </View>
       </Modal>

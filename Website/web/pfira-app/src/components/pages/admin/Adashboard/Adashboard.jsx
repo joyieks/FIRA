@@ -20,8 +20,9 @@ const Adashboard = () => {
   const [pendingSelection, setPendingSelection] = useState(null); // State for pending report selection
   const [allStations, setAllStations] = useState([]);
   const [geocodedStations, setGeocodedStations] = useState([]);
-  const [jurisdictionRadius] = useState(2000);
+  const [jurisdictionRadius] = useState(2000); // 2km in meters
   const [responders, setResponders] = useState([]);
+  const [autoAssignmentsInProgress, setAutoAssignmentsInProgress] = useState(new Set()); // Track assignments in progress to avoid duplicates
   const [assigneeType, setAssigneeType] = useState('station'); // 'station' | 'responder'
   const [assigneeId, setAssigneeId] = useState('');
   const [redirectTarget, setRedirectTarget] = useState(''); // e.g., 'station:<id>' | 'agency:police'
@@ -52,6 +53,151 @@ const Adashboard = () => {
     }
     return alarmLevel;
   };
+
+  // Calculate distance between two coordinates using Haversine formula (returns distance in meters)
+  const calculateDistance = (lat1, lng1, lat2, lng2) => {
+    const R = 6371000; // Earth's radius in meters
+    const dLat = (lat2 - lat1) * Math.PI / 180;
+    const dLng = (lng2 - lng1) * Math.PI / 180;
+    const a = 
+      Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+      Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+      Math.sin(dLng / 2) * Math.sin(dLng / 2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    return R * c; // Distance in meters
+  };
+
+  // Find the nearest station within jurisdiction for a report
+  const findNearestStationInJurisdiction = (reportLat, reportLng, stations) => {
+    if (!reportLat || !reportLng || isNaN(reportLat) || isNaN(reportLng)) {
+      return null;
+    }
+
+    let nearestStation = null;
+    let nearestDistance = Infinity;
+
+    stations.forEach(station => {
+      if (!station.lat || !station.lng || isNaN(station.lat) || isNaN(station.lng)) {
+        return; // Skip stations without valid coordinates
+      }
+
+      const distance = calculateDistance(reportLat, reportLng, station.lat, station.lng);
+      
+      // Check if within jurisdiction radius and is the nearest
+      if (distance <= jurisdictionRadius && distance < nearestDistance) {
+        nearestDistance = distance;
+        nearestStation = {
+          ...station,
+          distance: distance
+        };
+      }
+    });
+
+    return nearestStation;
+  };
+
+  // Auto-assign report to nearest station within jurisdiction
+  const autoAssignReportToStation = useCallback(async (report, station) => {
+    const reportId = String(report.id);
+    
+    // Prevent duplicate assignments
+    if (autoAssignmentsInProgress.has(reportId)) {
+      return; // Already processing this report
+    }
+
+    try {
+      setAutoAssignmentsInProgress(prev => new Set(prev).add(reportId));
+
+      // Check if report is already assigned to a station
+      const { data: existingAssignments, error: checkError } = await supabase
+        .from('report_assignments')
+        .select('assignee_id, assignee_type')
+        .eq('report_id', reportId)
+        .eq('assignee_type', 'station');
+
+      if (checkError) {
+        console.error('❌ Error checking existing assignments:', checkError);
+        return;
+      }
+
+      // If already assigned to a station, skip auto-assignment
+      if (existingAssignments && existingAssignments.length > 0) {
+        console.log(`ℹ️ Report ${reportId} already assigned to station, skipping auto-assignment`);
+        return;
+      }
+
+      // Create assignment
+      const assignmentPayload = {
+        report_id: reportId,
+        assignee_type: 'station',
+        assignee_id: station.id,
+        assigned_at: new Date().toISOString(),
+        note: `Auto-assigned: Report is within ${station.name}'s jurisdiction (${Math.round(station.distance)}m away)`
+      };
+
+      const { error: assignError } = await supabase
+        .from('report_assignments')
+        .upsert(assignmentPayload, { onConflict: 'report_id,assignee_type,assignee_id' });
+
+      if (assignError) {
+        console.error('❌ Error auto-assigning report:', assignError);
+        return;
+      }
+
+      console.log(`✅ Auto-assigned report ${reportId} to ${station.name} (${Math.round(station.distance)}m away)`);
+
+      // Create notification for the assigned station
+      const locationInfo = report.address || report.geotag_location || 'Location unavailable';
+      const reporterName = report.reporter_name || report.reporter || 'Unknown Reporter';
+      const title = `🚨 New Fire Report - Auto-Assigned to Your Station`;
+      const message = `A fire report has been automatically assigned to your station because it is within your jurisdiction.\n\nDistance: ${Math.round(station.distance)}m\nLocation: ${locationInfo}\nReporter: ${reporterName}\n\nPlease review the incident details and take appropriate action.`;
+
+      const { error: notifError } = await supabase
+        .from('notifications')
+        .insert({
+          user_id: station.id,
+          user_type: 'station',
+          type: 'assignment',
+          related_report_id: reportId,
+          title: title,
+          message: message,
+          priority: 'urgent',
+          is_read: false
+        });
+
+      if (notifError) {
+        console.error('❌ Error creating auto-assignment notification:', notifError);
+      } else {
+        console.log(`✅ Created notification for station: ${station.name}`);
+      }
+
+      // Snapshot report coordinates
+      try {
+        const lat = parseFloat(report.latitude);
+        const lng = parseFloat(report.longitude);
+        await supabase
+          .from('assigned_report_snapshots')
+          .upsert({
+            report_id: reportId,
+            lat: isNaN(lat) ? null : lat,
+            lng: isNaN(lng) ? null : lng,
+            address: report.address || report.geotag_location || null,
+            snapshot_json: report
+          }, { onConflict: 'report_id' });
+      } catch (snapErr) {
+        console.warn('Snapshot upsert failed (table may not exist):', snapErr?.message || snapErr);
+      }
+
+    } catch (error) {
+      console.error('❌ Error in auto-assignment process:', error);
+    } finally {
+      setAutoAssignmentsInProgress(prev => {
+        const newSet = new Set(prev);
+        newSet.delete(reportId);
+        return newSet;
+      });
+    }
+  }, [autoAssignmentsInProgress, jurisdictionRadius]);
 
   // Derive alarm level consistently across admin views
   const determineSuggestedAlarm = (numStructures) => {
@@ -304,6 +450,32 @@ const Adashboard = () => {
     };
     loadStations();
   }, [mapLoaded]);
+
+  // Auto-assign reports to stations within jurisdiction when both reports and stations are loaded
+  useEffect(() => {
+    if (geocodedStations.length > 0 && fireReports.length > 0) {
+      // Check for unassigned reports and auto-assign them
+      fireReports.forEach(report => {
+        const reportLat = parseFloat(report.latitude);
+        const reportLng = parseFloat(report.longitude);
+        
+        if (!isNaN(reportLat) && !isNaN(reportLng)) {
+          const nearestStation = findNearestStationInJurisdiction(
+            reportLat, 
+            reportLng, 
+            geocodedStations
+          );
+          
+          if (nearestStation) {
+            // Auto-assign asynchronously (don't block UI)
+            autoAssignReportToStation(report, nearestStation).catch(err => {
+              console.error('Error in auto-assignment:', err);
+            });
+          }
+        }
+      });
+    }
+  }, [geocodedStations, fireReports, autoAssignReportToStation]);
 
   // Load responders for assignment dropdown
   useEffect(() => {

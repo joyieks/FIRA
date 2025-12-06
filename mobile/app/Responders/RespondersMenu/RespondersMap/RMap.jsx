@@ -806,37 +806,45 @@ export default function RMap({ routingInfo }) {
     }
   };
 
-  // Fetch assigned fire reports from responder_notifications table (station-assigned only)
+  // Fetch assigned fire reports - reports assigned to the responder's station (like Station Map)
   const fetchAssignedReports = async () => {
     if (!userData?.id) return;
 
     try {
-      console.log('🔍 Fetching station-assigned reports for responder:', userData.id);
-      
-      // Get assignments from responder_notifications table where status is pending or accepted
-      const { data: notifications, error: notificationError } = await supabase
-        .from('responder_notifications')
-        .select('fire_report_id, created_at')
-        .eq('responder_id', userData.id)
-        .in('status', ['pending', 'accepted'])
-        .order('created_at', { ascending: false }); // Get latest first
-
-      if (notificationError) {
-        console.error('Error fetching notifications:', notificationError);
+      const stationId = userData?.stationId || userData?.station_id;
+      if (!stationId) {
+        console.log('⚠️ No stationId found for responder, cannot fetch station-assigned reports');
+        setAssignedReports([]);
         return;
       }
 
-      if (!notifications || notifications.length === 0) {
-        console.log('No active assignments found for this responder');
+      console.log('🔍 Fetching station-assigned reports for responder\'s station:', stationId);
+      
+      // Get assignments from report_assignments table where assignee_type='station' and assignee_id matches the responder's station
+      const { data: assignments, error: assignmentError } = await supabase
+        .from('report_assignments')
+        .select('report_id, assigned_at, note')
+        .eq('assignee_type', 'station')
+        .eq('assignee_id', stationId)
+        .order('assigned_at', { ascending: false });
+
+      if (assignmentError) {
+        console.error('Error fetching station assignments:', assignmentError);
+        return;
+      }
+
+      if (!assignments || assignments.length === 0) {
+        console.log('No station-assigned reports found for this responder\'s station');
         setAssignedReports([]);
         setAcceptedAssignment(null);
         setRouteCoordinates([]);
         setRouteInfo(null);
+        setAllRoutes([]);
         return;
       }
 
-      const reportIds = notifications.map(n => n.fire_report_id).filter(Boolean);
-      console.log('📋 Fire report IDs from notifications:', reportIds);
+      const reportIds = assignments.map(a => String(a.report_id)).filter(Boolean);
+      console.log('📋 Fire report IDs assigned to station:', reportIds);
 
       if (reportIds.length === 0) {
         setAssignedReports([]);
@@ -851,34 +859,35 @@ export default function RMap({ routingInfo }) {
       }
 
       const allReports = await response.json();
-      console.log('🔥 All reports from API:', allReports);
+      console.log('🔥 All reports from API:', allReports.length);
       
-      // Filter reports: must be assigned, have coordinates, and NOT be "Fire Out" or "Under Control"
+      // Create a map of assignment info
+      const assignmentMap = new Map();
+      assignments.forEach(a => {
+        assignmentMap.set(String(a.report_id), {
+          assigned_at: a.assigned_at,
+          note: a.note
+        });
+      });
+
+      // Filter reports: must be assigned to station, have coordinates, and NOT be "Fire Out" or "Under Control"
       const assignedFireReports = allReports.filter(report => {
         const isAssigned = reportIds.includes(String(report.id));
-        const hasCoordinates = report.latitude && report.longitude;
-        const status = report.status?.toLowerCase();
-        const isActiveStatus = status !== 'fire out' && status !== 'under control';
+        const latNum = typeof report?.latitude === 'number' ? report.latitude : parseFloat(report?.latitude);
+        const lngNum = typeof report?.longitude === 'number' ? report.longitude : parseFloat(report?.longitude);
+        const hasValidCoordinates = !isNaN(latNum) && !isNaN(lngNum);
+        const status = (report.status || '').toString().toLowerCase();
+        const isCancelled = status.includes('cancelled') || status.includes('canceled');
+        const isFireOut = status.includes('fire out') || status.includes('under control');
         
-        return isAssigned && hasCoordinates && isActiveStatus;
+        return isAssigned && hasValidCoordinates && !isCancelled && !isFireOut;
       }).map(report => {
-        // Find the notification to get created_at timestamp
-        const notification = notifications.find(n => n.fire_report_id === String(report.id));
-        
-        // Log the report data
-        console.log('📋 Report data for ID', report.id, ':', report);
-        console.log('📝 Cause fields in report:', {
-          cause: report.cause,
-          possible_cause: report.possible_cause,
-          fire_cause: report.fire_cause,
-          cause_of_fire: report.cause_of_fire,
-          fire_cause_description: report.fire_cause_description,
-          incident_cause: report.incident_cause
-        });
+        const assignmentInfo = assignmentMap.get(String(report.id));
         
         return {
           ...report,
-          assigned_at: notification?.created_at || new Date().toISOString(),
+          assigned_at: assignmentInfo?.assigned_at || new Date().toISOString(),
+          assignment_note: assignmentInfo?.note || null,
           // Add cause from report
           cause: report.cause || 
                  report.possible_cause || 
@@ -895,7 +904,7 @@ export default function RMap({ routingInfo }) {
         return dateB - dateA; // Descending (newest first)
       });
 
-      console.log('✅ Assigned fire reports found:', assignedFireReports.length);
+      console.log('✅ Station-assigned fire reports found:', assignedFireReports.length);
       console.log('📅 Reports sorted by assignment date (latest first)');
       setAssignedReports(assignedFireReports);
 

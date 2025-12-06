@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { View, Text, TouchableOpacity, Modal, ScrollView, Image, Alert, TextInput, KeyboardAvoidingView, Platform, TouchableWithoutFeedback, Keyboard, Animated } from 'react-native';
-import MapView, { Marker, PROVIDER_GOOGLE } from 'react-native-maps';
+import MapView, { Marker, PROVIDER_GOOGLE, Circle } from 'react-native-maps';
 import { LinearGradient } from 'expo-linear-gradient';
 import * as Location from 'expo-location';
 import * as ImagePicker from 'expo-image-picker';
@@ -27,6 +27,12 @@ export default function CMap({ reportIdToFocus, setReportIdToFocus }) {
   const [region, setRegion] = useState(null);
   const [isMapInteracting, setIsMapInteracting] = useState(false);
   const cardSlideAnim = useRef(new Animated.Value(0)).current;
+  
+  // Stations data
+  const [stations, setStations] = useState([]);
+  const [selectedStation, setSelectedStation] = useState(null);
+  const [showStationModal, setShowStationModal] = useState(false);
+  const jurisdictionRadius = 2000; // 2km
   
   // Nearby incidents notification
   const [nearbyIncidents, setNearbyIncidents] = useState([]);
@@ -129,6 +135,41 @@ export default function CMap({ reportIdToFocus, setReportIdToFocus }) {
     }, 15000); // Refresh every 15 seconds
     
     return () => clearInterval(refreshInterval);
+  }, []);
+
+  // Fetch stations from Supabase - match exactly how AMap.jsx and SMap.jsx do it
+  useEffect(() => {
+    (async () => {
+      try {
+        console.log('🔍 Fetching stations for citizen map...');
+        const { data, error } = await supabase
+          .from('station_users')
+          .select('id, station_name, lat, lng, address, phone, email, jurisdiction, area_of_coverage');
+        if (error) {
+          console.error('❌ Supabase error fetching stations:', error);
+          throw error;
+        }
+        console.log('📊 Raw stations data:', data?.length || 0);
+        
+        const withCoords = (data || [])
+          .map(s => ({
+            ...s,
+            lat: typeof s.lat === 'number' ? s.lat : parseFloat(s.lat),
+            lng: typeof s.lng === 'number' ? s.lng : parseFloat(s.lng)
+          }))
+          .filter(s => !isNaN(s.lat) && !isNaN(s.lng));
+        
+        console.log('✅ Loaded stations for citizen map:', withCoords.length, 'out of', data?.length || 0);
+        withCoords.forEach(s => {
+          console.log(`📍 Station: ${s.station_name} at ${s.lat}, ${s.lng}`);
+        });
+        
+        setStations(withCoords);
+      } catch (e) {
+        console.error('❌ Stations load error (citizen map):', e);
+        setStations([]);
+      }
+    })();
   }, []);
 
   // Use focus effect to refresh when screen becomes active
@@ -492,6 +533,34 @@ export default function CMap({ reportIdToFocus, setReportIdToFocus }) {
     setShowReportModal(true);
   };
 
+  // Handle station marker press
+  const handleStationPress = (station) => {
+    // Calculate distance from user's location if available
+    let distanceText = null;
+    if (location) {
+      const stationLat = parseFloat(station.lat);
+      const stationLng = parseFloat(station.lng);
+      if (!isNaN(stationLat) && !isNaN(stationLng)) {
+        const distance = calculateDistance(
+          location.latitude,
+          location.longitude,
+          stationLat,
+          stationLng
+        );
+        if (distance < 1) {
+          distanceText = `${Math.round(distance * 1000)}m away`;
+        } else if (distance < 10) {
+          distanceText = `${distance.toFixed(1)}km away`;
+        } else {
+          distanceText = `${Math.round(distance)}km away`;
+        }
+      }
+    }
+    
+    setSelectedStation({ ...station, distanceText });
+    setShowStationModal(true);
+  };
+
   // Check if report belongs to current user
   const isUserReport = (report) => {
     return currentUser && 
@@ -613,6 +682,7 @@ export default function CMap({ reportIdToFocus, setReportIdToFocus }) {
     <View className="flex-1">
       {/* Map with report markers */}
       <MapView
+        provider={PROVIDER_GOOGLE}
         style={{ flex: 1 }}
         initialRegion={initialRegion}
         region={region || initialRegion}
@@ -752,6 +822,47 @@ export default function CMap({ reportIdToFocus, setReportIdToFocus }) {
             </Marker>
           );
         })}
+
+        {/* Station markers with jurisdiction circles - match SMap.jsx pattern */}
+        {stations.map((s) => (
+          <React.Fragment key={s.id}>
+            <Marker 
+              coordinate={{ latitude: s.lat, longitude: s.lng }} 
+              title={s.station_name || 'Fire Station'}
+              description={s.address || 'Fire Station Location'}
+              onPress={() => {
+                console.log('📍 Station marker pressed:', s.station_name);
+                handleStationPress(s);
+              }}
+              tracksViewChanges={false}
+            >
+              <View style={{
+                width: 44,
+                height: 44,
+                borderRadius: 8,
+                backgroundColor: '#ef4444',
+                borderWidth: 3,
+                borderColor: '#ffffff',
+                justifyContent: 'center',
+                alignItems: 'center',
+                shadowColor: '#000',
+                shadowOffset: { width: 0, height: 2 },
+                shadowOpacity: 0.25,
+                shadowRadius: 3.84,
+                elevation: 5,
+              }}>
+                <Text style={{ color: '#fff', fontSize: 20 }}>🏢</Text>
+              </View>
+            </Marker>
+            <Circle
+              center={{ latitude: s.lat, longitude: s.lng }}
+              radius={jurisdictionRadius}
+              strokeColor="#ef4444"
+              fillColor="rgba(239,68,68,0.08)"
+              strokeWidth={1}
+            />
+          </React.Fragment>
+        ))}
       </MapView>
 
       {/* Refresh button */}
@@ -1514,6 +1625,246 @@ export default function CMap({ reportIdToFocus, setReportIdToFocus }) {
         onClose={() => setShowAcknowledgmentModal(false)}
         reportLocation={acknowledgmentReportLocation}
       />
+
+      {/* Station Detail Modal */}
+      <Modal
+        visible={showStationModal}
+        animationType="slide"
+        transparent={true}
+        onRequestClose={() => setShowStationModal(false)}
+      >
+        <View className="flex-1 bg-black/60 justify-center items-center">
+          <View className="bg-white rounded-3xl w-11/12 max-h-[85%] overflow-hidden" style={{
+            shadowColor: '#000',
+            shadowOffset: { width: 0, height: 10 },
+            shadowOpacity: 0.3,
+            shadowRadius: 20,
+            elevation: 15,
+          }}>
+            {selectedStation && (
+              <ScrollView showsVerticalScrollIndicator={false}>
+                {/* Enhanced Header */}
+                <LinearGradient
+                  colors={['#1e3a8a', '#2563eb', '#3b82f6']}
+                  start={{ x: 0, y: 0 }}
+                  end={{ x: 1, y: 0 }}
+                  style={{
+                    paddingTop: 16,
+                    paddingBottom: 16,
+                    paddingHorizontal: 20,
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                  }}
+                >
+                  <View className="flex-row items-center">
+                    <MaterialIcons name="local-fire-department" size={24} color="#ffffff" />
+                    <Text className="text-white text-xl font-bold ml-2" style={{
+                      textShadowColor: 'rgba(0, 0, 0, 0.2)',
+                      textShadowOffset: { width: 0, height: 1 },
+                      textShadowRadius: 3,
+                    }}>Fire Station</Text>
+                  </View>
+                  <TouchableOpacity
+                    onPress={() => setShowStationModal(false)}
+                    className="bg-white/20 rounded-full p-2"
+                    style={{
+                      backgroundColor: 'rgba(255, 255, 255, 0.2)',
+                    }}
+                  >
+                    <MaterialIcons name="close" size={20} color="#ffffff" />
+                  </TouchableOpacity>
+                </LinearGradient>
+
+                <View className="px-5 pt-5 pb-6">
+                  {/* Station Name - Prominent */}
+                  <View className="mb-5 items-center">
+                    <View
+                      className="px-5 py-3 rounded-full"
+                      style={{ 
+                        backgroundColor: '#1e3a8a',
+                        borderWidth: 2,
+                        borderColor: '#3b82f6',
+                      }}
+                    >
+                      <Text
+                        className="text-lg font-bold text-white"
+                      >
+                        {selectedStation.station_name || 'Fire Station'}
+                      </Text>
+                    </View>
+                  </View>
+
+                  {/* Map Preview */}
+                  {selectedStation.lat && selectedStation.lng && (
+                    <View className="mb-5 rounded-2xl overflow-hidden" style={{ height: 180 }}>
+                      <MapView
+                        style={{ flex: 1 }}
+                        provider={PROVIDER_GOOGLE}
+                        initialRegion={{
+                          latitude: parseFloat(selectedStation.lat),
+                          longitude: parseFloat(selectedStation.lng),
+                          latitudeDelta: 0.01,
+                          longitudeDelta: 0.01,
+                        }}
+                        scrollEnabled={false}
+                        zoomEnabled={false}
+                        pitchEnabled={false}
+                        rotateEnabled={false}
+                      >
+                        <Marker
+                          coordinate={{
+                            latitude: parseFloat(selectedStation.lat),
+                            longitude: parseFloat(selectedStation.lng),
+                          }}
+                        >
+                          <View style={{
+                            width: 44,
+                            height: 44,
+                            borderRadius: 8,
+                            backgroundColor: '#ef4444',
+                            borderWidth: 3,
+                            borderColor: '#ffffff',
+                            justifyContent: 'center',
+                            alignItems: 'center',
+                          }}>
+                            <Text style={{ color: '#fff', fontSize: 20 }}>🏢</Text>
+                          </View>
+                        </Marker>
+                        <Circle
+                          center={{
+                            latitude: parseFloat(selectedStation.lat),
+                            longitude: parseFloat(selectedStation.lng),
+                          }}
+                          radius={jurisdictionRadius}
+                          strokeColor="#ef4444"
+                          fillColor="rgba(239,68,68,0.08)"
+                          strokeWidth={1}
+                        />
+                      </MapView>
+                    </View>
+                  )}
+
+                  {/* Station Information Section */}
+                  <View className="mb-5">
+                    <Text className="text-gray-500 text-xs font-semibold uppercase mb-3 tracking-wider">Station Information</Text>
+                    <View className="bg-gray-50 rounded-2xl p-4">
+                      {/* Address */}
+                      {selectedStation.address && (
+                        <>
+                          <View className="flex-row items-start mb-3">
+                            <MaterialIcons name="place" size={18} color="#6b7280" />
+                            <View className="flex-1 ml-3">
+                              <Text className="text-gray-500 text-xs mb-1">Address</Text>
+                              <Text className="text-gray-800 font-semibold text-base">
+                                {selectedStation.address}
+                              </Text>
+                            </View>
+                          </View>
+                          <View className="h-px bg-gray-200 mb-3" />
+                        </>
+                      )}
+
+                      {/* Distance from user */}
+                      {selectedStation.distanceText && (
+                        <>
+                          <View className="flex-row items-start mb-3">
+                            <MaterialIcons name="location-on" size={18} color="#ef4444" />
+                            <View className="flex-1 ml-3">
+                              <Text className="text-gray-500 text-xs mb-1">Distance</Text>
+                              <View className="bg-red-50 border border-red-200 rounded-lg p-2 mt-1">
+                                <Text className="text-red-800 font-semibold text-sm">
+                                  {selectedStation.distanceText} from your location
+                                </Text>
+                              </View>
+                            </View>
+                          </View>
+                          <View className="h-px bg-gray-200 mb-3" />
+                        </>
+                      )}
+
+                      {/* Phone */}
+                      {selectedStation.phone && (
+                        <>
+                          <View className="flex-row items-start mb-3">
+                            <MaterialIcons name="phone" size={18} color="#6b7280" />
+                            <View className="flex-1 ml-3">
+                              <Text className="text-gray-500 text-xs mb-1">Phone</Text>
+                              <Text className="text-gray-800 font-semibold text-base">
+                                {selectedStation.phone}
+                              </Text>
+                            </View>
+                          </View>
+                          <View className="h-px bg-gray-200 mb-3" />
+                        </>
+                      )}
+
+                      {/* Email */}
+                      {selectedStation.email && (
+                        <>
+                          <View className="flex-row items-start mb-3">
+                            <MaterialIcons name="email" size={18} color="#6b7280" />
+                            <View className="flex-1 ml-3">
+                              <Text className="text-gray-500 text-xs mb-1">Email</Text>
+                              <Text className="text-gray-800 font-semibold text-base">
+                                {selectedStation.email}
+                              </Text>
+                            </View>
+                          </View>
+                          <View className="h-px bg-gray-200 mb-3" />
+                        </>
+                      )}
+
+                      {/* Jurisdiction/Coverage Area */}
+                      {(selectedStation.jurisdiction || selectedStation.area_of_coverage) && (
+                        <View className="flex-row items-start">
+                          <MaterialIcons name="map" size={18} color="#6b7280" />
+                          <View className="flex-1 ml-3">
+                            <Text className="text-gray-500 text-xs mb-1">Coverage Area</Text>
+                            <Text className="text-gray-800 font-semibold text-base">
+                              {selectedStation.jurisdiction || selectedStation.area_of_coverage || 'Not specified'}
+                            </Text>
+                          </View>
+                        </View>
+                      )}
+                    </View>
+                  </View>
+
+                  {/* Jurisdiction Info */}
+                  <View className="mb-5">
+                    <Text className="text-gray-500 text-xs font-semibold uppercase mb-3 tracking-wider">Service Area</Text>
+                    <View className="rounded-2xl p-4" style={{ backgroundColor: 'rgba(239, 68, 68, 0.05)' }}>
+                      <View className="flex-row items-start">
+                        <MaterialIcons name="radio-button-checked" size={18} color="#ef4444" />
+                        <View className="flex-1 ml-3">
+                          <Text className="text-gray-500 text-xs mb-1">Jurisdiction Radius</Text>
+                          <Text className="text-gray-800 font-semibold text-base">
+                            2 kilometers (2km)
+                          </Text>
+                          <Text className="text-gray-600 text-xs mt-1">
+                            This station responds to fire incidents within a 2km radius
+                          </Text>
+                        </View>
+                      </View>
+                    </View>
+                  </View>
+
+                  {/* Emergency Contact Info */}
+                  <View className="bg-red-50 border-2 border-red-200 rounded-2xl p-4">
+                    <View className="flex-row items-center mb-2">
+                      <MaterialIcons name="emergency" size={20} color="#ef4444" />
+                      <Text className="text-red-800 font-bold text-base ml-2">Emergency Contact</Text>
+                    </View>
+                    <Text className="text-red-700 text-sm">
+                      In case of fire emergency, contact this station immediately or call the national emergency hotline.
+                    </Text>
+                  </View>
+                </View>
+              </ScrollView>
+            )}
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
