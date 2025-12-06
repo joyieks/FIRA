@@ -182,8 +182,19 @@ Please respond immediately to this assignment.`;
           }))
           .filter(s => !isNaN(s.lat) && !isNaN(s.lng));
 
-        setStations(withCoords);
-        const mine = withCoords.find(s => s.id === myId) || withCoords[0] || null;
+        // Remove duplicate stations based on lat/lng coordinates to avoid overlapping circles
+        const uniqueStations = [];
+        const coordsSet = new Set();
+        withCoords.forEach(s => {
+          const coordKey = `${s.lat.toFixed(6)},${s.lng.toFixed(6)}`;
+          if (!coordsSet.has(coordKey)) {
+            coordsSet.add(coordKey);
+            uniqueStations.push(s);
+          }
+        });
+
+        setStations(uniqueStations);
+        const mine = uniqueStations.find(s => s.id === myId) || uniqueStations[0] || null;
         setMyStation(mine);
         if (mine) {
           setRegion({
@@ -450,23 +461,31 @@ Please respond immediately to this assignment.`;
           </Callout>
         </Marker>
 
-        {/* Other stations */}
-        {stations.filter(s => !myStation || s.id !== myStation.id).map(s => (
-          <React.Fragment key={s.id}>
-            <Marker coordinate={{ latitude: s.lat, longitude: s.lng }} title={s.station_name || 'Station'}>
-              <View style={{ width: 36, height: 36, borderRadius: 8, backgroundColor: '#3b82f6', borderWidth: 2, borderColor: '#fff', justifyContent: 'center', alignItems: 'center' }}>
-                <Text style={{ color: '#fff', fontSize: 16 }}>🏢</Text>
-              </View>
-            </Marker>
-            <Circle
-              center={{ latitude: s.lat, longitude: s.lng }}
-              radius={jurisdictionRadius}
-              strokeColor="#3b82f6"
-              fillColor="rgba(59,130,246,0.08)"
-              strokeWidth={1}
-            />
-          </React.Fragment>
-        ))}
+        {/* Other stations - explicitly filter out myStation to avoid duplicate circles */}
+        {stations
+          .filter(s => {
+            // Don't render if this is the logged-in station
+            if (myStation && s.id === myStation.id) return false;
+            // Don't render if coordinates match myStation (extra safety check)
+            if (myStation && Math.abs(s.lat - myStation.lat) < 0.0001 && Math.abs(s.lng - myStation.lng) < 0.0001) return false;
+            return true;
+          })
+          .map(s => (
+            <React.Fragment key={s.id}>
+              <Marker coordinate={{ latitude: s.lat, longitude: s.lng }} title={s.station_name || 'Station'}>
+                <View style={{ width: 36, height: 36, borderRadius: 8, backgroundColor: '#3b82f6', borderWidth: 2, borderColor: '#fff', justifyContent: 'center', alignItems: 'center' }}>
+                  <Text style={{ color: '#fff', fontSize: 16 }}>🏢</Text>
+                </View>
+              </Marker>
+              <Circle
+                center={{ latitude: s.lat, longitude: s.lng }}
+                radius={jurisdictionRadius}
+                strokeColor="#3b82f6"
+                fillColor="rgba(59,130,246,0.08)"
+                strokeWidth={1}
+              />
+            </React.Fragment>
+          ))}
 
         {/* Assigned fire reports markers */}
         {assignedReports.map(r => {

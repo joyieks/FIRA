@@ -233,7 +233,21 @@ const Adashboard = () => {
             });
           }))
         );
-        setGeocodedStations(results.filter(Boolean));
+        
+        // Remove duplicate stations based on coordinates to avoid overlapping circles
+        const validResults = results.filter(Boolean);
+        const uniqueStations = [];
+        const coordsSet = new Set();
+        
+        validResults.forEach(station => {
+          const coordKey = `${station.lat.toFixed(6)},${station.lng.toFixed(6)}`;
+          if (!coordsSet.has(coordKey)) {
+            coordsSet.add(coordKey);
+            uniqueStations.push(station);
+          }
+        });
+        
+        setGeocodedStations(uniqueStations);
       } catch (e) {
         console.error('❌ Error geocoding stations:', e);
       }

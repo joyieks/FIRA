@@ -48,6 +48,7 @@ const Sdashboard = () => {
   const [showStationInfoWindow, setShowStationInfoWindow] = useState(false);
   const [showCommandCenterInfo, setShowCommandCenterInfo] = useState(false);
   const [jurisdictionRadius, setJurisdictionRadius] = useState(2000); // 2km radius in meters
+  const [circleVersion, setCircleVersion] = useState(0); // Increment to force complete circle remount
   const [allStations, setAllStations] = useState([]); // raw stations from DB
   const [geocodedStations, setGeocodedStations] = useState([]); // [{id, name, address, lat, lng}]
   const [currentStationId, setCurrentStationId] = useState(null);
@@ -456,7 +457,25 @@ const Sdashboard = () => {
           })
         );
 
-        setGeocodedStations(results.filter(Boolean));
+        // Remove duplicate stations based on both ID and coordinates to avoid overlapping circles
+        const validResults = results.filter(Boolean);
+        const uniqueStations = [];
+        const seenIds = new Set();
+        const coordsSet = new Set();
+        
+        validResults.forEach(station => {
+          const stationIdStr = String(station.id);
+          const coordKey = `${station.lat.toFixed(6)},${station.lng.toFixed(6)}`;
+          
+          // Skip if we've already added this station ID or these coordinates
+          if (!seenIds.has(stationIdStr) && !coordsSet.has(coordKey)) {
+            seenIds.add(stationIdStr);
+            coordsSet.add(coordKey);
+            uniqueStations.push(station);
+          }
+        });
+
+        setGeocodedStations(uniqueStations);
       } catch (e) {
         console.error('❌ Error initializing stations map:', e);
       }
@@ -963,6 +982,7 @@ const Sdashboard = () => {
       )}
       {isMapsLoaded && (
         <GoogleMap
+          key={`map-${circleVersion}`}
           mapContainerStyle={mapContainerStyle}
           center={mapCenter}
           zoom={stationLocation ? 15 : (userLocation ? 15 : 12)}
@@ -1019,6 +1039,39 @@ const Sdashboard = () => {
             />
           )}
 
+          {/* Other stations jurisdiction circles */}
+          {mapLoaded && geocodedStations.map((s) => {
+            // Use string comparison to ensure ID matching works regardless of type
+            const isSelf = currentStationId && String(s.id) === String(currentStationId);
+            // skip rendering duplicate of own marker since we already render above from stationLocation
+            if (isSelf) return null;
+            
+            // Additional check: skip if coordinates match stationLocation (extra safety against duplicates)
+            if (stationLocation && 
+                Math.abs(s.lat - stationLocation.lat) < 0.0001 && 
+                Math.abs(s.lng - stationLocation.lng) < 0.0001) {
+              return null;
+            }
+            
+            const position = { lat: s.lat, lng: s.lng };
+            return (
+              <Circle
+                key={`circle-${s.id}`}
+                center={position}
+                radius={jurisdictionRadius}
+                options={{
+                  fillColor: '#a9bbff',
+                  fillOpacity: 0.05,
+                  strokeColor: '#6b82ff',
+                  strokeOpacity: 0.6,
+                  strokeWeight: 1,
+                  clickable: false,
+                  zIndex: 1
+                }}
+              />
+            );
+          })}
+
           {/* Command Center - BFP Regional Office VII */}
           {mapLoaded && (
             <Marker
@@ -1064,38 +1117,33 @@ const Sdashboard = () => {
             </InfoWindow>
           )}
 
-          {/* Other stations: markers and jurisdiction circles */}
+          {/* Other stations: markers only (circles rendered above) */}
           {mapLoaded && geocodedStations.map((s) => {
-            const isSelf = currentStationId && s.id === currentStationId;
+            // Use string comparison to ensure ID matching works regardless of type
+            const isSelf = currentStationId && String(s.id) === String(currentStationId);
             // skip rendering duplicate of own marker since we already render above from stationLocation
             if (isSelf) return null;
+            
+            // Additional check: skip if coordinates match stationLocation (extra safety against duplicates)
+            if (stationLocation && 
+                Math.abs(s.lat - stationLocation.lat) < 0.0001 && 
+                Math.abs(s.lng - stationLocation.lng) < 0.0001) {
+              return null;
+            }
+            
             const position = { lat: s.lat, lng: s.lng };
             return (
-              <React.Fragment key={s.id}>
-                <Marker
-                  position={position}
-                  title={s.name}
-                  icon={{
-                    url: 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNDgiIGhlaWdodD0iNDgiIHZpZXdCb3g9IjAgMCA0OCA0OCIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KPHJlY3QgeD0iNCIgeT0iMTIiIHdpZHRoPSI0MCIgaGVpZ2h0PSIzMiIgcng9IjIiIGZpbGw9IiNlZjQ0NDQiIHN0cm9rZT0iI2ZmZmZmZiIgc3Ryb2tlLXdpZHRoPSIzIi8+CjxyZWN0IHg9IjgiIHk9IjE2IiB3aWR0aD0iMzIiIGhlaWdodD0iMjQiIGZpbGw9IiNmZmZmZmYiLz4KPHJlY3QgeD0iMTIiIHk9IjIwIiB3aWR0aD0iNiIgaGVpZ2h0PSI4IiBmaWxsPSIjZWY0NDQ0Ii8+CjxyZWN0IHg9IjIyIiB5PSIyMCIgd2lkdGg9IjYiIGhlaWdodD0iOCIgZmlsbD0iI2VmNDQ0NCIvPgo8cmVjdCB4PSIzMiIgeT0iMjAiIHdpZHRoPSI2IiBoZWlnaHQ9IjgiIGZpbGw9IiNlZjQ0NDQiLz4KPHJlY3QgeD0iMTIiIHk9IjMyIiB3aWR0aD0iNiIgaGVpZ2h0PSI4IiBmaWxsPSIjZWY0NDQ0Ii8+CjxyZWN0IHg9IjIyIiB5PSIzMiIgd2lkdGg9IjYiIGhlaWdodD0iOCIgZmlsbD0iI2VmNDQ0NCIvPgo8cmVjdCB4PSIzMiIgeT0iMzIiIHdpZHRoPSI2IiBoZWlnaHQ9IjgiIGZpbGw9IiNlZjQ0NDQiLz4KPHJlY3QgeD0iMjAiIHk9IjQiIHdpZHRoPSI4IiBoZWlnaHQ9IjgiIGZpbGw9IiNlZjQ0NDQiLz4KPHJlY3QgeD0iMjIiIHk9IjYiIHdpZHRoPSI0IiBoZWlnaHQ9IjQiIGZpbGw9IiNmZmZmZmYiLz4KPC9zdmc+',
-                    scaledSize: new window.google.maps.Size(48, 48),
-                    anchor: new window.google.maps.Point(24, 24)
-                  }}
-                  zIndex={2}
-                />
-                <Circle
-                  center={position}
-                  radius={jurisdictionRadius}
-                  options={{
-                    fillColor: '#a9bbff',
-                    fillOpacity: 0.05,
-                    strokeColor: '#6b82ff',
-                    strokeOpacity: 0.6,
-                    strokeWeight: 1,
-                    clickable: false,
-                    zIndex: 1
-                  }}
-                />
-              </React.Fragment>
+              <Marker
+                key={s.id}
+                position={position}
+                title={s.name}
+                icon={{
+                  url: 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNDgiIGhlaWdodD0iNDgiIHZpZXdCb3g9IjAgMCA0OCA0OCIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KPHJlY3QgeD0iNCIgeT0iMTIiIHdpZHRoPSI0MCIgaGVpZ2h0PSIzMiIgcng9IjIiIGZpbGw9IiNlZjQ0NDQiIHN0cm9rZT0iI2ZmZmZmZiIgc3Ryb2tlLXdpZHRoPSIzIi8+CjxyZWN0IHg9IjgiIHk9IjE2IiB3aWR0aD0iMzIiIGhlaWdodD0iMjQiIGZpbGw9IiNmZmZmZmYiLz4KPHJlY3QgeD0iMTIiIHk9IjIwIiB3aWR0aD0iNiIgaGVpZ2h0PSI4IiBmaWxsPSIjZWY0NDQ0Ii8+CjxyZWN0IHg9IjIyIiB5PSIyMCIgd2lkdGg9IjYiIGhlaWdodD0iOCIgZmlsbD0iI2VmNDQ0NCIvPgo8cmVjdCB4PSIzMiIgeT0iMjAiIHdpZHRoPSI2IiBoZWlnaHQ9IjgiIGZpbGw9IiNlZjQ0NDQiLz4KPHJlY3QgeD0iMTIiIHk9IjMyIiB3aWR0aD0iNiIgaGVpZ2h0PSI4IiBmaWxsPSIjZWY0NDQ0Ii8+CjxyZWN0IHg9IjIyIiB5PSIzMiIgd2lkdGg9IjYiIGhlaWdodD0iOCIgZmlsbD0iI2VmNDQ0NCIvPgo8cmVjdCB4PSIzMiIgeT0iMzIiIHdpZHRoPSI2IiBoZWlnaHQ9IjgiIGZpbGw9IiNlZjQ0NDQiLz4KPHJlY3QgeD0iMjAiIHk9IjQiIHdpZHRoPSI4IiBoZWlnaHQ9IjgiIGZpbGw9IiNlZjQ0NDQiLz4KPHJlY3QgeD0iMjIiIHk9IjYiIHdpZHRoPSI0IiBoZWlnaHQ9IjQiIGZpbGw9IiNmZmZmZmYiLz4KPC9zdmc+',
+                  scaledSize: new window.google.maps.Size(48, 48),
+                  anchor: new window.google.maps.Point(24, 24)
+                }}
+                zIndex={2}
+              />
             );
           })}
 
@@ -1372,7 +1420,10 @@ const Sdashboard = () => {
                 max="5000"
                 step="250"
                 value={jurisdictionRadius}
-                onChange={(e) => setJurisdictionRadius(parseInt(e.target.value))}
+                onChange={(e) => {
+                  setJurisdictionRadius(parseInt(e.target.value));
+                  setCircleVersion(v => v + 1);
+                }}
                 className="flex-1"
               />
               <span className="text-xs text-gray-700 font-medium min-w-[3rem]">
@@ -1382,19 +1433,28 @@ const Sdashboard = () => {
           </div>
           <div className="flex space-x-1">
             <button
-              onClick={() => setJurisdictionRadius(1000)}
+              onClick={() => {
+                setJurisdictionRadius(1000);
+                setCircleVersion(v => v + 1);
+              }}
               className={`px-2 py-1 text-xs rounded ${jurisdictionRadius === 1000 ? 'bg-red-600 text-white' : 'bg-gray-200 text-gray-700'}`}
             >
               1km
             </button>
             <button
-              onClick={() => setJurisdictionRadius(2000)}
+              onClick={() => {
+                setJurisdictionRadius(2000);
+                setCircleVersion(v => v + 1);
+              }}
               className={`px-2 py-1 text-xs rounded ${jurisdictionRadius === 2000 ? 'bg-red-600 text-white' : 'bg-gray-200 text-gray-700'}`}
             >
               2km
             </button>
             <button
-              onClick={() => setJurisdictionRadius(3000)}
+              onClick={() => {
+                setJurisdictionRadius(3000);
+                setCircleVersion(v => v + 1);
+              }}
               className={`px-2 py-1 text-xs rounded ${jurisdictionRadius === 3000 ? 'bg-red-600 text-white' : 'bg-gray-200 text-gray-700'}`}
             >
               3km
