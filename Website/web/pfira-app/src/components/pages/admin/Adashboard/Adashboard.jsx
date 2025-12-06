@@ -1205,6 +1205,116 @@ const Adashboard = () => {
         </button>
       </div>
 
+      {/* Mini Modal - Active Fire Incidents List (Lower Left) */}
+      <div className="absolute bottom-4 left-4 z-30 w-80 bg-white backdrop-blur-sm bg-opacity-98 rounded-lg shadow-2xl border border-gray-200 h-[320px] flex flex-col">
+        {/* Header */}
+        <div className="bg-gradient-to-r from-red-600 to-red-700 p-2.5 rounded-t-lg flex items-center justify-between sticky top-0 z-10 flex-shrink-0">
+          <div className="flex items-center space-x-2">
+            <div className="bg-white/20 p-1.5 rounded-md">
+              <svg className="w-4 h-4 text-white" fill="currentColor" viewBox="0 0 20 20">
+                <path fillRule="evenodd" d="M5 2a1 1 0 011 1v1h1a1 1 0 010 2H6v1a1 1 0 01-2 0V6H3a1 1 0 010-2h1V3a1 1 0 011-1zm0 10a1 1 0 011 1v1h1a1 1 0 110 2H6v1a1 1 0 11-2 0v-1H3a1 1 0 110-2h1v-1a1 1 0 011-1zM12 2a1 1 0 01.967.744L14.146 7.2 17.5 9.134a1 1 0 01.5.866 1 1 0 01-1 1h-4v1a1 1 0 01-1 1h-1a1 1 0 01-1-1v-1H6a1 1 0 01-1-1 1 1 0 01.5-.866l3.354-1.934L9.033 2.744A1 1 0 0112 2z" clipRule="evenodd" />
+              </svg>
+            </div>
+            <div>
+              <h3 className="font-bold text-white text-sm tracking-wide">Active Incidents</h3>
+              <p className="text-red-100 text-xs">{fireReports.length} active</p>
+            </div>
+          </div>
+        </div>
+
+        {/* Scrollable List */}
+        <div className="overflow-y-auto flex-1" style={{ maxHeight: '280px' }}>
+          {reportsLoading ? (
+            <div className="flex items-center justify-center py-8">
+              <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-red-600"></div>
+            </div>
+          ) : fireReports.length === 0 ? (
+            <div className="p-6 text-center">
+              <p className="text-gray-500 text-sm">No active incidents</p>
+            </div>
+          ) : (
+            <div className="p-2 space-y-2">
+              {fireReports.map((report) => {
+                const alarmLevel = resolveAlarmLevel(report);
+                const alarmColor = getAlarmLevelColor(alarmLevel);
+                const status = report.status || 'Unknown';
+                const statusLower = status.toLowerCase();
+                
+                // Get status color
+                const getStatusColorClass = (status) => {
+                  if (statusLower.includes('on going') || statusLower.includes('ongoing')) {
+                    return 'bg-red-100 text-red-800 border-red-200';
+                  }
+                  if (statusLower.includes('under control')) {
+                    return 'bg-yellow-100 text-yellow-800 border-yellow-200';
+                  }
+                  if (statusLower.includes('fire out')) {
+                    return 'bg-green-100 text-green-800 border-green-200';
+                  }
+                  return 'bg-gray-100 text-gray-800 border-gray-200';
+                };
+
+                return (
+                  <div
+                    key={report.id}
+                    onClick={() => {
+                      setSelectedReport(report);
+                      setMapCenter({
+                        lat: parseFloat(report.latitude),
+                        lng: parseFloat(report.longitude)
+                      });
+                    }}
+                    className={`p-3 bg-gray-50 hover:bg-blue-50 rounded-lg cursor-pointer transition-all duration-200 border border-gray-200 hover:border-blue-300 hover:shadow-md ${
+                      selectedReport?.id === report.id ? 'bg-blue-100 border-blue-400 shadow-md' : ''
+                    }`}
+                  >
+                    {/* Location */}
+                    <div className="flex items-start space-x-2 mb-2">
+                      <svg className="w-4 h-4 text-gray-500 mt-0.5 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
+                        <path fillRule="evenodd" d="M5.05 4.05a7 7 0 119.9 9.9L10 18.9l-4.95-4.95a7 7 0 010-9.9zM10 11a2 2 0 100-4 2 2 0 000 4z" clipRule="evenodd" />
+                      </svg>
+                      <p className="text-xs font-semibold text-gray-900 flex-1 line-clamp-2">
+                        {report.address || report.geotag_location || 'Location unavailable'}
+                      </p>
+                    </div>
+
+                    {/* Status and Alarm Level Row */}
+                    <div className="flex items-center space-x-2 mt-2">
+                      {/* Status Badge */}
+                      <span className={`px-2 py-0.5 rounded text-xs font-medium border ${getStatusColorClass(status)}`}>
+                        {status}
+                      </span>
+                      
+                      {/* Alarm Level Badge */}
+                      <span
+                        className="px-2 py-0.5 rounded text-xs font-bold text-white border"
+                        style={{ 
+                          backgroundColor: alarmColor,
+                          borderColor: alarmColor,
+                          color: getAlarmLevelTextColor(alarmLevel)
+                        }}
+                      >
+                        {cleanAlarmLevel(alarmLevel) || 'Unknown'}
+                      </span>
+                    </div>
+
+                    {/* Time */}
+                    {report.formatted_timestamp && (
+                      <div className="flex items-center space-x-1 mt-1.5">
+                        <svg className="w-3 h-3 text-gray-400" fill="currentColor" viewBox="0 0 20 20">
+                          <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm1-12a1 1 0 10-2 0v4a1 1 0 00.293.707l2.828 2.829a1 1 0 101.415-1.415L11 9.586V6z" clipRule="evenodd" />
+                        </svg>
+                        <p className="text-xs text-gray-500">{report.formatted_timestamp}</p>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      </div>
+
       {/* Professional Admin Dashboard Panel - Compact & Toggleable */}
       {showDashboard && (
         <div className="absolute top-4 left-16 bg-white backdrop-blur-sm bg-opacity-98 rounded-lg shadow-xl border border-gray-100 z-20 w-64">
