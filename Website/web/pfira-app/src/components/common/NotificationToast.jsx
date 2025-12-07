@@ -1,7 +1,8 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
-import { FiBell, FiX, FiAlertTriangle } from 'react-icons/fi';
+import { FiBell, FiX, FiAlertTriangle, FiCheckCircle } from 'react-icons/fi';
 import { useNotifications } from '../../contexts/NotificationContext';
+import successSound from '../../../assets/sounds/success_sound_effects.mp3';
 
 const NotificationToast = () => {
   const navigate = useNavigate();
@@ -9,6 +10,19 @@ const NotificationToast = () => {
   const { notifications, markAsRead, stopAlert } = useNotifications();
   const [toastNotifications, setToastNotifications] = useState([]);
   const [processedIds, setProcessedIds] = useState(new Set());
+  const successAudioRef = useRef(null);
+
+  // Initialize success audio
+  useEffect(() => {
+    successAudioRef.current = new Audio(successSound);
+    successAudioRef.current.volume = 0.5;
+  }, []);
+
+  const isFireOut = (notification) => {
+    const title = (notification.title || '').toLowerCase();
+    const message = (notification.message || '').toLowerCase();
+    return title.includes('fire out') || message.includes('fire out') || message.includes('fire is now out');
+  };
 
   useEffect(() => {
     // Don't show toasts on the notification page itself
@@ -52,6 +66,25 @@ const NotificationToast = () => {
     );
   }, [notifications]);
 
+  // Play success sound when fire out notifications appear
+  useEffect(() => {
+    toastNotifications.forEach(notification => {
+      if (isFireOut(notification)) {
+        console.log('✅ Fire out notification appeared - playing success sound');
+        try {
+          if (successAudioRef.current) {
+            successAudioRef.current.currentTime = 0;
+            successAudioRef.current.play().catch(err => {
+              console.log('Success sound autoplay blocked:', err);
+            });
+          }
+        } catch (error) {
+          console.error('Error playing success sound:', error);
+        }
+      }
+    });
+  }, [toastNotifications]);
+
   const dismissToast = (notificationId) => {
     console.log('🗑️ Dismissing toast:', notificationId);
     setToastNotifications(prev => 
@@ -71,33 +104,57 @@ const NotificationToast = () => {
     // Dismiss the toast immediately
     dismissToast(notification.id);
     
-    // Stop alarm immediately
-    stopAlert();
+    // Check if this is a fire out notification
+    const fireOut = isFireOut(notification);
     
-    // Mark as read
-    if (!notification.is_read) {
-      await markAsRead(notification.id);
-    }
-    
-    if (notification.related_report_id) {
-      // Store the report ID in localStorage for Adashboard to pick up
-      localStorage.setItem('selectedReportId', notification.related_report_id);
-      // Add timestamp to force reload detection
-      localStorage.setItem('lastNotificationClick', JSON.stringify({
-        reportId: notification.related_report_id,
-        timestamp: Date.now()
-      }));
-      // Tell the page to stop alarm on load
-      localStorage.setItem('stopAlarmOnLoad', 'true');
-      
-      // Navigate to the map dashboard with a small delay to ensure dismiss happens
-      setTimeout(() => {
-        if (location.pathname === '/admin-dashboard') {
-          window.location.href = '/admin-dashboard';
-        } else {
-          navigate('/admin-dashboard');
+    if (fireOut) {
+      // Fire out: Play success sound and just dismiss (no map navigation)
+      console.log('✅ Fire out notification - playing success sound');
+      try {
+        if (successAudioRef.current) {
+          successAudioRef.current.currentTime = 0;
+          successAudioRef.current.play();
         }
-      }, 100);
+      } catch (error) {
+        console.error('Error playing success sound:', error);
+      }
+      
+      // Stop alarm
+      stopAlert();
+      
+      // Mark as read
+      if (!notification.is_read) {
+        await markAsRead(notification.id);
+      }
+    } else {
+      // Regular notification: Stop alarm and navigate to map
+      stopAlert();
+      
+      // Mark as read
+      if (!notification.is_read) {
+        await markAsRead(notification.id);
+      }
+      
+      if (notification.related_report_id) {
+        // Store the report ID in localStorage for Adashboard to pick up
+        localStorage.setItem('selectedReportId', notification.related_report_id);
+        // Add timestamp to force reload detection
+        localStorage.setItem('lastNotificationClick', JSON.stringify({
+          reportId: notification.related_report_id,
+          timestamp: Date.now()
+        }));
+        // Tell the page to stop alarm on load
+        localStorage.setItem('stopAlarmOnLoad', 'true');
+        
+        // Navigate to the map dashboard with a small delay to ensure dismiss happens
+        setTimeout(() => {
+          if (location.pathname === '/admin-dashboard') {
+            window.location.href = '/admin-dashboard';
+          } else {
+            navigate('/admin-dashboard');
+          }
+        }, 100);
+      }
     }
   };
 
@@ -108,18 +165,33 @@ const NotificationToast = () => {
     // Dismiss toast
     dismissToast(notificationId);
     
+    // Check if fire out to play success sound
+    const notification = toastNotifications.find(n => n.id === notificationId);
+    if (notification && isFireOut(notification)) {
+      try {
+        if (successAudioRef.current) {
+          successAudioRef.current.currentTime = 0;
+          successAudioRef.current.play();
+        }
+      } catch (error) {
+        console.error('Error playing success sound:', error);
+      }
+    }
+    
     // Stop alarm
     stopAlert();
     
     // Mark as read
-    const notification = toastNotifications.find(n => n.id === notificationId);
     if (notification && !notification.is_read) {
       markAsRead(notificationId);
     }
   };
 
-  const getIcon = (type) => {
-    switch (type) {
+  const getIcon = (notification) => {
+    if (isFireOut(notification)) {
+      return <FiCheckCircle className="text-green-600" size={20} />;
+    }
+    switch (notification.type) {
       case 'fire_alert':
       case 'emergency':
         return <FiBell className="text-red-600" size={20} />;
@@ -130,8 +202,11 @@ const NotificationToast = () => {
     }
   };
 
-  const getPriorityColor = (priority) => {
-    switch (priority) {
+  const getPriorityColor = (notification) => {
+    if (isFireOut(notification)) {
+      return 'border-l-green-600 bg-green-50';
+    }
+    switch (notification.priority) {
       case 'urgent':
         return 'border-l-red-600 bg-red-50';
       case 'high':
@@ -151,11 +226,11 @@ const NotificationToast = () => {
         <div
           key={notification.id}
           onClick={() => handleToastClick(notification)}
-          className={`${getPriorityColor(notification.priority)} border-l-4 rounded-lg shadow-lg p-4 cursor-pointer hover:shadow-xl transition-all duration-300 animate-slide-in-right`}
+          className={`${getPriorityColor(notification)} border-l-4 rounded-lg shadow-lg p-4 cursor-pointer hover:shadow-xl transition-all duration-300 animate-slide-in-right`}
         >
           <div className="flex items-start space-x-3">
             <div className="flex-shrink-0 mt-0.5">
-              {getIcon(notification.type)}
+              {getIcon(notification)}
             </div>
             
             <div className="flex-1 min-w-0">
@@ -176,15 +251,23 @@ const NotificationToast = () => {
               </p>
               
               <div className="mt-2 flex items-center space-x-2">
-                {notification.priority === 'urgent' && (
-                  <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-red-600 text-white">
-                    URGENT
+                {isFireOut(notification) ? (
+                  <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-green-600 text-white">
+                    ✅ FIRE OUT
                   </span>
-                )}
-                {notification.related_report_id && (
-                  <span className="text-xs text-gray-500">
-                    Click to view on map
-                  </span>
+                ) : (
+                  <>
+                    {notification.priority === 'urgent' && (
+                      <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-red-600 text-white">
+                        URGENT
+                      </span>
+                    )}
+                    {notification.related_report_id && (
+                      <span className="text-xs text-gray-500">
+                        Click to view on map
+                      </span>
+                    )}
+                  </>
                 )}
               </div>
             </div>

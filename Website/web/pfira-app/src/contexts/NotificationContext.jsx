@@ -28,6 +28,13 @@ export const NotificationProvider = ({ children }) => {
   const processedReportIdsRef = useRef(new Set());
   const processedNotificationIdsRef = useRef(new Set()); // Track which notifications have already triggered alarms
 
+  // Helper function to check if notification is about fire out status
+  const isFireOutNotification = (notification) => {
+    const title = (notification.title || '').toLowerCase();
+    const message = (notification.message || '').toLowerCase();
+    return title.includes('fire out') || message.includes('fire out') || message.includes('fire is now out');
+  };
+
   // Preload fire alarm sound
   useEffect(() => {
     const loadAudio = async () => {
@@ -322,10 +329,12 @@ export const NotificationProvider = ({ children }) => {
       // Notifications loaded
       
       // Check for new unread fire alerts that we haven't already triggered an alarm for
+      // EXCLUDE Fire Out notifications - they should not trigger the alarm
       const newFireAlerts = data?.filter(notification => 
         notification.type === 'fire_alert' && 
         !notification.is_read &&
-        !processedNotificationIdsRef.current.has(notification.id) // Check if we've already alerted for this notification
+        !processedNotificationIdsRef.current.has(notification.id) && // Check if we've already alerted for this notification
+        !isFireOutNotification(notification) // Don't trigger alarm for fire out status
       ) || [];
       
       if (newFireAlerts.length > 0) {
@@ -354,8 +363,12 @@ export const NotificationProvider = ({ children }) => {
       const unread = data?.filter(n => !n.is_read) || [];
       setUnreadCount(unread.length);
 
-      // If there are no unread fire alerts, ensure alarm is stopped
-      const hasUnreadFire = (data || []).some(n => n.type === 'fire_alert' && !n.is_read);
+      // If there are no unread fire alerts (excluding fire out), ensure alarm is stopped
+      const hasUnreadFire = (data || []).some(n => 
+        n.type === 'fire_alert' && 
+        !n.is_read && 
+        !isFireOutNotification(n)
+      );
       if (!hasUnreadFire) {
         stopAlert();
       }
@@ -566,20 +579,25 @@ export const NotificationProvider = ({ children }) => {
           // Update unread count
           setUnreadCount(prev => prev + 1);
           
-          // Play sound for fire_alert notifications, but NOT for status change notifications
+          // Play sound for fire_alert notifications, but NOT for status change or fire out notifications
           if (payload?.new?.type === 'fire_alert') {
             // Check if this is a status change notification (title contains "Status Changed")
             const isStatusChange = payload?.new?.title?.includes('Status Changed') || 
                                    payload?.new?.title?.includes('status') ||
                                    payload?.new?.message?.includes('Status changed from');
             
-            if (!isStatusChange) {
+            // Check if this is a fire out notification
+            const isFireOut = isFireOutNotification(payload.new);
+            
+            if (!isStatusChange && !isFireOut) {
               console.log('🔥 Global: Fire alert notification received via real-time subscription - attempting to play sound');
               if (!isAlertingRef.current) {
                 playAlert();
                 isAlertingRef.current = true;
                 setTimeout(() => { isAlertingRef.current = false; }, 2000);
               }
+            } else if (isFireOut) {
+              console.log('✅ Global: Fire Out notification - NOT playing alarm (success sound will play from toast)');
             } else {
               console.log('📢 Global: Status change notification - NOT playing sound');
             }
