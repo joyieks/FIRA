@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { GoogleMap, Marker, InfoWindow, Circle, useJsApiLoader } from '@react-google-maps/api';
 import { useOutletContext } from 'react-router-dom';
 import { supabase } from '../../../../config/supabase';
+import { checkStationIsBusy, handleAssignmentResponse, requestForwarding } from '../../../../utils/assignmentHelpers';
 
 const Sdashboard = () => {
   // Helper function to generate human-readable report ID
@@ -116,6 +117,9 @@ const Sdashboard = () => {
   const interactionHandlerRegisteredRef = useRef(false);
   const [showSoundPrompt, setShowSoundPrompt] = useState(false);
   const [unreadCount, setUnreadCount] = useState(0);
+  const [showAcceptanceModal, setShowAcceptanceModal] = useState(false);
+  const [showForwardingRequestModal, setShowForwardingRequestModal] = useState(false);
+  const [pendingAssignmentData, setPendingAssignmentData] = useState(null); // {reportId, assignmentSource, reportData}
   // Load Google Maps API once to avoid duplicate script injection when navigating
   const { isLoaded: isMapsLoaded, loadError: mapsLoadError } = useJsApiLoader({
     id: 'google-map-script',
@@ -543,10 +547,10 @@ const Sdashboard = () => {
         if (!stationId) return;
         if (!mapLoaded) return;
 
-        // 1) Fetch assignments for this station
+        // 1) Fetch assignments for this station (exclude declined)
         const { data: assignments, error } = await supabase
           .from('report_assignments')
-          .select('report_id, note, assigned_at')
+          .select('report_id, note, assigned_at, status')
           .eq('assignee_type', 'station')
           .eq('assignee_id', stationId);
 
@@ -554,6 +558,11 @@ const Sdashboard = () => {
           console.error('❌ Error fetching report assignments for station:', error);
           return;
         }
+
+        // Filter out declined assignments
+        const activeAssignments = (assignments || []).filter(
+          a => !a.status || a.status !== 'declined'
+        );
 
         // 2) Fetch forwarded reports for this station with notes
         const { data: forwarded, error: forwardError } = await supabase
@@ -616,8 +625,8 @@ const Sdashboard = () => {
           });
         });
 
-        // Combine both assigned and forwarded report IDs
-        const assignedIds = new Set((assignments || []).map(a => String(a.report_id)));
+        // Combine both assigned and forwarded report IDs (use filtered activeAssignments)
+        const assignedIds = new Set((activeAssignments || []).map(a => String(a.report_id)));
         const forwardedIds = new Set((forwarded || []).map(f => String(f.report_id)));
         const allReportIds = new Set([...assignedIds, ...forwardedIds]);
 
@@ -628,9 +637,9 @@ const Sdashboard = () => {
           return;
         }
 
-        // Create a map of directly assigned report notes
+        // Create a map of directly assigned report notes (use filtered activeAssignments)
         const assignmentMeta = new Map();
-        (assignments || []).forEach(a => {
+        (activeAssignments || []).forEach(a => {
           assignmentMeta.set(String(a.report_id), { note: a.note || '', assigned_at: a.assigned_at });
         });
 
@@ -749,12 +758,48 @@ const Sdashboard = () => {
               const row = payload?.new;
               if (!row) return;
               if (row.assignee_type === 'station' && String(row.assignee_id) === String(stationId)) {
-                // Immediate alert and persist notification
-                const title = 'New Report Assigned to Your Station';
-                const readableId = generateReadableReportId(row.report_id);
-                const message = `Report ${readableId}${row.note ? ` • Note: ${row.note}` : ''}`;
-                startAlarmLoop();
-                await supabase.from('notifications').insert({ user_id: stationId, user_type: 'station', type: 'assignment', title, message, is_read: false, related_report_id: String(row.report_id) });
+                // Fetch report data
+                const response = await fetch('https://fire-detection-api-production-f55b.up.railway.app/get_reports');
+                const reports = response.ok ? await response.json() : [];
+                const reportData = reports.find(r => String(r.id) === String(row.report_id));
+
+                // Check if assignment is pending (needs approval)
+                if (row.status === 'pending') {
+                  // Check if station is busy
+                  const busyCheck = await checkStationIsBusy(stationId);
+                  
+                  if (row.assignment_source === 'manual') {
+                    // Admin assigned - show acceptance modal
+                    setPendingAssignmentData({
+                      reportId: row.report_id,
+                      assignmentSource: 'manual',
+                      reportData: reportData,
+                      assignmentId: row.id
+                    });
+                    setShowAcceptanceModal(true);
+                  } else if (row.assignment_source === 'automatic' && busyCheck.isBusy) {
+                    // Auto-assigned and station is busy - show forwarding request modal
+                    setPendingAssignmentData({
+                      reportId: row.report_id,
+                      assignmentSource: 'automatic',
+                      reportData: reportData,
+                      assignmentId: row.id,
+                      busyCount: busyCheck.busyCount
+                    });
+                    setShowForwardingRequestModal(true);
+                  } else {
+                    // Auto-assigned and station not busy - auto-accept
+                    await handleAssignmentResponse(row.report_id, stationId, 'accepted');
+                  }
+                } else {
+                  // Already accepted - just show notification
+                  const title = 'New Report Assigned to Your Station';
+                  const readableId = generateReadableReportId(row.report_id);
+                  const message = `Report ${readableId}${row.note ? ` • Note: ${row.note}` : ''}`;
+                  startAlarmLoop();
+                  await supabase.from('notifications').insert({ user_id: stationId, user_type: 'station', type: 'assignment', title, message, is_read: false, related_report_id: String(row.report_id) });
+                }
+                
                 // Refresh lists
                 setTimeout(() => {
                   // trigger reload via polling function by toggling mapLoaded or directly call load (not in scope here)
@@ -762,6 +807,60 @@ const Sdashboard = () => {
               }
             } catch (e) {
               console.error('❌ Station: RT assignment handler error:', e);
+            }
+          })
+          .on('postgres_changes', { 
+            event: 'UPDATE', 
+            schema: 'public', 
+            table: 'report_assignments',
+            filter: `assignee_type=eq.station&assignee_id=eq.${stationId}`
+          }, async (payload) => {
+            try {
+              const row = payload?.new;
+              const oldRow = payload?.old;
+              if (!row) return;
+              if (row.assignee_type === 'station' && String(row.assignee_id) === String(stationId)) {
+                // Handle assignments that become pending (e.g., rerouted assignments)
+                // Check if status changed to pending (was not pending before, or is a new assignment to this station)
+                const wasPending = oldRow?.status === 'pending';
+                const isNowPending = row.status === 'pending';
+                
+                if (isNowPending && !wasPending) {
+                  // Fetch report data
+                  const response = await fetch('https://fire-detection-api-production-f55b.up.railway.app/get_reports');
+                  const reports = response.ok ? await response.json() : [];
+                  const reportData = reports.find(r => String(r.id) === String(row.report_id));
+
+                  // Check if station is busy
+                  const busyCheck = await checkStationIsBusy(stationId);
+                  
+                  if (row.assignment_source === 'manual') {
+                    // Admin assigned (including rerouted) - show acceptance modal
+                    setPendingAssignmentData({
+                      reportId: row.report_id,
+                      assignmentSource: 'manual',
+                      reportData: reportData,
+                      assignmentId: row.id
+                    });
+                    setShowAcceptanceModal(true);
+                  } else if (row.assignment_source === 'automatic' && busyCheck.isBusy) {
+                    // Auto-assigned and station is busy - show forwarding request modal
+                    setPendingAssignmentData({
+                      reportId: row.report_id,
+                      assignmentSource: 'automatic',
+                      reportData: reportData,
+                      assignmentId: row.id,
+                      busyCount: busyCheck.busyCount
+                    });
+                    setShowForwardingRequestModal(true);
+                  } else {
+                    // Auto-assigned and station not busy - auto-accept
+                    await handleAssignmentResponse(row.report_id, stationId, 'accepted');
+                  }
+                }
+              }
+            } catch (e) {
+              console.error('❌ Station: RT assignment update handler error:', e);
             }
           })
           .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'report_routes' }, async (payload) => {
@@ -778,6 +877,52 @@ const Sdashboard = () => {
               }
             } catch (e) {
               console.error('❌ Station: RT forward handler error:', e);
+            }
+          })
+          .on('postgres_changes', { 
+            event: 'UPDATE', 
+            schema: 'public', 
+            table: 'report_assignments',
+            filter: `assignee_type=eq.station&assignee_id=eq.${stationId}`
+          }, async (payload) => {
+            try {
+              const row = payload?.new;
+              if (!row) return;
+              
+              // If assignment was declined, remove it from the map immediately
+              if (row.status === 'declined' && 
+                  row.assignee_type === 'station' && 
+                  String(row.assignee_id) === String(stationId)) {
+                console.log('🗑️ Assignment declined, removing report from map:', row.report_id);
+                setAssignedReports(prev => prev.filter(r => String(r.id) !== String(row.report_id)));
+                
+                // Stop the alarm when assignment is declined
+                stopAlarmLoop();
+                
+                // Mark the related notification as read to stop global alarm
+                try {
+                  await supabase
+                    .from('notifications')
+                    .update({ is_read: true })
+                    .eq('user_id', stationId)
+                    .eq('user_type', 'station')
+                    .eq('type', 'assignment')
+                    .eq('related_report_id', String(row.report_id))
+                    .eq('is_read', false);
+                } catch (notifError) {
+                  console.error('Error marking notification as read:', notifError);
+                }
+                
+                // Close info window if this report is currently selected
+                setSelectedAssignedReport(prev => {
+                  if (prev && String(prev.id) === String(row.report_id)) {
+                    return null;
+                  }
+                  return prev;
+                });
+              }
+            } catch (e) {
+              console.error('❌ Station: RT assignment update handler error:', e);
             }
           })
           .subscribe((status) => {
@@ -1572,6 +1717,213 @@ const Sdashboard = () => {
           </div>
         )}
       </div>
+
+      {/* Assignment Acceptance Modal */}
+      {showAcceptanceModal && pendingAssignmentData && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 animate-in fade-in duration-200">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full mx-4 p-8 transform transition-all animate-in zoom-in-95 duration-200">
+            <div className="flex items-center justify-center mb-6">
+              <div className="bg-gradient-to-br from-blue-500 to-blue-600 rounded-full p-4 shadow-lg">
+                <svg className="w-10 h-10 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                </svg>
+              </div>
+            </div>
+            <h3 className="text-2xl font-bold text-gray-900 text-center mb-3">Assignment Request</h3>
+            <p className="text-gray-600 text-center mb-8 leading-relaxed">
+              Command Center is assigning you a report <span className="font-semibold text-gray-900">{pendingAssignmentData.reportData?.address || pendingAssignmentData.reportData?.geotag_location || 'at a location'}</span>. 
+              Will you accept this assignment?
+            </p>
+            <div className="flex space-x-4">
+              <button
+                onClick={async () => {
+                  try {
+                    const userData = JSON.parse(sessionStorage.getItem('userData') || localStorage.getItem('userData') || '{}');
+                    const stationId = userData?.id;
+                    if (!stationId) {
+                      alert('Station ID not found. Please refresh and try again.');
+                      return;
+                    }
+
+                    const result = await handleAssignmentResponse(
+                      pendingAssignmentData.reportId,
+                      stationId,
+                      'declined'
+                    );
+
+                    if (result.success) {
+                      // Stop the alarm when declining
+                      stopAlarmLoop();
+                      
+                      // Mark the related notification as read to stop global alarm
+                      try {
+                        await supabase
+                          .from('notifications')
+                          .update({ is_read: true })
+                          .eq('user_id', stationId)
+                          .eq('user_type', 'station')
+                          .eq('type', 'assignment')
+                          .eq('related_report_id', String(pendingAssignmentData.reportId))
+                          .eq('is_read', false);
+                      } catch (notifError) {
+                        console.error('Error marking notification as read:', notifError);
+                      }
+                      
+                      setShowAcceptanceModal(false);
+                      setPendingAssignmentData(null);
+                      // Admin will be notified via real-time listener
+                    } else {
+                      alert(result.error || 'Failed to decline assignment. Please try again.');
+                    }
+                  } catch (error) {
+                    console.error('Error declining assignment:', error);
+                    alert('An error occurred. Please try again.');
+                  }
+                }}
+                className="flex-1 bg-gradient-to-r from-red-500 to-red-600 hover:from-red-600 hover:to-red-700 text-white font-semibold px-6 py-3 rounded-xl transition-colors shadow-md hover:shadow-lg"
+              >
+                No
+              </button>
+              <button
+                onClick={async () => {
+                  try {
+                    const userData = JSON.parse(sessionStorage.getItem('userData') || localStorage.getItem('userData') || '{}');
+                    const stationId = userData?.id;
+                    if (!stationId) {
+                      alert('Station ID not found. Please refresh and try again.');
+                      return;
+                    }
+
+                    const result = await handleAssignmentResponse(
+                      pendingAssignmentData.reportId,
+                      stationId,
+                      'accepted'
+                    );
+
+                    if (result.success) {
+                      setShowAcceptanceModal(false);
+                      setPendingAssignmentData(null);
+                      alert('✅ Assignment accepted successfully!');
+                    } else {
+                      alert(result.error || 'Failed to accept assignment. Please try again.');
+                    }
+                  } catch (error) {
+                    console.error('Error accepting assignment:', error);
+                    alert('An error occurred. Please try again.');
+                  }
+                }}
+                className="flex-1 bg-gradient-to-r from-blue-500 to-blue-600 hover:from-blue-600 hover:to-blue-700 text-white font-semibold px-6 py-3 rounded-xl transition-colors shadow-md hover:shadow-lg"
+              >
+                Yes
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Forwarding Request Modal */}
+      {showForwardingRequestModal && pendingAssignmentData && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 animate-in fade-in duration-200">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full mx-4 p-8 transform transition-all animate-in zoom-in-95 duration-200">
+            <div className="flex items-center justify-center mb-6">
+              <div className="bg-gradient-to-br from-orange-500 to-orange-600 rounded-full p-4 shadow-lg">
+                <svg className="w-10 h-10 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                </svg>
+              </div>
+            </div>
+            <h3 className="text-2xl font-bold text-gray-900 text-center mb-3">Request Forwarding?</h3>
+            <p className="text-gray-600 text-center mb-8 leading-relaxed">
+              You are currently handling <span className="font-semibold text-gray-900">{pendingAssignmentData.busyCount || 0} other incident(s)</span>. 
+              Would you like to request admin for forwarding of this report to another station?
+            </p>
+            <div className="flex space-x-4">
+              <button
+                onClick={() => {
+                  // Auto-accept if they don't want forwarding
+                  (async () => {
+                    try {
+                      const userData = JSON.parse(sessionStorage.getItem('userData') || localStorage.getItem('userData') || '{}');
+                      const stationId = userData?.id;
+                      if (!stationId) return;
+
+                      await handleAssignmentResponse(
+                        pendingAssignmentData.reportId,
+                        stationId,
+                        'accepted'
+                      );
+                    } catch (error) {
+                      console.error('Error accepting assignment:', error);
+                    }
+                  })();
+                  setShowForwardingRequestModal(false);
+                  setPendingAssignmentData(null);
+                }}
+                className="flex-1 bg-gradient-to-r from-gray-200 to-gray-300 hover:from-gray-300 hover:to-gray-400 text-gray-800 font-semibold px-6 py-3 rounded-xl transition-all shadow-lg hover:shadow-xl transform hover:scale-105"
+              >
+                No
+              </button>
+              <button
+                onClick={async () => {
+                  try {
+                    const userData = JSON.parse(sessionStorage.getItem('userData') || localStorage.getItem('userData') || '{}');
+                    const stationId = userData?.id;
+                    if (!stationId) {
+                      alert('Station ID not found. Please refresh and try again.');
+                      return;
+                    }
+
+                    // Request forwarding
+                    const result = await requestForwarding(pendingAssignmentData.reportId, stationId);
+                    
+                    if (result.success) {
+                      // Decline the assignment
+                      const declineResult = await handleAssignmentResponse(
+                        pendingAssignmentData.reportId,
+                        stationId,
+                        'declined'
+                      );
+                      
+                      if (declineResult.success) {
+                        // Stop the alarm when declining (via forwarding request)
+                        stopAlarmLoop();
+                        
+                        // Mark the related notification as read to stop global alarm
+                        try {
+                          await supabase
+                            .from('notifications')
+                            .update({ is_read: true })
+                            .eq('user_id', stationId)
+                            .eq('user_type', 'station')
+                            .eq('type', 'assignment')
+                            .eq('related_report_id', String(pendingAssignmentData.reportId))
+                            .eq('is_read', false);
+                        } catch (notifError) {
+                          console.error('Error marking notification as read:', notifError);
+                        }
+                        
+                        setShowForwardingRequestModal(false);
+                        setPendingAssignmentData(null);
+                        alert('✅ Forwarding request sent to admin. They will reroute the incident to another station.');
+                      } else {
+                        alert(declineResult.error || 'Failed to decline assignment. Please try again.');
+                      }
+                    } else {
+                      alert(result.error || 'Failed to send forwarding request. Please try again.');
+                    }
+                  } catch (error) {
+                    console.error('Error requesting forwarding:', error);
+                    alert('An error occurred. Please try again.');
+                  }
+                }}
+                className="flex-1 bg-gradient-to-r from-orange-500 to-orange-600 hover:from-orange-600 hover:to-orange-700 text-white font-semibold px-6 py-3 rounded-xl transition-all shadow-lg hover:shadow-xl transform hover:scale-105"
+              >
+                Yes
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
     </div>
   );
