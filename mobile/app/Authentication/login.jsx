@@ -128,7 +128,9 @@ const LoginComponent = () => {
         console.log('✅ Authenticated user found in station_users table:', stationData);
 
         const userData = {
+          id: stationData.id, // Add id field
           uid: stationData.id,
+          station_name: stationData.station_name,
           firstName: stationData.station_name,
           lastName: '',
           email: stationData.email,

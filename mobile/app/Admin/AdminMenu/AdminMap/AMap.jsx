@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { 
   View, 
   Text, 
+  TextInput,
   StyleSheet, 
   Alert, 
   TouchableOpacity, 
@@ -421,9 +422,14 @@ export default function AMap({ isSidebarOpen = false }) {
           const latNum = typeof report?.latitude === 'number' ? report.latitude : parseFloat(report?.latitude);
           const lngNum = typeof report?.longitude === 'number' ? report.longitude : parseFloat(report?.longitude);
           
-          if (isNaN(latNum) || isNaN(lngNum)) return null;
+          if (isNaN(latNum) || isNaN(lngNum)) {
+            console.log(`❌ Invalid coords for report ${report.id}: lat=${report.latitude}, lng=${report.longitude}`);
+            return null;
+          }
 
           const color = getMarkerColor(report);
+          
+          console.log(`✅ Rendering marker for report ${report.id} at ${latNum}, ${lngNum} with color ${color}`);
           
           return (
             <Marker
@@ -437,7 +443,7 @@ export default function AMap({ isSidebarOpen = false }) {
               onPress={() => {
                 handleMarkerPress(report);
               }}
-              tracksViewChanges={false}
+              tracksViewChanges={Platform.OS === 'android' ? true : false}
             >
               <View style={[styles.fireMarker, { backgroundColor: color }]}>
                 <Text style={styles.fireMarkerText}>🔥</Text>
