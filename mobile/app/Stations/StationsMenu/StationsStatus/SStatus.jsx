@@ -229,13 +229,25 @@ export default function SStatus({ reportIdToOpen, onReportOpened }) {
         if (userDataStr) {
           const userData = JSON.parse(userDataStr);
           const id = userData?.id || userData?.uid;
-          setStationId(id);
-          setStationName(userData?.station_name || 'Fire Station');
-          console.log('📱 Station Overview: Station ID:', id);
+          if (id) {
+            setStationId(id);
+            setStationName(userData?.station_name || 'Fire Station');
+            console.log('📱 Station Overview: Station ID loaded:', id);
+          } else {
+            console.warn('📱 Station Overview: User data found but no ID available');
+            setLoading(false);
+          }
+        } else {
+          console.warn('📱 Station Overview: No user data found in AsyncStorage');
+          setLoading(false);
         }
       } catch (err) {
         console.error('📱 Station Overview: Error loading station data:', err);
-        Alert.alert('❌ Error', `Error loading station data: ${err.message}`);
+        setLoading(false);
+        // Only show alert if this seems like a persistent issue, not during initial load
+        setTimeout(() => {
+          Alert.alert('❌ Error', `Error loading station data: ${err.message}`);
+        }, 1000);
       }
     };
     loadStationData();
@@ -345,7 +357,8 @@ export default function SStatus({ reportIdToOpen, onReportOpened }) {
   // Listen for alarm level change notifications and update reports
   useEffect(() => {
     if (!stationId) {
-      Alert.alert('⚠️ No Station ID', 'Station ID not found. Cannot set up real-time subscription.');
+      // Station ID is still loading from AsyncStorage, wait for it
+      console.log('📱 Station Overview: Waiting for station ID to load...');
       return;
     }
 

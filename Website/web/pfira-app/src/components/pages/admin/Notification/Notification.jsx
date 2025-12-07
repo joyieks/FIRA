@@ -1,8 +1,10 @@
 import React, { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { FiBell, FiX, FiUser, FiFileText, FiCheck, FiClock, FiTrash2 } from 'react-icons/fi';
 import { useNotifications } from '../../../../contexts/NotificationContext';
 
 const Notification = () => {
+  const navigate = useNavigate();
   const [filter, setFilter] = useState('all'); // all, unread, read
   const {
     notifications,
@@ -24,6 +26,26 @@ const Notification = () => {
   } = useNotifications();
 
   // Do NOT stop alarm just by opening the page; only stop on mark-as-read
+
+  // Navigate to map with report details
+  const handleNotificationClick = (notification) => {
+    if (notification.related_report_id) {
+      // Store the report ID in localStorage for Adashboard to pick up
+      localStorage.setItem('selectedReportId', notification.related_report_id);
+      // Add timestamp to force reload detection
+      localStorage.setItem('lastNotificationClick', JSON.stringify({
+        reportId: notification.related_report_id,
+        timestamp: Date.now()
+      }));
+      // Navigate to the map dashboard
+      navigate('/admin-dashboard');
+      // Mark as read when clicked
+      if (!notification.is_read) {
+        markAsRead(notification.id);
+        stopAlert();
+      }
+    }
+  };
 
 
   const getNotificationIcon = (type) => {
@@ -169,12 +191,15 @@ const Notification = () => {
             filteredNotifications.map((notification) => (
               <div
                 key={notification.id}
+                onClick={() => handleNotificationClick(notification)}
                 className={`bg-white rounded-lg shadow-sm border-l-4 ${
                   notification.priority === 'urgent' ? 'border-l-red-600' : 
                   notification.priority === 'high' ? 'border-l-orange-600' : 
                   'border-l-blue-600'
                 } p-4 ${
                   !notification.is_read ? 'ring-2 ring-red-100' : ''
+                } ${
+                  notification.related_report_id ? 'cursor-pointer hover:bg-gray-50 transition-colors' : ''
                 }`}
               >
                 <div className="flex items-start justify-between">
@@ -219,7 +244,8 @@ const Notification = () => {
                   <div className="flex items-center space-x-2 ml-4">
                     {!notification.is_read && (
                       <button
-                        onClick={() => {
+                        onClick={(e) => {
+                          e.stopPropagation();
                           markAsRead(notification.id);
                           stopAlert();
                         }}
@@ -230,7 +256,10 @@ const Notification = () => {
                       </button>
                     )}
                     <button
-                      onClick={() => deleteNotification(notification.id)}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        deleteNotification(notification.id);
+                      }}
                       className="p-1 text-gray-400 hover:text-red-600"
                       title="Delete notification"
                     >

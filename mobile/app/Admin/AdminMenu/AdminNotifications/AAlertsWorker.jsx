@@ -1,7 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Vibration, AppState } from 'react-native';
+import { Vibration, AppState, Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Audio } from 'expo-av';
+import * as Notifications from 'expo-notifications';
 import { supabase } from '../../../config/supabase';
 
 // Headless background worker for admin alerts (no UI)
@@ -17,6 +18,7 @@ export default function AAlertsWorker() {
   const appState = useRef(AppState.currentState);
   const soundWatchdogRef = useRef(null);
   const previousUnreadCountRef = useRef(0); // Track previous unread count for smart alarm control
+  const vibrationIntervalRef = useRef(null); // Track vibration interval for status changes
 
   const SIREN_MODULE = require('../../../../assets/sounds/fire_alarm_sound.mp3');
 
@@ -242,8 +244,46 @@ export default function AAlertsWorker() {
       
       Vibration.cancel();
       console.log('🔇 AAlertsWorker: Vibration cancelled');
+      
+      // Stop continuous vibration for status changes
+      if (vibrationIntervalRef.current) {
+        clearInterval(vibrationIntervalRef.current);
+        vibrationIntervalRef.current = null;
+        console.log('🔇 AAlertsWorker: Continuous vibration stopped');
+      }
     } catch (error) {
       console.error('🔇 AAlertsWorker: Error stopping alert:', error);
+    }
+  };
+
+  // Start continuous vibration for status changes
+  const startContinuousVibration = () => {
+    console.log('📳 AAlertsWorker: Starting continuous vibration for status change...');
+    
+    // Stop any existing vibration first
+    if (vibrationIntervalRef.current) {
+      clearInterval(vibrationIntervalRef.current);
+    }
+    Vibration.cancel();
+    
+    // Vibrate immediately
+    Vibration.vibrate(1000); // 1 second vibration
+    
+    // Then repeat every 2 seconds
+    vibrationIntervalRef.current = setInterval(() => {
+      Vibration.vibrate(1000); // 1 second vibration
+    }, 2000); // Every 2 seconds
+    
+    console.log('📳 AAlertsWorker: Continuous vibration started');
+  };
+
+  // Stop continuous vibration
+  const stopContinuousVibration = () => {
+    if (vibrationIntervalRef.current) {
+      clearInterval(vibrationIntervalRef.current);
+      vibrationIntervalRef.current = null;
+      Vibration.cancel();
+      console.log('📳 AAlertsWorker: Continuous vibration stopped');
     }
   };
 
@@ -322,25 +362,38 @@ export default function AAlertsWorker() {
 
       const list = data || [];
       
-      // Count unread fire alerts
-      const unreadFireCount = list.filter(n => n.type === 'fire_alert' && !n.is_read).length;
+      // Count unread fire alerts (ONLY from new fire reports, NOT status changes)
+      const unreadFireCount = list.filter(n => 
+        n.type === 'fire_alert' && 
+        !n.is_read && 
+        (!n.title || !n.title.includes('Status Changed')) // Exclude status change notifications
+      ).length;
+      
       const previousCount = previousUnreadCountRef.current;
       previousUnreadCountRef.current = unreadFireCount;
       
-      console.log(`� AAlertsWorker: Unread fire alerts changed from ${previousCount} to ${unreadFireCount}`);
+      console.log(`🔔 AAlertsWorker: Unread fire alerts changed from ${previousCount} to ${unreadFireCount}`);
       
-      // Check for NEW fire alerts (not yet processed)
-      const newFireAlerts = list.filter(n => n.type === 'fire_alert' && !n.is_read && !processedNotificationIdsRef.current.has(n.id));
+      // Check for NEW fire alerts (not yet processed) - EXCLUDE status changes
+      const newFireAlerts = list.filter(n => 
+        n.type === 'fire_alert' && 
+        !n.is_read && 
+        !processedNotificationIdsRef.current.has(n.id) &&
+        (!n.title || !n.title.includes('Status Changed')) // Exclude status change notifications
+      );
       
       if (newFireAlerts.length > 0 && !isAlertingRef.current) {
-        console.log('🔊 AAlertsWorker: New fire alerts found, playing alarm...');
-        newFireAlerts.forEach(n => processedNotificationIdsRef.current.add(n.id));
+        console.log('🔊 AAlertsWorker: New fire alerts found (not status changes), playing alarm...');
+        newFireAlerts.forEach(n => {
+          console.log(`  - Processing notification: ${n.title}`);
+          processedNotificationIdsRef.current.add(n.id);
+        });
         await playAlert();
         isAlertingRef.current = true;
         setTimeout(() => { isAlertingRef.current = false; }, 2000);
       } else if (unreadFireCount > 0 && !shouldBePlayingRef.current && !isAlertingRef.current) {
-        // Ensure alarm is playing when unread exists on first load/login
-        console.log('🔊 AAlertsWorker: Unread fire alerts exist, ensuring alarm is playing...');
+        // Ensure alarm is playing when unread exists on first load/login (ONLY for non-status-change alerts)
+        console.log('🔊 AAlertsWorker: Unread fire alerts exist (not status changes), ensuring alarm is playing...');
         await playAlert();
       } else if (unreadFireCount === 0 && previousCount > 0) {
         // ONLY stop alarm when count transitions from >0 to 0 (all fire alerts marked as read)
@@ -366,11 +419,51 @@ export default function AAlertsWorker() {
 
     const channel = supabase
       .channel(`alerts-worker:admin:${adminId}`)
-      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'notifications' }, (payload) => {
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'notifications' }, async (payload) => {
         if (payload.new?.user_id === adminId && payload.new?.user_type === 'admin') {
-          if (payload.new?.type === 'fire_alert') {
-            console.log('🔥 Real-time: New fire alert inserted');
+          // Only play alarm for NEW fire reports, NOT for status changes
+          if (payload.new?.type === 'fire_alert' && (!payload.new?.title || !payload.new?.title.includes('Status Changed'))) {
+            console.log('🔥 Real-time: New fire alert inserted (not a status change), playing alarm');
             playAlert();
+          } else if (payload.new?.title && payload.new?.title.includes('Status Changed')) {
+            console.log('📋 Real-time: Status change notification - starting continuous vibration and sending push notification...');
+            
+            // Start continuous vibration that won't stop until notification is clicked
+            startContinuousVibration();
+            
+            // Send push notification immediately for status changes
+            try {
+              const { status } = await Notifications.getPermissionsAsync();
+              if (status === 'granted') {
+                const notificationContent = {
+                  title: payload.new.title || '📋 Status Changed',
+                  body: payload.new.message || 'Fire report status updated',
+                  sound: true,
+                  priority: Notifications.AndroidNotificationPriority.MAX,
+                  data: {
+                    type: payload.new.type,
+                    reportId: payload.new.related_report_id,
+                    notificationId: payload.new.id,
+                  },
+                  badge: 1,
+                  vibrate: [0, 250, 250, 250],
+                };
+
+                // Add Android channel
+                if (Platform.OS === 'android') {
+                  notificationContent.channelId = 'fire-alerts';
+                }
+
+                await Notifications.scheduleNotificationAsync({
+                  content: notificationContent,
+                  trigger: null, // Immediate
+                });
+                
+                console.log('✅ Push notification sent for status change');
+              }
+            } catch (error) {
+              console.error('❌ Error sending push notification for status change:', error);
+            }
           }
         }
       })
@@ -378,6 +471,13 @@ export default function AAlertsWorker() {
         if (payload.new?.user_id === adminId && payload.new?.user_type === 'admin') {
           if (payload.new?.is_read && payload.new?.type === 'fire_alert') {
             console.log('✅ Real-time: Fire alert marked as read, checking all notifications...');
+            
+            // If it's a status change notification being marked as read, stop continuous vibration
+            if (payload.new?.title && payload.new?.title.includes('Status Changed')) {
+              console.log('📳 Stopping continuous vibration - status change notification marked as read');
+              stopContinuousVibration();
+            }
+            
             // Check all notifications to see if ANY fire alerts remain unread
             loadNotifications();
           }

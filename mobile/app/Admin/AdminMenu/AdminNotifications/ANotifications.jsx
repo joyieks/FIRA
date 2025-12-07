@@ -1,8 +1,18 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { View, Text, ScrollView, TouchableOpacity, RefreshControl, AppState } from 'react-native';
+import { View, Text, ScrollView, TouchableOpacity, RefreshControl, AppState, Platform } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as Notifications from 'expo-notifications';
 import { supabase } from '../../../config/supabase';
+
+// Configure how notifications are handled when app is in foreground
+Notifications.setNotificationHandler({
+  handleNotification: async () => ({
+    shouldShowAlert: true,
+    shouldPlaySound: true,
+    shouldSetBadge: true,
+  }),
+});
 
 export default function ANotifications({ onUnreadCountChange }) {
   const [notifications, setNotifications] = useState([]);
@@ -12,6 +22,47 @@ export default function ANotifications({ onUnreadCountChange }) {
 
   // NOTE: Sound/alarm management is now handled by AAlertsWorker component
   // which is mounted at the app level for consistent playback across all screens
+
+  // Setup notification permissions and Android channel
+  useEffect(() => {
+    const setupNotifications = async () => {
+      try {
+        // Request permissions
+        const { status: existingStatus } = await Notifications.getPermissionsAsync();
+        let finalStatus = existingStatus;
+        
+        if (existingStatus !== 'granted') {
+          const { status } = await Notifications.requestPermissionsAsync();
+          finalStatus = status;
+        }
+        
+        if (finalStatus !== 'granted') {
+          console.warn('⚠️ Notification permission not granted');
+          return;
+        }
+
+        console.log('✅ Notification permissions granted');
+
+        // Setup Android notification channel
+        if (Platform.OS === 'android') {
+          await Notifications.setNotificationChannelAsync('fire-alerts', {
+            name: 'Fire Alerts',
+            importance: Notifications.AndroidImportance.MAX,
+            vibrationPattern: [0, 250, 250, 250],
+            lightColor: '#FF0000',
+            sound: 'default',
+            enableVibrate: true,
+            showBadge: true,
+          });
+          console.log('✅ Android notification channel created');
+        }
+      } catch (error) {
+        console.error('❌ Error setting up notifications:', error);
+      }
+    };
+
+    setupNotifications();
+  }, []);
 
   // Get current admin user ID from AsyncStorage
   useEffect(() => {
@@ -89,11 +140,58 @@ export default function ANotifications({ onUnreadCountChange }) {
         event: 'INSERT',
         schema: 'public',
         table: 'notifications'
-      }, (payload) => {
+      }, async (payload) => {
         console.log('📱 Real-time notification received:', payload.new);
+        console.log('📱 Notification type:', payload.new?.type);
+        console.log('📱 Notification title:', payload.new?.title);
+        console.log('📱 Notification message:', payload.new?.message);
+        console.log('📱 User ID match:', payload.new?.user_id, '===', currentAdminId);
+        console.log('📱 User type:', payload.new?.user_type);
         
         if (payload.new?.user_id === currentAdminId && payload.new?.user_type === 'admin') {
-          console.log('📱 This notification is for current admin');
+          console.log('✅ This notification is for current admin - sending push notification');
+          
+          // Send local push notification for ALL notification types
+          try {
+            const { status } = await Notifications.getPermissionsAsync();
+            console.log('📱 Notification permission status:', status);
+            
+            if (status === 'granted') {
+              const notificationContent = {
+                title: payload.new.title || '🚨 Notification',
+                body: payload.new.message || 'New notification',
+                sound: true,
+                priority: Notifications.AndroidNotificationPriority.MAX,
+                data: {
+                  type: payload.new.type,
+                  reportId: payload.new.related_report_id,
+                  notificationId: payload.new.id,
+                },
+                badge: 1,
+                vibrate: [0, 250, 250, 250],
+              };
+
+              // Add Android channel
+              if (Platform.OS === 'android') {
+                notificationContent.channelId = 'fire-alerts';
+              }
+
+              console.log('📱 Scheduling push notification with content:', JSON.stringify(notificationContent, null, 2));
+
+              const notificationId = await Notifications.scheduleNotificationAsync({
+                content: notificationContent,
+                trigger: null, // Immediate
+              });
+              
+              console.log('✅ Local push notification scheduled with ID:', notificationId);
+              console.log('✅ Push notification sent for type:', payload.new.type);
+            } else {
+              console.warn('⚠️ Notification permission not granted, cannot send push notification. Status:', status);
+            }
+          } catch (error) {
+            console.error('❌ Error sending push notification:', error);
+            console.error('❌ Error details:', JSON.stringify(error, null, 2));
+          }
           
           setNotifications(prev => {
             const exists = prev.some(n => n.id === payload.new.id);
