@@ -879,24 +879,29 @@ export default function SStatus({ reportIdToOpen, onReportOpened }) {
 
   // Get alarm level color
   const getAlarmLevelColor = (level) => {
-    const levelStr = String(level || '');
-    if (levelStr.includes('General Alarm')) {
+    if (!level) return { bg: '#e5e7eb', text: '#374151', border: '#d1d5db' };
+    const levelStr = String(level).toLowerCase();
+    
+    if (levelStr.includes('general')) {
+      return { bg: '#450a0a', text: '#ffffff', border: '#7f1d1d' };
+    }
+    if (levelStr.includes('task force')) {
       return { bg: '#dc2626', text: '#ffffff', border: '#991b1b' };
     }
-    if (levelStr.includes('5th') || levelStr.includes('TASK FORCE')) {
-      return { bg: '#a855f7', text: '#ffffff', border: '#7e22ce' };
-    }
-    if (levelStr.includes('4th')) {
-      return { bg: '#8b5cf6', text: '#ffffff', border: '#6d28d9' };
-    }
-    if (levelStr.includes('3rd')) {
+    if (levelStr.includes('5th') || levelStr.includes('fifth')) {
       return { bg: '#ef4444', text: '#ffffff', border: '#dc2626' };
     }
-    if (levelStr.includes('2nd')) {
-      return { bg: '#f97316', text: '#ffffff', border: '#ea580c' };
+    if (levelStr.includes('4th') || levelStr.includes('fourth')) {
+      return { bg: '#f87171', text: '#ffffff', border: '#ef4444' };
     }
-    if (levelStr.includes('1st')) {
-      return { bg: '#dbeafe', text: '#1e40af', border: '#93c5fd' };
+    if (levelStr.includes('3rd') || levelStr.includes('third')) {
+      return { bg: '#fecaca', text: '#991b1b', border: '#fca5a5' };
+    }
+    if (levelStr.includes('2nd') || levelStr.includes('second')) {
+      return { bg: '#fed7aa', text: '#9a3412', border: '#fdba74' };
+    }
+    if (levelStr.includes('1st') || levelStr.includes('first')) {
+      return { bg: '#fef3c7', text: '#92400e', border: '#fde68a' };
     }
     return { bg: '#f3f4f6', text: '#1f2937', border: '#d1d5db' };
   };

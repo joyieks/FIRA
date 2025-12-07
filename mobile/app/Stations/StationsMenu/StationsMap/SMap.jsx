@@ -73,11 +73,11 @@ export default function SMap({ reportIdToOpen, onReportOpened }) {
   const getAlarmLevelColor = (alarmLevel) => {
     if (!alarmLevel) return '#6b7280';
     const level = String(alarmLevel).toLowerCase();
-    if (level.includes('first alarm')) return '#fef3c7';
-    if (level.includes('second alarm')) return '#fed7aa';
-    if (level.includes('third alarm')) return '#fecaca';
-    if (level.includes('fourth alarm')) return '#f87171';
-    if (level.includes('fifth alarm')) return '#ef4444';
+    if (level.includes('1st') || level.includes('first')) return '#fef3c7';
+    if (level.includes('2nd') || level.includes('second')) return '#fed7aa';
+    if (level.includes('3rd') || level.includes('third')) return '#fecaca';
+    if (level.includes('4th') || level.includes('fourth')) return '#f87171';
+    if (level.includes('5th') || level.includes('fifth')) return '#ef4444';
     if (level.includes('task force alpha')) return '#dc2626';
     if (level.includes('task force bravo')) return '#b91c1c';
     if (level.includes('task force charlie')) return '#991b1b';
@@ -793,7 +793,7 @@ export default function SMap({ reportIdToOpen, onReportOpened }) {
                     <View style={{ backgroundColor: '#f9fafb', borderRadius: 16, padding: 16 }}>
                       <View style={{ flexDirection: 'row', alignItems: 'flex-start', marginBottom: 12 }}>
                         <MaterialIcons name="person" size={18} color="#6b7280" />
-                        <View style={{ flex: 1, marginLeft: 12 }}>
+                         <View style={{ flex: 1, marginLeft: 12 }}>
                           <Text style={{ color: '#6b7280', fontSize: 11, marginBottom: 4 }}>Reporter</Text>
                           <Text style={{ color: '#1f2937', fontWeight: '600', fontSize: 16 }}>
                             {toStr(selectedReport?.reporter_name || selectedReport?.reporter || selectedReport?.reported_by, 'Unknown Reporter')}
