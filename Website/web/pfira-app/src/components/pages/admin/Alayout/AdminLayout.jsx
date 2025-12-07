@@ -7,6 +7,7 @@ import { LuMessageCircleMore } from "react-icons/lu";
 import { FaUserFriends } from "react-icons/fa";
 import { Link, useLocation, useNavigate, Outlet } from 'react-router-dom';
 import { useNotifications } from '../../../../contexts/NotificationContext';
+import NotificationToast from '../../../common/NotificationToast';
 
 const AdminLayout = ({ children }) => {
   const [sidebarOpen, setSidebarOpen] = useState(true);
@@ -284,6 +285,9 @@ const AdminLayout = ({ children }) => {
         <main className="flex-1 overflow-y-auto p-6 bg-gray-50">
           <Outlet />
         </main>
+        
+        {/* Toast Notifications */}
+        <NotificationToast />
       </div>
     </div>
   );

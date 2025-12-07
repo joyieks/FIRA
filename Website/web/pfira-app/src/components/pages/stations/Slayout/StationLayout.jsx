@@ -5,6 +5,7 @@ import { FaMapLocationDot } from "react-icons/fa6";
 import { IoIosNotifications } from "react-icons/io";
 import { Link, useLocation, useNavigate, Outlet } from 'react-router-dom';
 import { supabase } from '../../../../config/supabase';
+import StationNotificationToast from '../../../common/StationNotificationToast';
 
 const StationLayout = ({ children }) => {
   const [sidebarOpen, setSidebarOpen] = useState(true);
@@ -530,6 +531,9 @@ const StationLayout = ({ children }) => {
         <main className="flex-1 overflow-y-auto p-6 bg-gray-50">
           <Outlet context={{ stationData }} />
         </main>
+        
+        {/* Station Toast Notifications */}
+        <StationNotificationToast />
       </div>
     </div>
   );

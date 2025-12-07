@@ -74,6 +74,28 @@ export const NotificationProvider = ({ children }) => {
     loadAudio();
   }, []);
 
+  // Check if we need to stop alarm on page load (from notification click)
+  useEffect(() => {
+    const shouldStopAlarm = localStorage.getItem('stopAlarmOnLoad');
+    if (shouldStopAlarm === 'true') {
+      console.log('🔇 Global: Stopping alarm on page load as requested');
+      // Remove the flag
+      localStorage.removeItem('stopAlarmOnLoad');
+      // Stop any playing audio immediately
+      if (audioRef.current) {
+        audioRef.current.pause();
+        audioRef.current.currentTime = 0;
+      }
+      // Also try to stop fallback audio
+      try {
+        if (typeof window !== 'undefined' && window.__adminFallbackAudio) {
+          window.__adminFallbackAudio.pause();
+          window.__adminFallbackAudio.currentTime = 0;
+        }
+      } catch (_) {}
+    }
+  }, []);
+
   // Fallback: resolve admin ID from Supabase auth if not found in storage
   useEffect(() => {
     (async () => {

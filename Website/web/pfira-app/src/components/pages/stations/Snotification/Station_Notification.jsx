@@ -70,6 +70,13 @@ const Station_Notification = () => {
         
         // Store the report ID in localStorage for the map to pick up
         localStorage.setItem('selectedReportId', notification.related_report_id);
+        // Add timestamp to force reload detection
+        localStorage.setItem('lastNotificationClick', JSON.stringify({
+          reportId: notification.related_report_id,
+          timestamp: Date.now()
+        }));
+        // Tell the page to stop alarm on load
+        localStorage.setItem('stopAlarmOnLoad', 'true');
         
         // Navigate to the station map dashboard
         navigate('/station-dashboard');
