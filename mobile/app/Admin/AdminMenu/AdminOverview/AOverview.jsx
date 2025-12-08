@@ -1621,7 +1621,7 @@ export default function AOverview() {
                             return; // Don't show success alert, modal will handle it
                           }
                           
-                          // Station is not busy - proceed normally with accepted status
+                          // Station is not busy - auto-accept assignment
                           // First, delete any existing assignment for this report
                           await supabase
                             .from('report_assignments')
@@ -1653,6 +1653,34 @@ export default function AOverview() {
                             throw error;
                           }
                           
+                          // Get station name for success message
+                          const { data: stationData } = await supabase
+                            .from('station_users')
+                            .select('station_name')
+                            .eq('id', assignStationId)
+                            .single();
+
+                          const stationName = stationData?.station_name || 'Station';
+                          
+                          // Create notification for the assigned station (even though auto-accepted, still notify)
+                          const locationInfo = selectedReport.address || selectedReport.geotag_location || 'Location unavailable';
+                          const reporterName = selectedReport.reporter_name || selectedReport.reporter || 'Unknown Reporter';
+                          const title = `🚨 New Fire Report Assignment`;
+                          const message = `You have been assigned a new fire report.\n\nLocation: ${locationInfo}\nReporter: ${reporterName}`;
+                          
+                          await supabase
+                            .from('notifications')
+                            .insert({
+                              user_id: assignStationId,
+                              user_type: 'station',
+                              type: 'assignment',
+                              related_report_id: String(selectedReport.id),
+                              title: title,
+                              message: message,
+                              priority: 'urgent',
+                              is_read: false
+                            });
+                          
                           // Refresh the current assignment
                           const { data: newAssignment } = await supabase
                             .from('report_assignments')
@@ -1678,7 +1706,7 @@ export default function AOverview() {
                             });
                           }
                           
-                          Alert.alert(currentStationAssignment ? 'Forwarded' : 'Assigned', `Report ${currentStationAssignment ? 'forwarded' : 'assigned'} to station successfully.`);
+                          Alert.alert('✅ Assignment Successful', `Assignment successfully assigned to ${stationName}.`);
                           // Mark this report as assigned locally for the badge
                           setAssignedStationReportIds(prev => {
                             const next = new Set(prev);

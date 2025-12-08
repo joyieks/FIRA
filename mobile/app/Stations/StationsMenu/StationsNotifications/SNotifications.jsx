@@ -222,9 +222,15 @@ export default function SNotifications({ onUnreadCountChange, onOpenReport }) {
               // Check if station is busy
               const busyCheck = await checkStationIsBusy(currentStationId);
               
-              if (row.assignment_source === 'manual') {
-                // Admin assigned - show acceptance modal
-                console.log('✅ SNotifications: Showing acceptance modal for manual assignment');
+              if (!busyCheck.isBusy) {
+                // Station is free - auto-accept regardless of assignment source
+                console.log('✅ SNotifications: Station is free - auto-accepting assignment');
+                await handleAssignmentResponse(row.report_id, currentStationId, 'accepted');
+                // Remove from shown set since we auto-accepted
+                shownAssignmentsRef.current.delete(assignmentKey);
+              } else if (row.assignment_source === 'manual') {
+                // Admin assigned and station is busy - show acceptance modal
+                console.log('✅ SNotifications: Showing acceptance modal for manual assignment (station busy)');
                 setPendingAssignmentData({
                   reportId: row.report_id,
                   assignmentSource: 'manual',
@@ -232,7 +238,7 @@ export default function SNotifications({ onUnreadCountChange, onOpenReport }) {
                   assignmentId: row.id
                 });
                 setShowAcceptanceModal(true);
-              } else if (row.assignment_source === 'automatic' && busyCheck.isBusy) {
+              } else if (row.assignment_source === 'automatic') {
                 // Auto-assigned and station is busy - show forwarding request modal
                 console.log('✅ SNotifications: Showing forwarding request modal for auto-assignment (station busy)');
                 setPendingAssignmentData({
@@ -243,12 +249,6 @@ export default function SNotifications({ onUnreadCountChange, onOpenReport }) {
                   busyCount: busyCheck.busyCount
                 });
                 setShowForwardingRequestModal(true);
-              } else {
-                // Auto-assigned and station not busy - auto-accept
-                console.log('✅ SNotifications: Auto-accepting assignment (station not busy)');
-                await handleAssignmentResponse(row.report_id, currentStationId, 'accepted');
-                // Remove from shown set since we auto-accepted
-                shownAssignmentsRef.current.delete(assignmentKey);
               }
             }
           }
@@ -299,9 +299,15 @@ export default function SNotifications({ onUnreadCountChange, onOpenReport }) {
               // Mark this assignment as shown
               shownAssignmentsRef.current.add(assignmentKey);
               
-              if (row.assignment_source === 'manual') {
-                // Admin assigned (including rerouted) - show acceptance modal
-                console.log('✅ SNotifications: Showing acceptance modal for rerouted assignment');
+              if (!busyCheck.isBusy) {
+                // Station is free - auto-accept regardless of assignment source
+                console.log('✅ SNotifications: Station is free - auto-accepting rerouted assignment');
+                await handleAssignmentResponse(row.report_id, currentStationId, 'accepted');
+                // Remove from shown set since we auto-accepted
+                shownAssignmentsRef.current.delete(assignmentKey);
+              } else if (row.assignment_source === 'manual') {
+                // Admin assigned (including rerouted) and station is busy - show acceptance modal
+                console.log('✅ SNotifications: Showing acceptance modal for rerouted assignment (station busy)');
                 setPendingAssignmentData({
                   reportId: row.report_id,
                   assignmentSource: 'manual',
@@ -309,7 +315,7 @@ export default function SNotifications({ onUnreadCountChange, onOpenReport }) {
                   assignmentId: row.id
                 });
                 setShowAcceptanceModal(true);
-              } else if (row.assignment_source === 'automatic' && busyCheck.isBusy) {
+              } else if (row.assignment_source === 'automatic') {
                 setPendingAssignmentData({
                   reportId: row.report_id,
                   assignmentSource: 'automatic',
@@ -318,10 +324,6 @@ export default function SNotifications({ onUnreadCountChange, onOpenReport }) {
                   busyCount: busyCheck.busyCount
                 });
                 setShowForwardingRequestModal(true);
-              } else {
-                await handleAssignmentResponse(row.report_id, currentStationId, 'accepted');
-                // Remove from shown set since we auto-accepted
-                shownAssignmentsRef.current.delete(assignmentKey);
               }
             }
             
@@ -401,7 +403,14 @@ export default function SNotifications({ onUnreadCountChange, onOpenReport }) {
           // Check if station is busy
           const busyCheck = await checkStationIsBusy(currentStationId);
           
-          if (assignment.assignment_source === 'manual') {
+          if (!busyCheck.isBusy) {
+            // Station is free - auto-accept regardless of assignment source
+            console.log('✅ SNotifications: Station is free - auto-accepting existing pending assignment');
+            await handleAssignmentResponse(assignment.report_id, currentStationId, 'accepted');
+            // Remove from shown set since we auto-accepted
+            const assignmentKey = `${assignment.report_id}-${assignment.id}`;
+            shownAssignmentsRef.current.delete(assignmentKey);
+          } else if (assignment.assignment_source === 'manual') {
             setPendingAssignmentData({
               reportId: assignment.report_id,
               assignmentSource: 'manual',
@@ -409,7 +418,7 @@ export default function SNotifications({ onUnreadCountChange, onOpenReport }) {
               assignmentId: assignment.id
             });
             setShowAcceptanceModal(true);
-          } else if (assignment.assignment_source === 'automatic' && busyCheck.isBusy) {
+          } else if (assignment.assignment_source === 'automatic') {
             setPendingAssignmentData({
               reportId: assignment.report_id,
               assignmentSource: 'automatic',
@@ -418,8 +427,6 @@ export default function SNotifications({ onUnreadCountChange, onOpenReport }) {
               busyCount: busyCheck.busyCount
             });
             setShowForwardingRequestModal(true);
-          } else {
-            await handleAssignmentResponse(assignment.report_id, currentStationId, 'accepted');
           }
         }
       } catch (error) {

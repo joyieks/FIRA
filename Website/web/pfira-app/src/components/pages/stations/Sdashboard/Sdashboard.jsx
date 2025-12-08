@@ -771,8 +771,11 @@ const Sdashboard = () => {
                   // Check if station is busy
                   const busyCheck = await checkStationIsBusy(stationId);
                   
-                  if (row.assignment_source === 'manual') {
-                    // Admin assigned - show acceptance modal
+                  if (!busyCheck.isBusy) {
+                    // Station is free - auto-accept regardless of assignment source
+                    await handleAssignmentResponse(row.report_id, stationId, 'accepted');
+                  } else if (row.assignment_source === 'manual') {
+                    // Admin assigned and station is busy - show acceptance modal
                     setPendingAssignmentData({
                       reportId: row.report_id,
                       assignmentSource: 'manual',
@@ -780,7 +783,7 @@ const Sdashboard = () => {
                       assignmentId: row.id
                     });
                     setShowAcceptanceModal(true);
-                  } else if (row.assignment_source === 'automatic' && busyCheck.isBusy) {
+                  } else if (row.assignment_source === 'automatic') {
                     // Auto-assigned and station is busy - show forwarding request modal
                     setPendingAssignmentData({
                       reportId: row.report_id,
@@ -790,9 +793,6 @@ const Sdashboard = () => {
                       busyCount: busyCheck.busyCount
                     });
                     setShowForwardingRequestModal(true);
-                  } else {
-                    // Auto-assigned and station not busy - auto-accept
-                    await handleAssignmentResponse(row.report_id, stationId, 'accepted');
                   }
                 } else {
                   // Already accepted - just show notification
@@ -837,8 +837,11 @@ const Sdashboard = () => {
                   // Check if station is busy
                   const busyCheck = await checkStationIsBusy(stationId);
                   
-                  if (row.assignment_source === 'manual') {
-                    // Admin assigned (including rerouted) - show acceptance modal
+                  if (!busyCheck.isBusy) {
+                    // Station is free - auto-accept regardless of assignment source
+                    await handleAssignmentResponse(row.report_id, stationId, 'accepted');
+                  } else if (row.assignment_source === 'manual') {
+                    // Admin assigned (including rerouted) and station is busy - show acceptance modal
                     setPendingAssignmentData({
                       reportId: row.report_id,
                       assignmentSource: 'manual',
@@ -846,7 +849,7 @@ const Sdashboard = () => {
                       assignmentId: row.id
                     });
                     setShowAcceptanceModal(true);
-                  } else if (row.assignment_source === 'automatic' && busyCheck.isBusy) {
+                  } else if (row.assignment_source === 'automatic') {
                     // Auto-assigned and station is busy - show forwarding request modal
                     setPendingAssignmentData({
                       reportId: row.report_id,
@@ -856,9 +859,6 @@ const Sdashboard = () => {
                       busyCount: busyCheck.busyCount
                     });
                     setShowForwardingRequestModal(true);
-                  } else {
-                    // Auto-assigned and station not busy - auto-accept
-                    await handleAssignmentResponse(row.report_id, stationId, 'accepted');
                   }
                 }
               }

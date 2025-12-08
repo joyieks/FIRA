@@ -1149,14 +1149,73 @@ export default function AMap({ isSidebarOpen = false }) {
         }
       }
 
-      // Station is not busy or assigning to responder - proceed normally
+      // Station is not busy - auto-accept assignment
+      if (assigneeType === 'station') {
+        // First, delete any existing assignment for this report to avoid conflicts
+        await supabase
+          .from('report_assignments')
+          .delete()
+          .eq('report_id', String(selectedReport.id))
+          .eq('assignee_type', 'station');
+        
+        const payload = {
+          report_id: String(selectedReport.id),
+          assignee_type: assigneeType,
+          assignee_id: assigneeId,
+          assigned_at: new Date().toISOString(),
+          status: 'accepted',
+          assignment_source: 'manual',
+          note: assignmentNote && assignmentNote.trim() ? assignmentNote.trim() : null
+        };
+        
+        // Use insert instead of upsert to ensure INSERT listener is triggered
+        const { error } = await supabase
+          .from('report_assignments')
+          .insert(payload);
+        
+        if (error) throw error;
+
+        // Get station name for success message
+        const { data: stationData } = await supabase
+          .from('station_users')
+          .select('station_name')
+          .eq('id', assigneeId)
+          .single();
+
+        const stationName = stationData?.station_name || 'Station';
+        
+        // Create notification for the assigned station (even though auto-accepted, still notify)
+        const locationInfo = selectedReport.address || selectedReport.geotag_location || 'Location unavailable';
+        const reporterName = selectedReport.reporter_name || selectedReport.reporter || 'Unknown Reporter';
+        const title = `🚨 New Fire Report Assignment`;
+        const message = `You have been assigned a new fire report.\n\nLocation: ${locationInfo}\nReporter: ${reporterName}`;
+        
+        await supabase
+          .from('notifications')
+          .insert({
+            user_id: assigneeId,
+            user_type: 'station',
+            type: 'assignment',
+            related_report_id: String(selectedReport.id),
+            title: title,
+            message: message,
+            priority: 'urgent',
+            is_read: false
+          });
+
+        setAssignmentNote('');
+        Alert.alert('✅ Assignment Successful', `Assignment successfully assigned to ${stationName}.`);
+        return;
+      }
+
+      // For responders, proceed normally
       const payload = {
         report_id: String(selectedReport.id),
         assignee_type: assigneeType,
         assignee_id: assigneeId,
         assigned_at: new Date().toISOString(),
         status: 'accepted',
-        assignment_source: assigneeType === 'station' ? 'manual' : 'manual'
+        assignment_source: 'manual'
       };
       
       console.log('[Assign-Mobile] assignmentNote=', assignmentNote);
@@ -1166,8 +1225,6 @@ export default function AMap({ isSidebarOpen = false }) {
       if (error) throw error;
 
       setAssignmentNote('');
-      // Show success modal instead of Alert
-      // Note: For non-busy stations, assignment is auto-accepted, so no waiting modal needed
     } catch (e) {
       console.error('Assign failed (mobile):', e);
       Alert.alert('Error', 'Failed to assign report.');

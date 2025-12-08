@@ -36,6 +36,8 @@ const Adashboard = () => {
   const [nearestStations, setNearestStations] = useState([]);
   const [pendingAssignment, setPendingAssignment] = useState(null); // {reportId, stationId, stationName}
   const [selectedRerouteStation, setSelectedRerouteStation] = useState('');
+  const [rerouteNote, setRerouteNote] = useState(''); // Optional message for reroute/forward
+  const [isRerouteForForwarding, setIsRerouteForForwarding] = useState(false); // Track if reroute modal is for forwarding (not declined)
   const [isIncidentsModalMinimized, setIsIncidentsModalMinimized] = useState(false);
   const [selectedStation, setSelectedStation] = useState(null); // Selected station for details modal
   const [stationResponders, setStationResponders] = useState([]); // Responders for selected station
@@ -770,6 +772,8 @@ const Adashboard = () => {
             }
             
             setNearestStations(nearest);
+            setIsRerouteForForwarding(false); // This is for declined assignment, not forwarding
+            setRerouteNote('');
             setShowRerouteModal(true);
           }
         }
@@ -937,6 +941,8 @@ const Adashboard = () => {
         setNearestStations(nearest);
         
         // Show reroute modal
+        setIsRerouteForForwarding(false); // This is for declined assignment, not forwarding
+        setRerouteNote('');
         setShowRerouteModal(true);
         
         // If report is not selected, select it for context
@@ -1062,14 +1068,20 @@ const Adashboard = () => {
       
       // Create new assignment to the selected station (always pending for reroutes)
       // Use insert instead of upsert to ensure it triggers INSERT listener on station side
+      const noteText = isRerouteForForwarding 
+        ? (rerouteNote && rerouteNote.trim() 
+          ? `Forwarded from ${pendingAssignment.stationName}: ${rerouteNote.trim()}` 
+          : `Forwarded from ${pendingAssignment.stationName}`)
+        : `Rerouted from ${pendingAssignment.stationName}`;
+      
       const payload = {
         report_id: pendingAssignment.reportId,
         assignee_type: 'station',
         assignee_id: selectedRerouteStation,
         assigned_at: new Date().toISOString(),
-        status: 'pending', // Always require approval for rerouted assignments
+        status: 'pending', // Always require approval for rerouted/forwarded assignments
         assignment_source: 'manual',
-        note: `Rerouted from ${pendingAssignment.stationName}`
+        note: noteText
       };
 
       const { error } = await supabase
@@ -1096,13 +1108,19 @@ const Adashboard = () => {
       setShowRerouteModal(false);
       setShowWaitingApprovalModal(true);
       setSelectedRerouteStation('');
+      setRerouteNote('');
+      setIsRerouteForForwarding(false);
 
       // Create notification for new station
       if (selectedReport) {
         const locationInfo = selectedReport.address || selectedReport.geotag_location || 'Location unavailable';
         const reporterName = selectedReport.reporter_name || selectedReport.reporter || 'Unknown Reporter';
-        const title = `🚨 Fire Report Rerouted to Your Station - Action Required`;
-        const message = `Command Center is rerouting a fire report to your station.\n\nLocation: ${locationInfo}\nReporter: ${reporterName}\nPrevious station: ${pendingAssignment.stationName}\n\nWill you accept this assignment?`;
+        const actionText = isRerouteForForwarding ? 'forwarding' : 'rerouting';
+        const noteText = rerouteNote && rerouteNote.trim() ? `\n\nNote: ${rerouteNote.trim()}` : '';
+        const title = isRerouteForForwarding 
+          ? `🚨 Fire Report Forwarded to Your Station - Action Required`
+          : `🚨 Fire Report Rerouted to Your Station - Action Required`;
+        const message = `Command Center is ${actionText} a fire report to your station.\n\nLocation: ${locationInfo}\nReporter: ${reporterName}\nPrevious station: ${pendingAssignment.stationName}${noteText}\n\nWill you accept this assignment?`;
         
         const { error: notifError } = await supabase
           .from('notifications')
@@ -1148,7 +1166,7 @@ const Adashboard = () => {
       console.error('❌ Reroute failed:', e);
       alert('Failed to reroute report. Check console.');
     }
-  }, [selectedRerouteStation, pendingAssignment, nearestStations, selectedReport, loadAssignmentInfo]);
+  }, [selectedRerouteStation, pendingAssignment, nearestStations, selectedReport, loadAssignmentInfo, isRerouteForForwarding, rerouteNote]);
 
   const handleAssign = useCallback(async () => {
     try {
@@ -1251,17 +1269,90 @@ const Adashboard = () => {
           setAssignmentNote('');
           loadAssignmentInfo(selectedReport.id);
           return; // Don't show success alert, modal will handle it
+        } else {
+          // Station is NOT busy - auto-accept assignment
+          // First, delete any existing assignment for this report
+          await supabase
+            .from('report_assignments')
+            .delete()
+            .eq('report_id', selectedReport.id)
+            .eq('assignee_type', 'station');
+          
+          const payload = {
+            report_id: selectedReport.id,
+            assignee_type: assigneeType,
+            assignee_id: assigneeId,
+            assigned_at: new Date().toISOString(),
+            status: 'accepted', // Auto-accept for free stations
+            assignment_source: 'manual',
+            note: assignmentNote && assignmentNote.trim() ? assignmentNote.trim() : null
+          };
+          
+          const { error } = await supabase
+            .from('report_assignments')
+            .insert(payload);
+          
+          if (error) {
+            // Check if error is due to missing columns (migration not run)
+            if (error.message && (error.message.includes('column') && error.message.includes('does not exist'))) {
+              console.error('❌ Database migration not run. Please run assignment-status-migration.sql in Supabase SQL Editor.');
+              alert('Database migration required! Please run the migration SQL file (assignment-status-migration.sql) in your Supabase SQL Editor first.');
+              return;
+            }
+            throw error;
+          }
+
+          // Get station name for success message
+          const { data: stationData } = await supabase
+            .from('station_users')
+            .select('station_name')
+            .eq('id', assigneeId)
+            .single();
+
+          const stationName = stationData?.station_name || 'Station';
+          
+          // Create notification for the assigned station (even though auto-accepted, still notify)
+          try {
+            const locationInfo = selectedReport.address || selectedReport.geotag_location || 'Location unavailable';
+            const reporterName = selectedReport.reporter_name || selectedReport.reporter || 'Unknown Reporter';
+            const title = `🚨 New Fire Report Assignment`;
+            const message = `You have been assigned a new fire report.\n\nLocation: ${locationInfo}\nReporter: ${reporterName}`;
+            
+            const { error: notifError } = await supabase
+              .from('notifications')
+              .insert({
+                user_id: assigneeId,
+                user_type: 'station',
+                type: 'assignment',
+                related_report_id: String(selectedReport.id),
+                title: title,
+                message: message,
+                priority: 'urgent',
+                is_read: false
+              });
+            
+            if (notifError) {
+              console.error('❌ Error creating station notification:', notifError);
+            }
+          } catch (notifErr) {
+            console.error('❌ Failed to create notification:', notifErr);
+          }
+
+          setAssignmentNote('');
+          loadAssignmentInfo(selectedReport.id);
+          alert(`✅ Assignment successfully assigned to ${stationName}.`);
+          return; // Don't proceed to responder assignment logic
         }
       }
 
-      // Station is not busy or assigning to responder - proceed normally
+      // Assigning to responder - proceed normally
       const payload = {
         report_id: selectedReport.id,
         assignee_type: assigneeType,
         assignee_id: assigneeId,
         assigned_at: new Date().toISOString(),
-        status: 'accepted', // Auto-accept if not busy
-        assignment_source: assigneeType === 'station' ? 'manual' : 'manual'
+        status: 'accepted',
+        assignment_source: 'manual'
       };
       
       const { error } = await supabase
@@ -2019,67 +2110,163 @@ const Adashboard = () => {
                     </div>
                   )}
 
-                  {/* Assignment Section */}
-                  <div className="mt-4 pt-4 border-t border-gray-200">
-                    <p className="font-bold text-gray-900 mb-3">Assignment</p>
-                    <div className="space-y-2">
-                      <select 
-                        className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" 
-                        value={assigneeId} 
-                        onChange={(e) => setAssigneeId(e.target.value)}
-                      >
-                        <option value="">Select station…</option>
-                        {allStations.map(s => (
-                          <option key={s.id} value={s.id}>{s.station_name || 'Station'}</option>
-                        ))}
-                      </select>
-                      <textarea
-                        className="w-full border border-gray-300 rounded-lg p-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                        rows="3"
-                        placeholder="Assignment note (optional)"
-                        value={assignmentNote || ''}
-                        onChange={(e) => setAssignmentNote((e.target.value || '').toString())}
-                      ></textarea>
-                      <button 
-                        className="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium px-4 py-2 rounded-lg transition-colors" 
-                        onClick={handleAssign}
-                      >
-                        Assign
-                      </button>
-                      <p className="text-xs text-gray-500 mt-1">You can reassign anytime — the latest assignment is active.</p>
+                  {/* Assignment Section - Only show if no station is assigned */}
+                  {!currentAssignment && (
+                    <div className="mt-4 pt-4 border-t border-gray-200">
+                      <p className="font-bold text-gray-900 mb-3">Assign to Station</p>
+                      <div className="space-y-2">
+                        <select 
+                          className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" 
+                          value={assigneeId} 
+                          onChange={(e) => setAssigneeId(e.target.value)}
+                        >
+                          <option value="">Select station…</option>
+                          {allStations.map(s => (
+                            <option key={s.id} value={s.id}>{s.station_name || 'Station'}</option>
+                          ))}
+                        </select>
+                        <textarea
+                          className="w-full border border-gray-300 rounded-lg p-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                          rows="3"
+                          placeholder="Assignment note (optional)"
+                          value={assignmentNote || ''}
+                          onChange={(e) => setAssignmentNote((e.target.value || '').toString())}
+                        ></textarea>
+                        <button 
+                          className="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium px-4 py-2 rounded-lg transition-colors" 
+                          onClick={handleAssign}
+                        >
+                          Assign Station
+                        </button>
+                        <p className="text-xs text-gray-500 mt-1">Select a station to assign this report to.</p>
+                      </div>
                     </div>
-                  </div>
+                  )}
 
-                  {/* Redirect/Forward Section */}
-                  <div className="mt-4 pt-4 border-t border-gray-200">
-                    <p className="font-bold text-gray-900 mb-3">Redirect/Forward</p>
-                    <div className="space-y-2">
-                      <select 
-                        className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500" 
-                        value={redirectTarget} 
-                        onChange={(e) => setRedirectTarget(e.target.value)}
-                      >
-                        <option value="">Choose station…</option>
-                        {allStations.map(s => (
-                          <option key={`st-${s.id}`} value={`station:${s.id}`}>{s.station_name || 'Station'}</option>
-                        ))}
-                      </select>
-                      <textarea 
-                        className="w-full border border-gray-300 rounded-lg p-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500" 
-                        rows="3" 
-                        placeholder="Note (optional)" 
-                        value={redirectNote} 
-                        onChange={(e) => setRedirectNote(e.target.value)}
-                      ></textarea>
-                      <button 
-                        className="w-full bg-orange-500 hover:bg-orange-600 text-white font-medium px-4 py-2 rounded-lg transition-colors" 
-                        onClick={handleRedirect}
-                      >
-                        Forward
-                      </button>
-                      <p className="text-xs text-gray-500 mt-1">Forwarding keeps the original assignment and records provenance.</p>
+                  {/* Redirect/Forward Section - Only show if a station is already assigned */}
+                  {currentAssignment && (
+                    <div className="mt-4 pt-4 border-t border-gray-200">
+                      <p className="font-bold text-gray-900 mb-3">Forward to Station</p>
+                      <div className="space-y-2">
+                        <button 
+                          className="w-full bg-orange-500 hover:bg-orange-600 text-white font-medium px-4 py-2 rounded-lg transition-colors" 
+                          onClick={async () => {
+                            // Open reroute modal for forwarding
+                            if (!selectedReport) return;
+                            
+                            setIsRerouteForForwarding(true);
+                            setSelectedRerouteStation('');
+                            setRerouteNote('');
+                            
+                            // Set pendingAssignment for forwarding context
+                            setPendingAssignment({
+                              reportId: selectedReport.id,
+                              stationId: currentAssignment.id,
+                              stationName: currentAssignment.name
+                            });
+                            
+                            // Fetch nearest stations to the current assignment's station
+                            try {
+                              const lat = parseFloat(selectedReport.latitude);
+                              const lng = parseFloat(selectedReport.longitude);
+                              
+                              console.log('🔍 Forwarding: Fetching stations for report at:', lat, lng);
+                              console.log('🔍 Forwarding: Excluding station:', currentAssignment.id);
+                              
+                              if (!isNaN(lat) && !isNaN(lng)) {
+                                // Find nearest stations to the incident location
+                                const stations = await findNearestStations(
+                                  lat,
+                                  lng,
+                                  currentAssignment.id, // Exclude current station
+                                  10, // Get more stations
+                                  { lat, lng } // Incident location for distance calculation
+                                );
+                                
+                                console.log('🔍 Forwarding: findNearestStations returned:', stations?.length || 0, 'stations');
+                                
+                                if (stations && stations.length > 0) {
+                                  setNearestStations(stations);
+                                } else {
+                                  console.log('⚠️ Forwarding: findNearestStations returned empty, trying fallback...');
+                                  // Fallback: directly query all stations (less restrictive)
+                                  const { data: allStationsData, error: allStationsError } = await supabase
+                                    .from('station_users')
+                                    .select('id, station_name, lat, lng')
+                                    .neq('id', currentAssignment.id);
+                                  
+                                  if (allStationsError) {
+                                    console.error('❌ Error fetching all stations:', allStationsError);
+                                    setNearestStations([]);
+                                  } else if (allStationsData && allStationsData.length > 0) {
+                                    console.log('✅ Forwarding: Found', allStationsData.length, 'stations in fallback');
+                                    const stationsWithDistance = allStationsData
+                                      .filter(station => {
+                                        const stationLat = parseFloat(station.lat);
+                                        const stationLng = parseFloat(station.lng);
+                                        return !isNaN(stationLat) && !isNaN(stationLng);
+                                      })
+                                      .map(station => {
+                                        const stationLat = parseFloat(station.lat);
+                                        const stationLng = parseFloat(station.lng);
+                                        let distanceToIncident = null;
+                                        
+                                        if (!isNaN(lat) && !isNaN(lng)) {
+                                          distanceToIncident = calculateDistance(lat, lng, stationLat, stationLng);
+                                        }
+                                        
+                                        return {
+                                          ...station,
+                                          distanceToIncident: distanceToIncident,
+                                          distanceToIncidentKm: distanceToIncident ? (distanceToIncident / 1000).toFixed(2) : null
+                                        };
+                                      })
+                                      .sort((a, b) => {
+                                        if (a.distanceToIncident === null || a.distanceToIncident === Infinity) return 1;
+                                        if (b.distanceToIncident === null || b.distanceToIncident === Infinity) return -1;
+                                        return a.distanceToIncident - b.distanceToIncident;
+                                      });
+                                    
+                                    setNearestStations(stationsWithDistance);
+                                  } else {
+                                    console.warn('⚠️ Forwarding: No stations found in fallback');
+                                    setNearestStations([]);
+                                  }
+                                }
+                              } else {
+                                // No coordinates, get all stations
+                                const { data: allStationsData, error: allStationsError } = await supabase
+                                  .from('station_users')
+                                  .select('id, station_name, lat, lng')
+                                  .neq('id', currentAssignment.id);
+                                
+                                if (allStationsError) {
+                                  console.error('❌ Error fetching all stations (no coords):', allStationsError);
+                                }
+                                
+                                if (allStationsData && allStationsData.length > 0) {
+                                  setNearestStations(allStationsData.map(s => ({
+                                    ...s,
+                                    distanceToIncidentKm: null
+                                  })));
+                                } else {
+                                  setNearestStations([]);
+                                }
+                              }
+                            } catch (error) {
+                              console.error('Error fetching stations for forwarding:', error);
+                              setNearestStations([]);
+                            }
+                            
+                            setShowRerouteModal(true);
+                          }}
+                        >
+                          Forward Station
+                        </button>
+                        <p className="text-xs text-gray-500 mt-1">Forward this report to another station.</p>
+                      </div>
                     </div>
-                  </div>
+                  )}
                 </div>
               </div>
             </InfoWindow>
@@ -2421,8 +2608,32 @@ const Adashboard = () => {
 
       {/* Reroute Modal - Station Too Busy */}
       {showRerouteModal && pendingAssignment && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 animate-in fade-in duration-200">
-          <div className="bg-white rounded-2xl shadow-2xl max-w-lg w-full mx-4 p-8 max-h-[80vh] overflow-y-auto transform transition-all animate-in zoom-in-95 duration-200">
+        <div 
+          className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 animate-in fade-in duration-200"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) {
+              setShowRerouteModal(false);
+              setSelectedRerouteStation('');
+              setRerouteNote('');
+              setIsRerouteForForwarding(false);
+            }
+          }}
+        >
+          <div className="bg-white rounded-2xl shadow-2xl max-w-lg w-full mx-4 p-8 max-h-[80vh] overflow-y-auto transform transition-all animate-in zoom-in-95 duration-200 relative">
+            {/* Close Button */}
+            <button
+              onClick={() => {
+                setShowRerouteModal(false);
+                setSelectedRerouteStation('');
+                setRerouteNote('');
+                setIsRerouteForForwarding(false);
+              }}
+              className="absolute top-4 right-4 text-gray-400 hover:text-gray-600 transition-colors"
+            >
+              <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
             <div className="flex items-center justify-center mb-6">
               <div className="bg-gradient-to-br from-orange-500 to-orange-600 rounded-full p-4 shadow-lg">
                 <svg className="w-10 h-10 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -2430,10 +2641,20 @@ const Adashboard = () => {
                 </svg>
               </div>
             </div>
-            <h3 className="text-2xl font-bold text-gray-900 text-center mb-3">Station Declined Assignment</h3>
+            <h3 className="text-2xl font-bold text-gray-900 text-center mb-3">
+              {isRerouteForForwarding ? 'Forward to Station' : 'Station Declined Assignment'}
+            </h3>
             <p className="text-gray-600 text-center mb-4 leading-relaxed">
-              <span className="font-semibold text-gray-900">{pendingAssignment.stationName}</span> has declined this assignment and is unable to handle this report. 
-              Please reroute the incident to one of the nearest stations:
+              {isRerouteForForwarding ? (
+                <>
+                  Forward this report from <span className="font-semibold text-gray-900">{pendingAssignment.stationName}</span> to one of the nearest stations:
+                </>
+              ) : (
+                <>
+                  <span className="font-semibold text-gray-900">{pendingAssignment.stationName}</span> has declined this assignment and is unable to handle this report. 
+                  Please reroute the incident to one of the nearest stations:
+                </>
+              )}
             </p>
             {selectedReport && (
               <div className="bg-blue-50 border-l-4 border-blue-500 p-3 rounded mb-4">
@@ -2486,12 +2707,26 @@ const Adashboard = () => {
               )}
             </div>
 
+            {/* Optional Message Field */}
+            <div className="mb-6">
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Message (optional)
+              </label>
+              <textarea
+                className="w-full border border-gray-300 rounded-lg p-3 text-sm focus:outline-none focus:ring-2 focus:ring-orange-500"
+                rows="3"
+                placeholder="Add a note for the receiving station (optional)"
+                value={rerouteNote}
+                onChange={(e) => setRerouteNote(e.target.value)}
+              ></textarea>
+            </div>
+
             <button
               onClick={handleReroute}
               disabled={!selectedRerouteStation}
               className="w-full bg-gradient-to-r from-orange-500 to-orange-600 hover:from-orange-600 hover:to-orange-700 disabled:from-gray-300 disabled:to-gray-400 disabled:cursor-not-allowed text-white font-semibold px-6 py-3 rounded-xl transition-all shadow-lg hover:shadow-xl transform hover:scale-105 disabled:transform-none"
             >
-              Reroute
+              {isRerouteForForwarding ? 'Forward' : 'Reroute'}
             </button>
           </div>
         </div>
