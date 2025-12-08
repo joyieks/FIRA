@@ -81,6 +81,12 @@ const Sdashboard = () => {
     return computed || '1st Alarm';
   };
 
+  const isNoFireNoSmoke = (report) => {
+    const pred = (report?.prediction || '').toLowerCase();
+    const smoke = (report?.smoke_detection || '').toLowerCase();
+    return pred.includes('no fire') && smoke.includes('no smoke');
+  };
+
   // Safely read outlet context; on hard reload this can be undefined before layout mounts
   const outletContext = (typeof useOutletContext === 'function' ? useOutletContext() : {}) || {};
   const { stationData } = outletContext;
@@ -657,6 +663,9 @@ const Sdashboard = () => {
           const rid = r?.id != null ? String(r.id) : '';
           return rid && allReportIds.has(rid) && r.latitude && r.longitude && !isNaN(r.latitude) && !isNaN(r.longitude);
         });
+
+        // Drop no-fire / no-smoke reports from station map view
+        withCoords = withCoords.filter((r) => !isNoFireNoSmoke(r));
 
         // 4) Fallback to snapshot table for any report IDs missing in external API
         const missingIds = Array.from(allReportIds).filter(id => !withCoords.find(r => String(r.id) === id));
@@ -1542,8 +1551,12 @@ const Sdashboard = () => {
                   {(selectedAssignedReport.prediction || selectedAssignedReport.confidence) && (
                     <p><strong>AI Fire Detection:</strong> <span className={`ml-1 px-2 py-1 rounded text-xs font-semibold ${selectedAssignedReport.prediction === 'Fire' ? 'bg-red-100 text-red-800' : 'bg-orange-100 text-orange-800'}`}>{selectedAssignedReport.prediction || 'Unknown'}{selectedAssignedReport.confidence ? ` (${selectedAssignedReport.confidence})` : ''}</span></p>
                   )}
-                  {(selectedAssignedReport.smoke_intensity || selectedAssignedReport.smoke_confidence) && (
-                    <p><strong>Smoke Analysis:</strong> {selectedAssignedReport.smoke_intensity || '—'} {selectedAssignedReport.smoke_confidence || ''}</p>
+                  {(selectedAssignedReport.smoke_detection || selectedAssignedReport.smoke_confidence) && (
+                    <p>
+                      <strong>Smoke Analysis:</strong>{' '}
+                      {selectedAssignedReport.smoke_detection || 'Smoke'}
+                      {selectedAssignedReport.smoke_confidence ? ` (${selectedAssignedReport.smoke_confidence})` : ''}
+                    </p>
                   )}
                   {selectedAssignedReport.structure && (
                     <p><strong>Structure:</strong> {selectedAssignedReport.structure}{selectedAssignedReport.structure_confidence ? ` (${selectedAssignedReport.structure_confidence})` : ''}</p>

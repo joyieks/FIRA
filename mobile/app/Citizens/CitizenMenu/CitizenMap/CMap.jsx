@@ -66,6 +66,13 @@ export default function CMap({ reportIdToFocus, setReportIdToFocus }) {
   const UPDATE_REPORT_URL = 'https://fire-detection-api-production-f55b.up.railway.app/update_report';
   const UPDATE_STATUS_URL = 'https://fire-detection-api-production-f55b.up.railway.app/update_report_status';
 
+  // Helper to check if report is "No Fire" + "No Smoke"
+  const isNoFireNoSmoke = (report) => {
+    const pred = (report?.prediction || '').toLowerCase();
+    const smoke = (report?.smoke_detection || report?.smokeDetection || '').toLowerCase();
+    return pred.includes('no fire') && smoke.includes('no smoke');
+  };
+
   // Get current user
   useEffect(() => {
     const getUser = async () => {
@@ -115,7 +122,7 @@ export default function CMap({ reportIdToFocus, setReportIdToFocus }) {
         const statusText = (report.status || '').toString().toLowerCase();
         const isCancelled = statusText.includes('cancelled') || statusText.includes('canceled');
         const isFireOut = statusText.includes('fire out');
-        return hasCoords && !isCancelled && !isFireOut;
+        return hasCoords && !isCancelled && !isFireOut && !isNoFireNoSmoke(report);
       });
       if (isMountedRef.current) setReports(reportsWithCoords);
     } catch (error) {

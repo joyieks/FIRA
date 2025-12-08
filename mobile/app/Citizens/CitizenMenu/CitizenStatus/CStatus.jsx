@@ -35,6 +35,12 @@ const CStatus = () => {
   const [userLocation, setUserLocation] = useState(null);
   const [processedNearbyIds, setProcessedNearbyIds] = useState(new Set());
   const [lastReportCheckTime, setLastReportCheckTime] = useState(Date.now());
+  const isNoFireNoSmoke = (report) => {
+    const pred = (report?.prediction || '').toLowerCase();
+    const smoke = (report?.smoke_detection || report?.smokeDetection || '').toLowerCase();
+    return pred.includes('no fire') && smoke.includes('no smoke');
+  };
+
 
   // Use Supabase auth context
   useEffect(() => {
@@ -222,7 +228,7 @@ const CStatus = () => {
             const statusText = (r.status || r.progress || '').toString().toLowerCase();
             return !statusText.includes('cancelled') && !statusText.includes('canceled');
           };
-          const activeReports = data.filter(isActiveReport);
+        const activeReports = data.filter(r => isActiveReport(r) && !isNoFireNoSmoke(r));
           
           // Use the same sorting logic as loadReportsFromAPI
           const getTimestampValue = (report) => {
@@ -1246,16 +1252,20 @@ const CStatus = () => {
           firstName: currentUser.firstName
         });
         
-        // Filter reports by current user's UID
+        // Filter reports by current user's UID and drop no-fire/no-smoke
         const userReportsRaw = data.filter(report => {
           const reporterId = report.reporterId || report.user_id;
           console.log('Checking report ID:', report.id, 'reporterId:', reporterId, 'against user:', currentUser.uid);
-          return reporterId === currentUser.uid;
+          if (reporterId !== currentUser.uid) return false;
+          if (isNoFireNoSmoke(report)) return false;
+          return true;
         });
         
         const otherReportsRaw = data.filter(report => {
           const reporterId = report.reporterId || report.user_id;
-          return reporterId !== currentUser.uid;
+          if (reporterId === currentUser.uid) return false;
+          if (isNoFireNoSmoke(report)) return false;
+          return true;
         });
         
         // Only exclude cancelled reports - keep Fire Out so citizens can see resolution
@@ -1328,8 +1338,8 @@ const CStatus = () => {
         setYourReports(sortedUserReports);
         setNearbyReports(sortedOtherReports);
         
-        // TEMPORARY: Store all active reports for debugging
-        const allActiveReports = data.filter(isActiveReport);
+        // TEMPORARY: Store all active reports for debugging (excluding no-fire/no-smoke)
+        const allActiveReports = data.filter(r => isActiveReport(r) && !isNoFireNoSmoke(r));
         setAllReports(sortReportsByDate(allActiveReports));
         console.log('All active reports stored:', allActiveReports.length);
         
@@ -1340,10 +1350,12 @@ const CStatus = () => {
         checkForAcknowledgedReports(sortedUserReports);
         
         // Check for nearby incidents and create notifications
-        // Filter out user's own reports before checking nearby incidents
+        // Filter out user's own reports and no-fire/no-smoke before checking nearby incidents
         const otherUsersReports = allActiveReports.filter(report => {
           const reporterId = report.reporterId || report.user_id;
-          return reporterId !== currentUser.uid;
+          if (reporterId === currentUser.uid) return false;
+          if (isNoFireNoSmoke(report)) return false;
+          return true;
         });
         checkForNearbyIncidents(otherUsersReports);
       } else {

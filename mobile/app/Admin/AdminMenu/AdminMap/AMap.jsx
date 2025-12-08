@@ -23,6 +23,13 @@ import { checkStationIsBusy, findNearestStations, findNearestStationsToStation, 
 
 const { width, height } = Dimensions.get('window');
 
+// Helper to drop "No Fire" + "No Smoke" reports
+const isNoFireNoSmoke = (report) => {
+  const pred = (report?.prediction || '').toLowerCase();
+  const smoke = (report?.smoke_detection || report?.smokeDetection || '').toLowerCase();
+  return pred.includes('no fire') && smoke.includes('no smoke');
+};
+
 export default function AMap({ isSidebarOpen = false }) {
   // Location states
   const [location, setLocation] = useState(null);
@@ -92,13 +99,13 @@ export default function AMap({ isSidebarOpen = false }) {
         const data = await response.json();
         console.log('📊 Fetched fire reports for mobile admin dashboard:', data.length);
         
-        // Filter reports that have valid coordinates AND are not cancelled or fire out
+        // Filter reports that have valid coordinates AND are not cancelled or fire out (and not no-fire/no-smoke)
         const reportsWithCoords = data.filter(report => {
           const hasCoords = report.latitude && report.longitude && !isNaN(parseFloat(report.latitude)) && !isNaN(parseFloat(report.longitude));
           const statusText = (report.status || '').toString().toLowerCase();
           const isCancelled = statusText.includes('cancelled') || statusText.includes('canceled');
           const isFireOut = statusText.includes('fire out');
-          return hasCoords && !isCancelled && !isFireOut;
+          return hasCoords && !isCancelled && !isFireOut && !isNoFireNoSmoke(report);
         });
         
         console.log('🔥 Reports with valid coordinates (excluding cancelled/fire out):', reportsWithCoords.length);

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { GoogleMap, Marker, InfoWindow, Circle, useJsApiLoader } from '@react-google-maps/api';
 import { supabase } from '../../../../config/supabase';
 import { useNotifications } from '../../../../contexts/NotificationContext';
@@ -42,6 +42,63 @@ const Adashboard = () => {
   const [selectedStation, setSelectedStation] = useState(null); // Selected station for details modal
   const [stationResponders, setStationResponders] = useState([]); // Responders for selected station
   const [loadingResponders, setLoadingResponders] = useState(false); // Loading state for responders
+  const noFireNotifiedRef = useRef(new Set()); // track notified report IDs to avoid duplicates
+
+  // Helpers to hide "No Fire" + "No Smoke" reports and notify citizen once
+  const isNoFireNoSmoke = (report) => {
+    const pred = (report?.prediction || '').toLowerCase();
+    const smoke = (report?.smoke_detection || '').toLowerCase();
+    return pred.includes('no fire') && smoke.includes('no smoke');
+  };
+
+  const getCitizenId = (report) => {
+    return (
+      report?.user_id ||
+      report?.reporterId ||
+      report?.reporter_id ||
+      report?.userId ||
+      null
+    );
+  };
+
+  const notifyCitizenInvalid = async (report) => {
+    const citizenId = getCitizenId(report);
+    if (!citizenId) return;
+    if (noFireNotifiedRef.current.has(String(report.id))) return;
+    try {
+      const { data: existing } = await supabase
+        .from('notifications')
+        .select('id')
+        .eq('user_id', citizenId)
+        .eq('related_report_id', String(report.id))
+        .eq('type', 'system')
+        .ilike('title', '%invalidated%')
+        .limit(1);
+      if (existing && existing.length > 0) {
+        noFireNotifiedRef.current.add(String(report.id));
+        return;
+      }
+
+      const title = 'Report invalidated: No smoke / no fire detected';
+      const message = 'CNN has detected this photo as no smoke and no fire, so it will not appear on the map dashboard. Please submit another image if you believe this is inaccurate.';
+
+      await supabase.from('notifications').insert({
+        user_id: citizenId,
+        user_type: 'citizen',
+        type: 'system',
+        title,
+        message,
+        related_report_id: String(report.id),
+        is_read: false,
+        priority: 'normal'
+      });
+
+      noFireNotifiedRef.current.add(String(report.id));
+    } catch (err) {
+      console.warn('Notification to citizen failed (non-blocking):', err);
+    }
+  };
+
   const [stationActiveCounts, setStationActiveCounts] = useState({}); // {stationId: busyCount} for reroute modal
   // Load Google Maps API once globally to avoid duplicate script loads
   const { isLoaded: isMapsLoaded, loadError: mapsLoadError } = useJsApiLoader({
@@ -342,17 +399,23 @@ const Adashboard = () => {
         const data = await response.json();
         // Fetched fire reports
         
-        // Filter reports that have valid coordinates AND are not cancelled or fire out
-        const reportsWithCoords = data.filter(report => {
+        // Filter reports that have valid coordinates AND are not cancelled/fire out AND not no-fire/no-smoke
+        const filteredReports = [];
+        for (const report of data) {
           const hasCoords = report.latitude && report.longitude && !isNaN(report.latitude) && !isNaN(report.longitude);
           const statusText = (report.status || '').toString().toLowerCase();
           const isCancelled = statusText.includes('cancelled') || statusText.includes('canceled');
           const isFireOut = statusText.includes('fire out');
-          return hasCoords && !isCancelled && !isFireOut;
-        });
+          if (!hasCoords || isCancelled || isFireOut) continue;
+          if (isNoFireNoSmoke(report)) {
+            await notifyCitizenInvalid(report);
+            continue;
+          }
+          filteredReports.push(report);
+        }
         
         // Sort reports by newest first (most recent created_at or updated_at at the top)
-        const sortedReports = reportsWithCoords.sort((a, b) => {
+        const sortedReports = filteredReports.sort((a, b) => {
           // Get the most recent timestamp for each report (prefer updated_at if available, else created_at)
           const getTimestamp = (report) => {
             if (report.updated_at) {
@@ -379,7 +442,7 @@ const Adashboard = () => {
         // Check if there's a selected report ID from navigation
         const selectedReportId = localStorage.getItem('selectedReportId');
         if (selectedReportId) {
-          const reportToSelect = reportsWithCoords.find(report => String(report.id) === String(selectedReportId));
+          const reportToSelect = sortedReports.find(report => String(report.id) === String(selectedReportId));
           if (reportToSelect) {
             // Auto-selecting report
             setSelectedReport(reportToSelect);
@@ -1956,8 +2019,11 @@ const Adashboard = () => {
                   <div className="flex items-start space-x-2">
                     <span className="text-gray-500">Fire Alarm Level:</span>
                     <span 
-                      className="px-3 py-1 rounded-full text-xs font-bold text-white"
-                      style={{ backgroundColor: getMarkerColor(selectedReport) }}
+                      className="px-3 py-1 rounded-full text-xs font-bold"
+                      style={{ 
+                        backgroundColor: getMarkerColor(selectedReport),
+                        color: '#111827' // dark text for readability on light badges
+                      }}
                     >
                       {cleanAlarmLevel(resolveAlarmLevel(selectedReport))}
                     </span>
@@ -1973,11 +2039,21 @@ const Adashboard = () => {
                     </span>
                   </div>
 
-                  {/* Smoke Analysis */}
-                  {(selectedReport.smoke_intensity || selectedReport.smoke_confidence) && (
+                  {/* Smoke Analysis (use detection + confidence) */}
+                  {(selectedReport.smoke_detection || selectedReport.smoke_confidence) && (
                     <div className="flex items-start space-x-2">
                       <span className="text-gray-500">Smoke Analysis:</span>
-                      <span className="font-medium text-gray-900">{selectedReport.smoke_intensity || ''} {selectedReport.smoke_confidence || ''}</span>
+                      <span
+                        className="px-3 py-1 rounded-full text-xs font-bold border"
+                        style={{
+                          backgroundColor: '#e0f2fe', // light blue
+                          borderColor: '#bae6fd',
+                          color: '#0f172a' // dark text for readability
+                        }}
+                      >
+                        {selectedReport.smoke_detection || 'Smoke'}
+                        {selectedReport.smoke_confidence ? ` (${selectedReport.smoke_confidence})` : ''}
+                      </span>
                     </div>
                   )}
 
@@ -2461,13 +2537,13 @@ const Adashboard = () => {
                         {status}
                       </span>
                       
-                      {/* Alarm Level Badge */}
+                      {/* Alarm Level Badge (dark text for readability) */}
                       <span
-                        className="px-2 py-0.5 rounded text-xs font-bold text-white border"
+                        className="px-2 py-0.5 rounded text-xs font-bold border"
                         style={{ 
                           backgroundColor: alarmColor,
                           borderColor: alarmColor,
-                          color: getAlarmLevelTextColor(alarmLevel)
+                          color: '#111827'
                         }}
                       >
                         {cleanAlarmLevel(alarmLevel) || 'Unknown'}

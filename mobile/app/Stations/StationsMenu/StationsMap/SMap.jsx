@@ -134,6 +134,13 @@ export default function SMap({ reportIdToOpen, onReportOpened }) {
     }
   };
 
+  // Helper to check if report is "No Fire" + "No Smoke"
+  const isNoFireNoSmoke = (report) => {
+    const pred = (report?.prediction || '').toLowerCase();
+    const smoke = (report?.smoke_detection || report?.smokeDetection || '').toLowerCase();
+    return pred.includes('no fire') && smoke.includes('no smoke');
+  };
+
 
   useEffect(() => {
     (async () => {
@@ -467,12 +474,12 @@ export default function SMap({ reportIdToOpen, onReportOpened }) {
             is_forwarded: false
           };
         }).filter(Boolean).filter(r => {
-          // Filter out reports with invalid coordinates, cancelled reports, or fire out reports
+          // Filter out reports with invalid coordinates, cancelled reports, fire out reports, or no-fire/no-smoke
           const hasValidCoords = !isNaN(parseFloat(r.latitude)) && !isNaN(parseFloat(r.longitude));
           const statusText = (r.status || '').toString().toLowerCase();
           const isCancelled = statusText.includes('cancelled') || statusText.includes('canceled');
           const isFireOut = statusText.includes('fire out');
-          return hasValidCoords && !isCancelled && !isFireOut;
+          return hasValidCoords && !isCancelled && !isFireOut && !isNoFireNoSmoke(r);
         });
 
         setAssignedReports(merged);

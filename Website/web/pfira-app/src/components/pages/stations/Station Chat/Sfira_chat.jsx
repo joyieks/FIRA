@@ -340,7 +340,7 @@ const Sfira_chat = () => {
           reports.forEach((r) => mergedById.set(String(r.id), r));
         }
 
-        // 2) External API (richer address/status) to fill gaps
+        // 2) External API (richer address/status) to fill gaps — prefer API values over Supabase when present
         try {
           const apiResp = await fetch('https://fire-detection-api-production-f55b.up.railway.app/get_reports');
           if (apiResp.ok) {
@@ -349,29 +349,32 @@ const Sfira_chat = () => {
               .filter((r) => allowedSet.has(String(r.id)))
               .forEach((r) => {
                 const existing = mergedById.get(String(r.id)) || {};
-                mergedById.set(String(r.id), {
-                  ...r,
+                const mergedRecord = {
                   ...existing,
-                  address: existing.address || r.address || r.geotag_location,
-                });
+                  ...r,
+                  address: r.address || r.geotag_location || existing.address,
+                  geotag_location: r.geotag_location || existing.geotag_location,
+                  status: r.status || existing.status,
+                  alarm_level: r.alarm_level || existing.alarm_level,
+                  recommended_alarm_level: r.recommended_alarm_level || existing.recommended_alarm_level,
+                  suggested_alarm_level: r.suggested_alarm_level || existing.suggested_alarm_level,
+                  created_at: r.created_at || existing.created_at,
+                  updated_at: r.updated_at || existing.updated_at,
+                  timestamp: r.timestamp || existing.timestamp
+                };
+                mergedById.set(String(r.id), mergedRecord);
               });
           }
         } catch (apiErr) {
           console.warn('⚠️ Incident API fetch failed, using Supabase-only data', apiErr);
         }
 
-        // 3) Ensure every allowed ID appears at least once
-        allowedReportIds.forEach((rid) => {
-          const key = String(rid);
-          if (!mergedById.has(key)) {
-            mergedById.set(key, { id: rid, address: 'Assigned report', status: 'Unknown' });
-          }
-        });
-
-        // Filter out resolved/fire out
+        // Filter out resolved/fire out and entries without any location info
         const merged = Array.from(mergedById.values()).filter((r) => {
           const status = (r.status || '').toString().toLowerCase();
-          return !status.includes('fire out') && !status.includes('resolved');
+          const hasLocation = !!(r.address || r.geotag_location);
+          const activeStatus = !status.includes('fire out') && !status.includes('resolved');
+          return hasLocation && activeStatus;
         });
         setOngoingIncidents(merged);
         // Reset selection if the current one is no longer valid
