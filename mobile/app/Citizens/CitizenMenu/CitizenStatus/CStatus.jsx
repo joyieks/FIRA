@@ -3564,15 +3564,15 @@ const CStatus = () => {
                                 </Text>
                               </View>
                             </View>
-                            {(selectedReport.smoke_intensity || selectedReport.alarm_level) && <View className="h-px mb-3" style={{ backgroundColor: 'rgba(59, 130, 246, 0.2)' }} />}
+                            {(selectedReport.smoke_detection || selectedReport.alarm_level) && <View className="h-px mb-3" style={{ backgroundColor: 'rgba(59, 130, 246, 0.2)' }} />}
                           </>
                         )}
-                        {selectedReport.smoke_intensity && (
+                        {selectedReport.smoke_detection && (
                           <>
                             <View className="flex-row items-start mb-3">
                               <MaterialIcons name="cloud" size={18} color="#3b82f6" />
                               <View className="flex-1 ml-3">
-                                <Text className="text-gray-500 text-xs mb-1">Smoke Intensity</Text>
+                                <Text className="text-gray-500 text-xs mb-1">Smoke Detection</Text>
                                 <Text className="text-gray-800 font-semibold text-base">
                                   {selectedReport.smoke_detection} {selectedReport.smoke_confidence ? `(${selectedReport.smoke_confidence})` : ''}
                                 </Text>
