@@ -19,6 +19,7 @@ import MapView, { Marker, Callout, Circle } from 'react-native-maps';
 import * as Location from 'expo-location';
 import { MaterialIcons, Ionicons } from '@expo/vector-icons';
 import { supabase } from '../../../config/supabase';
+import { checkStationIsBusy, findNearestStations, findNearestStationsToStation, handleAssignmentResponse, calculateDistance } from '../../../utils/assignmentHelpers';
 
 const { width, height } = Dimensions.get('window');
 
@@ -52,6 +53,12 @@ export default function AMap({ isSidebarOpen = false }) {
   // Dashboard states
   const [showDashboard, setShowDashboard] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [showWaitingApprovalModal, setShowWaitingApprovalModal] = useState(false);
+  const [showRerouteModal, setShowRerouteModal] = useState(false);
+  const [nearestStations, setNearestStations] = useState([]);
+  const [pendingAssignment, setPendingAssignment] = useState(null);
+  const [selectedRerouteStation, setSelectedRerouteStation] = useState('');
+  const [stationActiveCounts, setStationActiveCounts] = useState({}); // {stationId: busyCount} for reroute modal
 
   // Drawer gesture is disabled for this screen via exported options below.
 
@@ -119,6 +126,825 @@ export default function AMap({ isSidebarOpen = false }) {
   useEffect(() => {
     fetchFireReports();
   }, [fetchFireReports]);
+
+  // Check for existing declined assignments on mount (in case admin logged in after station declined)
+  useEffect(() => {
+    const checkForDeclinedAssignments = async () => {
+      try {
+        console.log('🔍 AMap: Checking for existing declined assignments on mount...');
+        
+        // Get all declined assignments from the last 30 minutes
+        const thirtyMinutesAgo = new Date(Date.now() - 30 * 60 * 1000).toISOString();
+        
+        const { data: declinedAssignments, error } = await supabase
+          .from('report_assignments')
+          .select('*')
+          .eq('assignee_type', 'station')
+          .eq('status', 'declined')
+          .gte('assigned_at', thirtyMinutesAgo)
+          .order('assigned_at', { ascending: false })
+          .limit(10);
+
+        if (error) {
+          console.error('❌ AMap: Error checking declined assignments:', error);
+          return;
+        }
+
+        if (declinedAssignments && declinedAssignments.length > 0) {
+          console.log(`✅ AMap: Found ${declinedAssignments.length} declined assignment(s) on mount`);
+          
+          // Process the most recent one
+          const assignment = declinedAssignments[0];
+          
+          // Get station name
+          const { data: stationData } = await supabase
+            .from('station_users')
+            .select('station_name')
+            .eq('id', assignment.assignee_id)
+            .single();
+          
+          const stationName = stationData?.station_name || 'Unknown Station';
+          
+          // Get report details
+          const API_URL = 'https://fire-detection-api-production-f55b.up.railway.app';
+          let reportData = null;
+          try {
+            const reportRes = await fetch(`${API_URL}/get_reports`);
+            if (reportRes.ok) {
+              const allReports = await reportRes.json();
+              reportData = allReports.find(r => String(r.id) === String(assignment.report_id));
+            }
+          } catch (err) {
+            console.error('Error fetching report data:', err);
+          }
+          
+          // Set pending assignment
+          setPendingAssignment({
+            reportId: assignment.report_id,
+            stationId: assignment.assignee_id,
+            stationName: stationName
+          });
+          
+          // Get report location
+          const reportLat = reportData ? parseFloat(reportData.latitude) : NaN;
+          const reportLng = reportData ? parseFloat(reportData.longitude) : NaN;
+          const incidentLocation = (!isNaN(reportLat) && !isNaN(reportLng)) 
+            ? { lat: reportLat, lng: reportLng } 
+            : null;
+          
+          // Find nearest stations
+          let nearest = [];
+          if (!isNaN(reportLat) && !isNaN(reportLng)) {
+            nearest = await findNearestStations(reportLat, reportLng, assignment.assignee_id, 5, incidentLocation);
+          }
+          if (nearest.length === 0) {
+            nearest = await findNearestStationsToStation(assignment.assignee_id, assignment.assignee_id, 5, incidentLocation);
+          }
+          if (nearest.length === 0) {
+            const { data: stations } = await supabase
+              .from('station_users')
+              .select('id, station_name, lat, lng')
+              .neq('id', assignment.assignee_id);
+            
+            if (stations && stations.length > 0) {
+              const stationsWithDistance = stations.map(station => {
+                const stationLat = parseFloat(station.lat);
+                const stationLng = parseFloat(station.lng);
+                if (!isNaN(stationLat) && !isNaN(stationLng) && incidentLocation) {
+                  const distanceToIncident = calculateDistance(stationLat, stationLng, incidentLocation.lat, incidentLocation.lng);
+                  return {
+                    ...station,
+                    distanceToIncident: distanceToIncident,
+                    distanceToIncidentKm: (distanceToIncident / 1000).toFixed(2)
+                  };
+                }
+                return { ...station, distanceToIncident: null, distanceToIncidentKm: null };
+              }).sort((a, b) => {
+                if (a.distanceToIncident === null || a.distanceToIncident === Infinity) return 1;
+                if (b.distanceToIncident === null || b.distanceToIncident === Infinity) return -1;
+                return a.distanceToIncident - b.distanceToIncident;
+              });
+              nearest = stationsWithDistance;
+            }
+          }
+          
+          setNearestStations(nearest);
+          
+          if (reportData) {
+            setSelectedReport({
+              id: reportData.id,
+              address: reportData.address,
+              geotag_location: reportData.geotag_location,
+              latitude: reportData.latitude,
+              longitude: reportData.longitude,
+              ...reportData
+            });
+          }
+          
+          // Show alert and modal
+          Alert.alert(
+            '⚠️ Station Declined Assignment',
+            `${stationName} has declined an assignment. Please select a new station to reroute to.`
+          );
+          
+          setTimeout(() => {
+            setShowRerouteModal(true);
+            console.log('✅ AMap: Showing reroute modal for existing declined assignment');
+          }, 500);
+        } else {
+          console.log('ℹ️ AMap: No declined assignments found on mount');
+        }
+      } catch (error) {
+        console.error('❌ AMap: Error checking declined assignments on mount:', error);
+      }
+    };
+
+    // Check after a short delay to ensure component is mounted
+    const timeoutId = setTimeout(checkForDeclinedAssignments, 2000);
+    return () => clearTimeout(timeoutId);
+  }, []); // Only run on mount
+
+  // Real-time listener for assignment responses
+  useEffect(() => {
+    if (!pendingAssignment) return;
+
+    const channel = supabase
+      .channel(`assignment-responses-${pendingAssignment.reportId}`)
+      .on('postgres_changes', {
+        event: 'UPDATE',
+        schema: 'public',
+        table: 'report_assignments',
+        filter: `report_id=eq.${pendingAssignment.reportId}`
+      }, async (payload) => {
+        const assignment = payload.new;
+        if (assignment.assignee_type === 'station' && 
+            String(assignment.assignee_id) === String(pendingAssignment.stationId)) {
+          
+          if (assignment.status === 'accepted') {
+            setShowWaitingApprovalModal(false);
+            Alert.alert('✅ Accepted', `${pendingAssignment.stationName} has accepted the assignment.`);
+            setPendingAssignment(null);
+          } else if (assignment.status === 'declined') {
+            setShowWaitingApprovalModal(false);
+            
+            // Get report location for finding nearest stations
+            const reportLat = parseFloat(selectedReport?.latitude);
+            const reportLng = parseFloat(selectedReport?.longitude);
+            
+            const incidentLocation = (!isNaN(reportLat) && !isNaN(reportLng)) 
+              ? { lat: reportLat, lng: reportLng } 
+              : null;
+            
+            let nearest = [];
+            
+            // First, try to find stations near the report location
+            if (!isNaN(reportLat) && !isNaN(reportLng)) {
+              nearest = await findNearestStations(
+                reportLat, 
+                reportLng, 
+                pendingAssignment.stationId, 
+                5,
+                incidentLocation
+              );
+            }
+            
+            // If no stations found near report, find stations near the declined station
+            if (nearest.length === 0) {
+              console.log('📍 No stations found near report location, finding stations near declined station...');
+              nearest = await findNearestStationsToStation(
+                pendingAssignment.stationId,
+                pendingAssignment.stationId,
+                5,
+                incidentLocation
+              );
+            }
+            
+            // If still no stations, fallback to ALL stations sorted by distance to incident
+            if (nearest.length === 0) {
+              console.log('📍 Fallback: Fetching all stations...');
+              const { data: stations, error: stationsError } = await supabase
+                .from('station_users')
+                .select('id, station_name, lat, lng')
+                .neq('id', pendingAssignment.stationId);
+              
+              if (stationsError) {
+                console.error('❌ Error fetching stations:', stationsError);
+              }
+              
+              console.log(`📍 Found ${stations?.length || 0} stations in database`);
+              
+              // Calculate distances to incident for all stations and sort
+              if (stations && stations.length > 0) {
+                const stationsWithDistance = stations
+                  .map(station => {
+                    const stationLat = parseFloat(station.lat);
+                    const stationLng = parseFloat(station.lng);
+                    if (!isNaN(stationLat) && !isNaN(stationLng) && incidentLocation) {
+                      const distanceToIncident = calculateDistance(
+                        stationLat,
+                        stationLng,
+                        incidentLocation.lat,
+                        incidentLocation.lng
+                      );
+                      return {
+                        ...station,
+                        distance: 0, // No reference distance
+                        distanceKm: '0',
+                        distanceToIncident: distanceToIncident,
+                        distanceToIncidentKm: (distanceToIncident / 1000).toFixed(2)
+                      };
+                    }
+                    // If no coordinates or incident location, put at end but still include
+                    return {
+                      ...station,
+                      distance: 0,
+                      distanceKm: '0',
+                      distanceToIncident: incidentLocation ? Infinity : null,
+                      distanceToIncidentKm: null
+                    };
+                  })
+                  .sort((a, b) => {
+                    // Sort by distance to incident (stations with null/Infinity distance go to end)
+                    if (a.distanceToIncident === null || a.distanceToIncident === Infinity) return 1;
+                    if (b.distanceToIncident === null || b.distanceToIncident === Infinity) return -1;
+                    return a.distanceToIncident - b.distanceToIncident;
+                  });
+                
+                console.log(`📍 Prepared ${stationsWithDistance.length} stations with distances`);
+                nearest = stationsWithDistance;
+              } else {
+                console.warn('⚠️ No stations found in database');
+                nearest = stations || [];
+              }
+            }
+            
+            setNearestStations(nearest);
+            setShowRerouteModal(true);
+          }
+        }
+      })
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [pendingAssignment, selectedReport]);
+
+  // Global listener for declined assignments (works even if admin closed waiting modal)
+  useEffect(() => {
+    console.log('🔔 AMap: Setting up global declined assignments listener');
+    
+    const channel = supabase
+      .channel('global-declined-assignments-mobile')
+      .on('postgres_changes', {
+        event: 'UPDATE',
+        schema: 'public',
+        table: 'report_assignments'
+      }, async (payload) => {
+        try {
+          const assignment = payload.new;
+          const oldAssignment = payload.old;
+          
+          console.log('🔄 AMap: Assignment UPDATE received:', {
+            reportId: assignment.report_id,
+            stationId: assignment.assignee_id,
+            assigneeType: assignment.assignee_type,
+            oldStatus: oldAssignment?.status,
+            newStatus: assignment.status
+          });
+          
+          // Only handle station declines
+          if (assignment.assignee_type !== 'station') {
+            console.log('⏭️ AMap: Not a station assignment, skipping');
+            return;
+          }
+          
+          // Check if status changed TO 'declined' (not just any update)
+          const wasDeclined = oldAssignment?.status === 'declined';
+          const isNowDeclined = assignment.status === 'declined';
+          
+          if (!isNowDeclined) {
+            console.log('⏭️ AMap: Status is not declined, skipping. Current status:', assignment.status);
+            return;
+          }
+          
+          if (wasDeclined) {
+            console.log('⏭️ AMap: Status was already declined, skipping (duplicate event)');
+            return;
+          }
+          
+          console.log('🚨 AMap: Station declined assignment detected (global listener):', {
+            reportId: assignment.report_id,
+            stationId: assignment.assignee_id,
+            stationName: 'Fetching...'
+          });
+        
+        // Get station name
+        const { data: stationData } = await supabase
+          .from('station_users')
+          .select('station_name')
+          .eq('id', assignment.assignee_id)
+          .single();
+        
+        const stationName = stationData?.station_name || 'Unknown Station';
+        
+        // Get report details
+        const API_URL = 'https://fire-detection-api-production-f55b.up.railway.app';
+        let reportData = null;
+        try {
+          const reportRes = await fetch(`${API_URL}/get_reports`);
+          if (reportRes.ok) {
+            const allReports = await reportRes.json();
+            reportData = allReports.find(r => String(r.id) === String(assignment.report_id));
+          }
+        } catch (err) {
+          console.error('Error fetching report data:', err);
+        }
+        
+        // Set pending assignment info for reroute modal
+        setPendingAssignment({
+          reportId: assignment.report_id,
+          stationId: assignment.assignee_id,
+          stationName: stationName
+        });
+        
+        // Close waiting modal if open (use functional update to ensure we close it)
+        setShowWaitingApprovalModal(prev => {
+          if (prev) {
+            console.log('🔄 AMap: Closing waiting approval modal');
+          }
+          return false;
+        });
+        
+        // Get report location for finding nearest stations
+        const reportLat = reportData ? parseFloat(reportData.latitude) : NaN;
+        const reportLng = reportData ? parseFloat(reportData.longitude) : NaN;
+        
+        const incidentLocation = (!isNaN(reportLat) && !isNaN(reportLng)) 
+          ? { lat: reportLat, lng: reportLng } 
+          : null;
+        
+        let nearest = [];
+        
+        // First, try to find stations near the report location
+        if (!isNaN(reportLat) && !isNaN(reportLng)) {
+          nearest = await findNearestStations(
+            reportLat, 
+            reportLng, 
+            assignment.assignee_id, 
+            5,
+            incidentLocation
+          );
+        }
+        
+        // If no stations found near report, find stations near the declined station
+        if (nearest.length === 0) {
+          console.log('📍 No stations found near report location, finding stations near declined station...');
+          nearest = await findNearestStationsToStation(
+            assignment.assignee_id,
+            assignment.assignee_id,
+            5,
+            incidentLocation
+          );
+        }
+        
+        // If still no stations, fallback to ALL stations sorted by distance to incident
+        if (nearest.length === 0) {
+          console.log('📍 Fallback: Fetching all stations...');
+          const { data: stations, error: stationsError } = await supabase
+            .from('station_users')
+            .select('id, station_name, lat, lng')
+            .neq('id', assignment.assignee_id);
+          
+          if (stationsError) {
+            console.error('❌ Error fetching stations:', stationsError);
+          }
+          
+          console.log(`📍 Found ${stations?.length || 0} stations in database`);
+          
+          // Calculate distances to incident for all stations and sort
+          if (stations && stations.length > 0) {
+            const stationsWithDistance = stations
+              .map(station => {
+                const stationLat = parseFloat(station.lat);
+                const stationLng = parseFloat(station.lng);
+                if (!isNaN(stationLat) && !isNaN(stationLng) && incidentLocation) {
+                  const distanceToIncident = calculateDistance(
+                    stationLat,
+                    stationLng,
+                    incidentLocation.lat,
+                    incidentLocation.lng
+                  );
+                  return {
+                    ...station,
+                    distance: 0, // No reference distance
+                    distanceKm: '0',
+                    distanceToIncident: distanceToIncident,
+                    distanceToIncidentKm: (distanceToIncident / 1000).toFixed(2)
+                  };
+                }
+                // If no coordinates or incident location, put at end but still include
+                return {
+                  ...station,
+                  distance: 0,
+                  distanceKm: '0',
+                  distanceToIncident: incidentLocation ? Infinity : null,
+                  distanceToIncidentKm: null
+                };
+              })
+              .sort((a, b) => {
+                // Sort by distance to incident (stations with null/Infinity distance go to end)
+                if (a.distanceToIncident === null || a.distanceToIncident === Infinity) return 1;
+                if (b.distanceToIncident === null || b.distanceToIncident === Infinity) return -1;
+                return a.distanceToIncident - b.distanceToIncident;
+              });
+            
+            console.log(`📍 Prepared ${stationsWithDistance.length} stations with distances`);
+            nearest = stationsWithDistance;
+          } else {
+            console.warn('⚠️ No stations found in database');
+            nearest = stations || [];
+          }
+        }
+        
+        setNearestStations(nearest);
+        
+        // If report is not selected, select it for context (even if minimal data)
+        if (!selectedReport || String(selectedReport.id) !== String(assignment.report_id)) {
+          if (reportData) {
+            setSelectedReport({
+              id: reportData.id,
+              address: reportData.address,
+              geotag_location: reportData.geotag_location,
+              latitude: reportData.latitude,
+              longitude: reportData.longitude,
+              ...reportData // Include all report data for context
+            });
+          } else {
+            // Set minimal report data so modal can show
+            setSelectedReport({
+              id: assignment.report_id,
+              address: null,
+              geotag_location: null,
+              latitude: null,
+              longitude: null
+            });
+          }
+        }
+        
+        // Create notification for admin about the decline
+        try {
+          const locationInfo = reportData?.address || reportData?.geotag_location || 'Location unavailable';
+          await supabase
+            .from('notifications')
+            .insert({
+              user_id: 'admin', // Admin notifications
+              user_type: 'admin',
+              type: 'assignment',
+              related_report_id: String(assignment.report_id),
+              title: `⚠️ Station Declined Assignment`,
+              message: `${stationName} has declined the assignment for report at ${locationInfo}. Please reroute to another station.`,
+              priority: 'urgent',
+              is_read: false
+            });
+          console.log('✅ AMap: Created admin notification for declined assignment');
+        } catch (notifError) {
+          console.error('❌ AMap: Error creating admin notification:', notifError);
+        }
+        
+        // Show alert to admin immediately
+        Alert.alert(
+          '⚠️ Station Declined Assignment',
+          `${stationName} has declined this assignment and is unable to handle this report. Please select a new station to reroute to.`,
+          [
+            {
+              text: 'OK',
+              onPress: () => {
+                // Modal will show below
+              }
+            }
+          ]
+        );
+        
+        // Show reroute modal (always show, even if report data is minimal)
+        console.log('✅ AMap: Showing reroute modal');
+        console.log('📊 AMap: Modal state before:', {
+          pendingAssignment: { reportId: assignment.report_id, stationId: assignment.assignee_id, stationName },
+          nearestStationsCount: nearest.length,
+          selectedReportId: reportData?.id || assignment.report_id
+        });
+        
+        // Use setTimeout to ensure state updates are processed
+        setTimeout(() => {
+          setShowRerouteModal(true);
+          console.log('✅ AMap: setShowRerouteModal(true) called');
+        }, 100);
+        } catch (error) {
+          console.error('❌ AMap: Error in global declined assignments listener:', error);
+        }
+      })
+      .subscribe((status, err) => {
+        if (err) {
+          console.error('❌ AMap: Subscription error:', err);
+          Alert.alert('Subscription Error', `Failed to subscribe to assignment updates: ${err.message}`);
+        } else {
+          console.log('✅ AMap: Global declined assignments listener subscribed:', status);
+          if (status === 'SUBSCRIBED') {
+            console.log('✅ AMap: Successfully subscribed to report_assignments updates');
+          } else {
+            console.warn('⚠️ AMap: Subscription status is:', status);
+          }
+        }
+      });
+
+    return () => {
+      console.log('🛑 AMap: Cleaning up global declined assignments listener');
+      supabase.removeChannel(channel);
+    };
+  }, []); // Empty dependencies - listener should always be active
+
+  // Fallback: Poll for declined assignments every 5 seconds (in case real-time fails)
+  useEffect(() => {
+    let pollInterval;
+    
+    const checkForDeclinedAssignments = async () => {
+      try {
+        // Get all declined assignments from the last 5 minutes
+        const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+        
+        const { data: declinedAssignments, error } = await supabase
+          .from('report_assignments')
+          .select('*')
+          .eq('assignee_type', 'station')
+          .eq('status', 'declined')
+          .gte('assigned_at', fiveMinutesAgo)
+          .order('assigned_at', { ascending: false })
+          .limit(10);
+
+        if (error) {
+          console.error('❌ AMap: Error polling declined assignments:', error);
+          return;
+        }
+
+        if (declinedAssignments && declinedAssignments.length > 0) {
+          // Check if we already have a pending assignment for this report
+          const unhandledDecline = declinedAssignments.find(assignment => {
+            // Only handle if we don't already have this in pendingAssignment
+            if (pendingAssignment && String(assignment.report_id) === String(pendingAssignment.reportId)) {
+              return false; // Already handling this
+            }
+            return true;
+          });
+
+          if (unhandledDecline && !showRerouteModal) {
+            console.log('🔍 AMap: Found unhandled declined assignment via polling:', unhandledDecline);
+            // Trigger the same logic as the real-time listener
+            // This will be handled by creating a synthetic event
+            const syntheticPayload = {
+              new: unhandledDecline,
+              old: { status: 'pending' } // Assume it was pending before
+            };
+            
+            // Manually trigger the handler
+            // We'll set a flag to prevent duplicate processing
+            const assignment = unhandledDecline;
+            
+            // Get station name
+            const { data: stationData } = await supabase
+              .from('station_users')
+              .select('station_name')
+              .eq('id', assignment.assignee_id)
+              .single();
+            
+            const stationName = stationData?.station_name || 'Unknown Station';
+            
+            // Get report details
+            const API_URL = 'https://fire-detection-api-production-f55b.up.railway.app';
+            let reportData = null;
+            try {
+              const reportRes = await fetch(`${API_URL}/get_reports`);
+              if (reportRes.ok) {
+                const allReports = await reportRes.json();
+                reportData = allReports.find(r => String(r.id) === String(assignment.report_id));
+              }
+            } catch (err) {
+              console.error('Error fetching report data:', err);
+            }
+            
+            // Set pending assignment
+            setPendingAssignment({
+              reportId: assignment.report_id,
+              stationId: assignment.assignee_id,
+              stationName: stationName
+            });
+            
+            // Get report location
+            const reportLat = reportData ? parseFloat(reportData.latitude) : NaN;
+            const reportLng = reportData ? parseFloat(reportData.longitude) : NaN;
+            const incidentLocation = (!isNaN(reportLat) && !isNaN(reportLng)) 
+              ? { lat: reportLat, lng: reportLng } 
+              : null;
+            
+            // Find nearest stations
+            let nearest = [];
+            if (!isNaN(reportLat) && !isNaN(reportLng)) {
+              nearest = await findNearestStations(reportLat, reportLng, assignment.assignee_id, 5, incidentLocation);
+            }
+            if (nearest.length === 0) {
+              nearest = await findNearestStationsToStation(assignment.assignee_id, assignment.assignee_id, 5, incidentLocation);
+            }
+            if (nearest.length === 0) {
+              const { data: stations } = await supabase
+                .from('station_users')
+                .select('id, station_name, lat, lng')
+                .neq('id', assignment.assignee_id);
+              
+              if (stations && stations.length > 0) {
+                const stationsWithDistance = stations.map(station => {
+                  const stationLat = parseFloat(station.lat);
+                  const stationLng = parseFloat(station.lng);
+                  if (!isNaN(stationLat) && !isNaN(stationLng) && incidentLocation) {
+                    const distanceToIncident = calculateDistance(stationLat, stationLng, incidentLocation.lat, incidentLocation.lng);
+                    return {
+                      ...station,
+                      distanceToIncident: distanceToIncident,
+                      distanceToIncidentKm: (distanceToIncident / 1000).toFixed(2)
+                    };
+                  }
+                  return { ...station, distanceToIncident: null, distanceToIncidentKm: null };
+                }).sort((a, b) => {
+                  if (a.distanceToIncident === null || a.distanceToIncident === Infinity) return 1;
+                  if (b.distanceToIncident === null || b.distanceToIncident === Infinity) return -1;
+                  return a.distanceToIncident - b.distanceToIncident;
+                });
+                nearest = stationsWithDistance;
+              }
+            }
+            
+            setNearestStations(nearest);
+            
+            if (reportData) {
+              setSelectedReport({
+                id: reportData.id,
+                address: reportData.address,
+                geotag_location: reportData.geotag_location,
+                latitude: reportData.latitude,
+                longitude: reportData.longitude,
+                ...reportData
+              });
+            }
+            
+            Alert.alert(
+              '⚠️ Station Declined Assignment',
+              `${stationName} has declined this assignment. Please select a new station to reroute to.`
+            );
+            
+            setTimeout(() => {
+              setShowRerouteModal(true);
+            }, 100);
+          }
+        }
+      } catch (error) {
+        console.error('❌ AMap: Error in polling check:', error);
+      }
+    };
+
+    // Poll every 5 seconds
+    pollInterval = setInterval(checkForDeclinedAssignments, 5000);
+    
+    // Also check immediately
+    checkForDeclinedAssignments();
+
+    return () => {
+      if (pollInterval) {
+        clearInterval(pollInterval);
+      }
+    };
+  }, [pendingAssignment, showRerouteModal]); // Re-check when these change
+
+  // Fetch active incident counts for stations in reroute modal
+  useEffect(() => {
+    if (nearestStations.length > 0 && showRerouteModal) {
+      const fetchActiveCounts = async () => {
+        const counts = {};
+        await Promise.all(
+          nearestStations.map(async (station) => {
+            try {
+              const busyCheck = await checkStationIsBusy(station.id);
+              counts[station.id] = busyCheck.busyCount || 0;
+            } catch (error) {
+              console.error(`Error fetching active count for station ${station.id}:`, error);
+              counts[station.id] = 0;
+            }
+          })
+        );
+        setStationActiveCounts(counts);
+      };
+      fetchActiveCounts();
+    } else {
+      setStationActiveCounts({});
+    }
+  }, [nearestStations, showRerouteModal]);
+
+  // Handle reroute to selected station
+  const handleReroute = async () => {
+    if (!selectedRerouteStation || !pendingAssignment) {
+      Alert.alert('Error', 'Please select a station to reroute to.');
+      return;
+    }
+
+    try {
+      // Remove the declined assignment
+      await supabase
+        .from('report_assignments')
+        .delete()
+        .eq('report_id', pendingAssignment.reportId)
+        .eq('assignee_type', 'station')
+        .eq('assignee_id', pendingAssignment.stationId);
+
+      // Ensure any other existing assignments for this report are also removed to prevent conflicts
+      await supabase
+        .from('report_assignments')
+        .delete()
+        .eq('report_id', pendingAssignment.reportId)
+        .neq('assignee_id', pendingAssignment.stationId); // Delete any other assignments for this report
+
+      // Get new station name
+      const { data: newStationData } = await supabase
+        .from('station_users')
+        .select('station_name')
+        .eq('id', selectedRerouteStation)
+        .single();
+
+      const newStationName = newStationData?.station_name || 'Station';
+
+      // Create new assignment to the selected station (always pending for reroutes)
+      // Use insert instead of upsert to ensure it triggers INSERT listener on station side
+      const payload = {
+        report_id: pendingAssignment.reportId,
+        assignee_type: 'station',
+        assignee_id: selectedRerouteStation,
+        assigned_at: new Date().toISOString(),
+        status: 'pending', // Always require approval for rerouted assignments
+        assignment_source: 'manual',
+        note: `Rerouted from ${pendingAssignment.stationName}`
+      };
+
+      const { error } = await supabase
+        .from('report_assignments')
+        .insert(payload);
+
+      if (error) {
+        // Check if error is due to missing columns (migration not run)
+        if (error.message && (error.message.includes('column') && error.message.includes('does not exist'))) {
+          Alert.alert('Database Migration Required', 'Please run the migration SQL file (assignment-status-migration.sql) in your Supabase SQL Editor first.');
+          return;
+        }
+        throw error;
+      }
+
+      // Update pendingAssignment to track the new station
+      setPendingAssignment({
+        reportId: pendingAssignment.reportId,
+        stationId: selectedRerouteStation,
+        stationName: newStationName
+      });
+
+      // Show waiting modal
+      setShowRerouteModal(false);
+      setShowWaitingApprovalModal(true);
+      setSelectedRerouteStation('');
+      setStationActiveCounts({});
+
+      // Create notification for new station
+      if (selectedReport) {
+        const locationInfo = selectedReport.address || selectedReport.geotag_location || 'Location unavailable';
+        const reporterName = selectedReport.reporter_name || selectedReport.reporter || 'Unknown Reporter';
+        const title = `🚨 Fire Report Rerouted to Your Station - Action Required`;
+        const message = `Command Center is rerouting a fire report to your station.\n\nLocation: ${locationInfo}\nReporter: ${reporterName}\nPrevious station: ${pendingAssignment.stationName}\n\nWill you accept this assignment?`;
+        
+        const { error: notifError } = await supabase
+          .from('notifications')
+          .insert({
+            user_id: selectedRerouteStation,
+            user_type: 'station',
+            type: 'assignment',
+            related_report_id: String(pendingAssignment.reportId),
+            title: title,
+            message: message,
+            priority: 'urgent',
+            is_read: false
+          });
+
+        if (notifError) {
+          console.error('❌ Error creating reroute notification:', notifError);
+        }
+      }
+    } catch (e) {
+      console.error('❌ Reroute failed:', e);
+      Alert.alert('Error', 'Failed to reroute report. Check console.');
+    }
+  };
 
   // Load stations and geocode addresses for markers
   useEffect(() => {
@@ -254,20 +1080,151 @@ export default function AMap({ isSidebarOpen = false }) {
   const handleAssign = async () => {
     try {
       if (!selectedReport || !assigneeId) return;
+
+      // If assigning to a station, check if station is busy
+      if (assigneeType === 'station') {
+        const busyCheck = await checkStationIsBusy(assigneeId);
+        
+        if (busyCheck.isBusy) {
+          // Station is busy - set assignment to pending and show waiting modal
+          // First, delete any existing assignment for this report to avoid conflicts
+          await supabase
+            .from('report_assignments')
+            .delete()
+            .eq('report_id', String(selectedReport.id))
+            .eq('assignee_type', 'station');
+          
+          const payload = {
+            report_id: String(selectedReport.id),
+            assignee_type: assigneeType,
+            assignee_id: assigneeId,
+            assigned_at: new Date().toISOString(),
+            status: 'pending',
+            assignment_source: 'manual',
+            note: assignmentNote && assignmentNote.trim() ? assignmentNote.trim() : null
+          };
+          
+          // Use insert instead of upsert to ensure INSERT listener is triggered
+          const { error } = await supabase
+            .from('report_assignments')
+            .insert(payload);
+          
+          if (error) throw error;
+
+          // Get station name for modal
+          const { data: stationData } = await supabase
+            .from('station_users')
+            .select('station_name')
+            .eq('id', assigneeId)
+            .single();
+
+          setPendingAssignment({
+            reportId: String(selectedReport.id),
+            stationId: assigneeId,
+            stationName: stationData?.station_name || 'Station'
+          });
+          setShowWaitingApprovalModal(true);
+
+          // Create notification for the assigned station
+          const locationInfo = selectedReport.address || selectedReport.geotag_location || 'Location unavailable';
+          const reporterName = selectedReport.reporter_name || selectedReport.reporter || 'Unknown Reporter';
+          const title = `🚨 New Fire Report Assignment - Action Required`;
+          const message = `Command Center is assigning you a report.\n\nLocation: ${locationInfo}\nReporter: ${reporterName}\n\nWill you accept this assignment?`;
+          
+          await supabase
+            .from('notifications')
+            .insert({
+              user_id: assigneeId,
+              user_type: 'station',
+              type: 'assignment',
+              related_report_id: String(selectedReport.id),
+              title: title,
+              message: message,
+              priority: 'urgent',
+              is_read: false
+            });
+
+          setAssignmentNote('');
+          return; // Don't show success alert, modal will handle it
+        }
+      }
+
+      // Station is not busy - auto-accept assignment
+      if (assigneeType === 'station') {
+        // First, delete any existing assignment for this report to avoid conflicts
+        await supabase
+          .from('report_assignments')
+          .delete()
+          .eq('report_id', String(selectedReport.id))
+          .eq('assignee_type', 'station');
+        
+        const payload = {
+          report_id: String(selectedReport.id),
+          assignee_type: assigneeType,
+          assignee_id: assigneeId,
+          assigned_at: new Date().toISOString(),
+          status: 'accepted',
+          assignment_source: 'manual',
+          note: assignmentNote && assignmentNote.trim() ? assignmentNote.trim() : null
+        };
+        
+        // Use insert instead of upsert to ensure INSERT listener is triggered
+        const { error } = await supabase
+          .from('report_assignments')
+          .insert(payload);
+        
+        if (error) throw error;
+
+        // Get station name for success message
+        const { data: stationData } = await supabase
+          .from('station_users')
+          .select('station_name')
+          .eq('id', assigneeId)
+          .single();
+
+        const stationName = stationData?.station_name || 'Station';
+        
+        // Create notification for the assigned station (even though auto-accepted, still notify)
+        const locationInfo = selectedReport.address || selectedReport.geotag_location || 'Location unavailable';
+        const reporterName = selectedReport.reporter_name || selectedReport.reporter || 'Unknown Reporter';
+        const title = `🚨 New Fire Report Assignment`;
+        const message = `You have been assigned a new fire report.\n\nLocation: ${locationInfo}\nReporter: ${reporterName}`;
+        
+        await supabase
+          .from('notifications')
+          .insert({
+            user_id: assigneeId,
+            user_type: 'station',
+            type: 'assignment',
+            related_report_id: String(selectedReport.id),
+            title: title,
+            message: message,
+            priority: 'urgent',
+            is_read: false
+          });
+
+        setAssignmentNote('');
+        Alert.alert('✅ Assignment Successful', `Assignment successfully assigned to ${stationName}.`);
+        return;
+      }
+
+      // For responders, proceed normally
       const payload = {
         report_id: String(selectedReport.id),
         assignee_type: assigneeType,
         assignee_id: assigneeId,
-        assigned_at: new Date().toISOString()
+        assigned_at: new Date().toISOString(),
+        status: 'accepted',
+        assignment_source: 'manual'
       };
+      
       console.log('[Assign-Mobile] assignmentNote=', assignmentNote);
       const { error } = await supabase
         .from('report_assignments')
-        .upsert({ ...payload, note: assignmentNote && assignmentNote.trim() ? assignmentNote.trim() : null }, { onConflict: 'report_id' });
+        .upsert({ ...payload, note: assignmentNote && assignmentNote.trim() ? assignmentNote.trim() : null }, { onConflict: 'report_id,assignee_type,assignee_id' });
       if (error) throw error;
 
       setAssignmentNote('');
-      Alert.alert('Assigned', 'Report assignment saved.');
     } catch (e) {
       console.error('Assign failed (mobile):', e);
       Alert.alert('Error', 'Failed to assign report.');
@@ -521,11 +1478,11 @@ export default function AMap({ isSidebarOpen = false }) {
               </View>
               <View style={{ flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between' }}>
                 {[
-                  { label: 'Fire Out', color: '#60a5fa' },
                   { label: 'First Alarm', color: '#fde68a' },
                   { label: 'Second Alarm', color: '#fed7aa' },
                   { label: 'Third Alarm', color: '#fecaca' },
-                  { label: 'Fifth+ Alarm', color: '#ef4444' },
+                  { label: 'Fourth Alarm', color: '#f87171' },
+                  { label: 'Fifth Alarm', color: '#ef4444' },
                   { label: 'General Alarm', color: '#7f1d1d' },
                 ].map((item) => (
                   <View key={item.label} style={{ width: '48%', backgroundColor: '#f8fafc', borderRadius: 10, paddingVertical: 10, paddingHorizontal: 12, marginBottom: 10, flexDirection: 'row', alignItems: 'center' }}>
@@ -536,31 +1493,67 @@ export default function AMap({ isSidebarOpen = false }) {
               </View>
             </View>
 
-            {/* Recent Reports */}
+            {/* Recent Reports - Styled like web version */}
             <View style={styles.reportsContainer}>
               <Text style={styles.reportsTitle}>Active Fire Reports</Text>
               {reportsLoading ? (
                 <ActivityIndicator size="small" color="#dc2626" />
               ) : fireReports.length > 0 ? (
-                fireReports.slice(0, 5).map((report, index) => (
-                  <TouchableOpacity
-                    key={index}
-                    style={styles.reportItem}
-                    onPress={() => handleMarkerPress(report)}
-                  >
-                    <View style={[styles.reportStatus, { backgroundColor: getMarkerColor(report) }]} />
-                    <View style={styles.reportInfo}>
-                      <Text style={styles.reportId}>Report #{report.id}</Text>
-                      <Text style={styles.reportStatusText}>{getReportStatus(report)}</Text>
-                      <Text style={styles.reportLocation}>
-                        {report.address || report.geotag_location || 'No address'}
-                      </Text>
-                      <Text style={styles.reportTime}>
-                        {formatDate(report.created_at || report.timestamp)}
-                      </Text>
-                    </View>
-                  </TouchableOpacity>
-                ))
+                <ScrollView style={{ maxHeight: 300 }} nestedScrollEnabled={true} showsVerticalScrollIndicator={true}>
+                  {[...fireReports]
+                    .sort((a, b) => {
+                      // Sort by newest first (most recent timestamp at top)
+                      const getTimestamp = (report) => {
+                        if (report.updated_at) return new Date(report.updated_at).getTime();
+                        if (report.created_at) return new Date(report.created_at).getTime();
+                        if (report.timestamp) return new Date(report.timestamp).getTime();
+                        return 0;
+                      };
+                      return getTimestamp(b) - getTimestamp(a);
+                    })
+                    .map((report, index) => {
+                      const status = (report.status || '').toLowerCase();
+                      const alarmLevel = report.final_fire_alarm_level || report.recommended_alarm_level || report.alarm_level || '1st Alarm';
+                      const location = report.address || report.geotag_location || 'Location unavailable';
+                      const timestamp = report.updated_at || report.created_at || report.timestamp;
+                      
+                      return (
+                        <TouchableOpacity
+                          key={`${report.id}-${index}`}
+                          style={styles.styledReportItem}
+                          onPress={() => handleMarkerPress(report)}
+                        >
+                          <View style={styles.styledReportContent}>
+                            <View style={styles.styledReportHeader}>
+                              <MaterialIcons name="location-on" size={16} color="#ef4444" style={{ marginRight: 6 }} />
+                              <Text style={styles.styledReportLocation} numberOfLines={2}>
+                                {location}
+                              </Text>
+                            </View>
+                            <View style={styles.styledReportBadges}>
+                              <View style={[
+                                styles.styledBadge,
+                                status.includes('on going') ? styles.badgeOnGoing : styles.badgeUnderControl
+                              ]}>
+                                <Text style={styles.styledBadgeText}>
+                                  {status.includes('on going') ? 'On Going' : status.includes('under control') ? 'Under Control' : 'Active'}
+                                </Text>
+                              </View>
+                              <View style={[styles.styledBadge, styles.badgeAlarm]}>
+                                <Text style={styles.styledBadgeText}>{alarmLevel}</Text>
+                              </View>
+                            </View>
+                            <View style={styles.styledReportFooter}>
+                              <View style={styles.styledReportDot} />
+                              <Text style={styles.styledReportTime}>
+                                {formatDate(timestamp)}
+                              </Text>
+                            </View>
+                          </View>
+                        </TouchableOpacity>
+                      );
+                    })}
+                </ScrollView>
               ) : (
                 <Text style={styles.noReportsText}>No active fire reports</Text>
               )}
@@ -778,6 +1771,140 @@ export default function AMap({ isSidebarOpen = false }) {
           </View>
         </View>
       </Modal>
+
+      {/* Waiting for Station Approval Modal */}
+      <Modal
+        visible={showWaitingApprovalModal}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={() => {
+          setShowWaitingApprovalModal(false);
+          setPendingAssignment(null);
+        }}
+      >
+        <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center', padding: 20 }}>
+          <View style={{ backgroundColor: 'white', borderRadius: 16, padding: 24, width: '100%', maxWidth: 400 }}>
+            <View style={{ alignItems: 'center', marginBottom: 16 }}>
+              <View style={{ backgroundColor: '#dbeafe', borderRadius: 50, padding: 12 }}>
+                <MaterialIcons name="schedule" size={32} color="#2563eb" />
+              </View>
+            </View>
+            <Text style={{ fontSize: 24, fontWeight: 'bold', color: '#111827', textAlign: 'center', marginBottom: 8 }}>
+              Waiting for Station Approval
+            </Text>
+            <Text style={{ fontSize: 16, color: '#6b7280', textAlign: 'center', marginBottom: 24 }}>
+              The assignment has been sent to <Text style={{ fontWeight: '600' }}>{pendingAssignment?.stationName}</Text>. 
+              Please wait for their response.
+            </Text>
+            <TouchableOpacity
+              onPress={() => {
+                setShowWaitingApprovalModal(false);
+                setPendingAssignment(null);
+              }}
+              style={{ backgroundColor: '#2563eb', paddingVertical: 12, borderRadius: 8, alignItems: 'center' }}
+            >
+              <Text style={{ color: 'white', fontWeight: 'bold', fontSize: 16 }}>Okay</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Reroute Modal - Station Too Busy */}
+      <Modal
+        visible={showRerouteModal}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={() => {
+          setShowRerouteModal(false);
+          setSelectedRerouteStation('');
+          setPendingAssignment(null);
+        }}
+      >
+        <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center', padding: 20 }}>
+          <View style={{ backgroundColor: 'white', borderRadius: 16, padding: 24, width: '100%', maxWidth: 500, maxHeight: '80%' }}>
+            <View style={{ alignItems: 'center', marginBottom: 16 }}>
+              <View style={{ backgroundColor: '#fed7aa', borderRadius: 50, padding: 12 }}>
+                <MaterialIcons name="warning" size={32} color="#ea580c" />
+              </View>
+            </View>
+            <Text style={{ fontSize: 24, fontWeight: 'bold', color: '#111827', textAlign: 'center', marginBottom: 8 }}>
+              Station Declined Assignment
+            </Text>
+            <Text style={{ fontSize: 16, color: '#6b7280', textAlign: 'center', marginBottom: 16 }}>
+              <Text style={{ fontWeight: '600' }}>{pendingAssignment?.stationName}</Text> has declined this assignment and is unable to handle this report. 
+              Please reroute the incident to one of the nearest stations:
+            </Text>
+            {selectedReport && (
+              <View style={{ backgroundColor: '#dbeafe', borderLeftWidth: 4, borderLeftColor: '#2563eb', padding: 12, borderRadius: 8, marginBottom: 16 }}>
+                <Text style={{ fontSize: 14, color: '#1e40af', fontWeight: '600', marginBottom: 4 }}>Report Location:</Text>
+                <Text style={{ fontSize: 14, color: '#1e3a8a' }}>
+                  {selectedReport.address || selectedReport.geotag_location || 'Location unavailable'}
+                </Text>
+              </View>
+            )}
+            
+            <ScrollView style={{ maxHeight: 300, marginBottom: 24 }}>
+              {nearestStations.length > 0 ? (
+                nearestStations.map((station) => (
+                  <TouchableOpacity
+                    key={station.id}
+                    onPress={() => setSelectedRerouteStation(station.id)}
+                    style={{
+                      flexDirection: 'row',
+                      alignItems: 'center',
+                      padding: 12,
+                      borderRadius: 8,
+                      marginBottom: 8,
+                      borderWidth: 2,
+                      borderColor: selectedRerouteStation === station.id ? '#2563eb' : '#e5e7eb',
+                      backgroundColor: selectedRerouteStation === station.id ? '#eff6ff' : '#f9fafb'
+                    }}
+                  >
+                    <View style={{ width: 20, height: 20, borderRadius: 10, borderWidth: 2, borderColor: selectedRerouteStation === station.id ? '#2563eb' : '#9ca3af', backgroundColor: selectedRerouteStation === station.id ? '#2563eb' : 'transparent', marginRight: 12 }} />
+                    <View style={{ flex: 1 }}>
+                      <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 4 }}>
+                        <Text style={{ fontWeight: '600', color: '#111827', fontSize: 16 }}>
+                          {station.station_name || 'Station'}
+                        </Text>
+                        {stationActiveCounts[station.id] > 0 && (
+                          <View style={{ marginLeft: 8, backgroundColor: '#f59e0b', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 12, minWidth: 28, alignItems: 'center', justifyContent: 'center' }}>
+                            <Text style={{ fontSize: 12, fontWeight: '700', color: '#ffffff' }}>
+                              {stationActiveCounts[station.id]}
+                            </Text>
+                          </View>
+                        )}
+                      </View>
+                      <Text style={{ color: '#6b7280', fontSize: 14 }}>
+                        {station.distanceToIncidentKm 
+                          ? `${station.distanceToIncidentKm} km from incident` 
+                          : station.distanceKm 
+                            ? `${station.distanceKm} km away` 
+                            : 'Distance unavailable (no coordinates)'}
+                      </Text>
+                    </View>
+                  </TouchableOpacity>
+                ))
+              ) : (
+                <Text style={{ color: '#6b7280', textAlign: 'center', padding: 20 }}>No stations available.</Text>
+              )}
+            </ScrollView>
+
+            <TouchableOpacity
+              onPress={handleReroute}
+              disabled={!selectedRerouteStation}
+              style={{ 
+                width: '100%',
+                backgroundColor: selectedRerouteStation ? '#ea580c' : '#d1d5db', 
+                paddingVertical: 12, 
+                borderRadius: 8, 
+                alignItems: 'center' 
+              }}
+            >
+              <Text style={{ color: 'white', fontWeight: 'bold', fontSize: 16 }}>Reroute</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -964,6 +2091,81 @@ const styles = StyleSheet.create({
     color: '#666',
     textAlign: 'center',
     paddingVertical: 20,
+  },
+  // Styled report items (like web version)
+  styledReportItem: {
+    backgroundColor: '#ffffff',
+    borderRadius: 8,
+    padding: 12,
+    marginBottom: 8,
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 2,
+    elevation: 1,
+  },
+  styledReportContent: {
+    flex: 1,
+  },
+  styledReportHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    marginBottom: 8,
+  },
+  styledReportLocation: {
+    flex: 1,
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#111827',
+    lineHeight: 20,
+  },
+  styledReportBadges: {
+    flexDirection: 'row',
+    gap: 6,
+    marginBottom: 8,
+  },
+  styledBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 6,
+  },
+  badgeOnGoing: {
+    backgroundColor: '#fee2e2',
+    borderWidth: 1,
+    borderColor: '#fecaca',
+  },
+  badgeUnderControl: {
+    backgroundColor: '#dbeafe',
+    borderWidth: 1,
+    borderColor: '#bfdbfe',
+  },
+  badgeAlarm: {
+    backgroundColor: '#fef3c7',
+    borderWidth: 1,
+    borderColor: '#fde68a',
+  },
+  styledBadgeText: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#111827',
+  },
+  styledReportFooter: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 4,
+  },
+  styledReportDot: {
+    width: 4,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: '#9ca3af',
+    marginRight: 6,
+  },
+  styledReportTime: {
+    fontSize: 12,
+    color: '#6b7280',
   },
   fabContainer: {
     position: 'absolute',

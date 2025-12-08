@@ -108,11 +108,12 @@ export default function ANotifications({ onUnreadCountChange }) {
     
     try {
       setLoading(true);
+      // Query for admin notifications - either matching currentAdminId OR user_id='admin' (for system-wide admin notifications)
       const { data, error } = await supabase
         .from('notifications')
         .select('*')
-        .eq('user_id', currentAdminId)
         .eq('user_type', 'admin')
+        .or(`user_id.eq.${currentAdminId},user_id.eq.admin`)
         .order('created_at', { ascending: false });
 
       if (error) {
@@ -148,7 +149,9 @@ export default function ANotifications({ onUnreadCountChange }) {
         console.log('📱 User ID match:', payload.new?.user_id, '===', currentAdminId);
         console.log('📱 User type:', payload.new?.user_type);
         
-        if (payload.new?.user_id === currentAdminId && payload.new?.user_type === 'admin') {
+        // Check if this notification is for the current admin (either specific ID or 'admin' for all admins)
+        if (payload.new?.user_type === 'admin' && 
+            (payload.new?.user_id === currentAdminId || payload.new?.user_id === 'admin')) {
           console.log('✅ This notification is for current admin - sending push notification');
           
           // Send local push notification for ALL notification types
@@ -272,14 +275,14 @@ export default function ANotifications({ onUnreadCountChange }) {
       case 'fire_alert':
       case 'emergency':
         return { name: 'emergency', color: '#ef4444', bg: '#fef2f2' };
+      case 'assignment':
+        return { name: 'warning', color: '#f59e0b', bg: '#fef3c7' }; // Orange/warning for assignment declines
       case 'system':
       case 'info':
         return { name: 'build', color: '#3b82f6', bg: '#eff6ff' };
       case 'user_action':
       case 'new_registration':
         return { name: 'people', color: '#8b5cf6', bg: '#f3f4f6' };
-      case 'assignment':
-        return { name: 'assignment', color: '#10b981', bg: '#f0fdf4' };
       default:
         return { name: 'notifications', color: '#6b7280', bg: '#f9fafb' };
     }

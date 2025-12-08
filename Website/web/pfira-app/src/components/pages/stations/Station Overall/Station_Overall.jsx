@@ -98,13 +98,18 @@ const Station_Overview = () => {
         setCurrentStationId(stationId || null);
         if (!stationId) { setReports([]); return; }
         
-        // Fetch assigned reports for this station directly
+        // Fetch assigned reports for this station directly (exclude declined)
         const { data: stationAssignments, error: stationErr } = await supabase
           .from('report_assignments')
-          .select('report_id')
+          .select('report_id, status')
           .eq('assignee_type', 'station')
           .eq('assignee_id', stationId);
         if (stationErr) throw stationErr;
+        
+        // Filter out declined assignments
+        const activeAssignments = (stationAssignments || []).filter(
+          a => !a.status || a.status !== 'declined'
+        );
 
         // Fetch responders for this station, then their assigned reports
         const { data: stationResponders, error: respErr } = await supabase
@@ -182,9 +187,9 @@ const Station_Overview = () => {
           });
         });
         
-        // Combine both
+        // Combine both (use filtered activeAssignments)
         const assignedIds = new Set([
-          ...((stationAssignments || []).map(a => String(a.report_id))),
+          ...((activeAssignments || []).map(a => String(a.report_id))),
           ...((responderAssignments || []).map(a => String(a.report_id)))
         ]);
         const forwardedIds = new Set((forwarded||[]).map(f=>String(f.report_id)));
@@ -235,7 +240,31 @@ const Station_Overview = () => {
       } finally { setIsLoading(false); }
     };
     load();
-  }, []);
+    
+    // Real-time listener for assignment status changes (to remove declined reports)
+    if (currentStationId) {
+      const channel = supabase
+        .channel(`station-assignments-${currentStationId}`)
+        .on('postgres_changes', {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'report_assignments',
+          filter: `assignee_type=eq.station&assignee_id=eq.${currentStationId}`
+        }, (payload) => {
+          const assignment = payload.new;
+          // If assignment was declined, remove it from the list
+          if (assignment.status === 'declined') {
+            setReports(prev => prev.filter(r => String(r.id) !== String(assignment.report_id)));
+            console.log('🗑️ Removed declined report from list:', assignment.report_id);
+          }
+        })
+        .subscribe();
+      
+      return () => {
+        supabase.removeChannel(channel);
+      };
+    }
+  }, [currentStationId]);
 
   // Load AI suggestions from messages table to override suggested alarm level
   // Optimized: Only query messages for reports assigned to this station or its responders

@@ -1,10 +1,11 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, ActivityIndicator, Dimensions, StatusBar, Platform, StyleSheet, Modal, TouchableOpacity, Image, ScrollView } from 'react-native';
+import { View, Text, ActivityIndicator, Dimensions, StatusBar, Platform, StyleSheet, Modal, TouchableOpacity, Image, ScrollView, Alert } from 'react-native';
 import MapView, { Marker, PROVIDER_GOOGLE, Circle, Callout } from 'react-native-maps';
 import { LinearGradient } from 'expo-linear-gradient';
 import { MaterialIcons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { supabase } from '../../../config/supabase';
+import { checkStationIsBusy, handleAssignmentResponse, requestForwarding } from '../../../utils/assignmentHelpers';
 
 export default function SMap({ reportIdToOpen, onReportOpened }) {
   const [isLoading, setIsLoading] = useState(true);
@@ -17,6 +18,9 @@ export default function SMap({ reportIdToOpen, onReportOpened }) {
   const [showReportModal, setShowReportModal] = useState(false);
   const [currentStationId, setCurrentStationId] = useState(null);
   const [assignmentInfo, setAssignmentInfo] = useState(null); // Store assignment info including note
+  const [showAcceptanceModal, setShowAcceptanceModal] = useState(false);
+  const [showForwardingRequestModal, setShowForwardingRequestModal] = useState(false);
+  const [pendingAssignmentData, setPendingAssignmentData] = useState(null);
 
   // Helper function to clean alarm level text
   const cleanAlarmLevel = (alarmLevel) => {
@@ -478,6 +482,149 @@ export default function SMap({ reportIdToOpen, onReportOpened }) {
     })();
   }, []);
 
+  // Real-time listener for new assignments
+  useEffect(() => {
+    if (!currentStationId) return;
+
+    const channel = supabase
+      .channel(`station-assignments-mobile-${currentStationId}`)
+      .on('postgres_changes', { 
+        event: 'INSERT', 
+        schema: 'public', 
+        table: 'report_assignments' 
+      }, async (payload) => {
+        try {
+          const row = payload?.new;
+          if (!row) return;
+          if (row.assignee_type === 'station' && String(row.assignee_id) === String(currentStationId)) {
+            // Fetch report data
+            const response = await fetch('https://fire-detection-api-production-f55b.up.railway.app/get_reports');
+            const reports = response.ok ? await response.json() : [];
+            const reportData = reports.find(r => String(r.id) === String(row.report_id));
+
+            // Check if assignment is pending (needs approval)
+            if (row.status === 'pending') {
+              // Check if station is busy
+              const busyCheck = await checkStationIsBusy(currentStationId);
+              
+              if (row.assignment_source === 'manual') {
+                // Admin assigned - show acceptance modal
+                setPendingAssignmentData({
+                  reportId: row.report_id,
+                  assignmentSource: 'manual',
+                  reportData: reportData,
+                  assignmentId: row.id
+                });
+                setShowAcceptanceModal(true);
+              } else if (row.assignment_source === 'automatic' && busyCheck.isBusy) {
+                // Auto-assigned and station is busy - show forwarding request modal
+                setPendingAssignmentData({
+                  reportId: row.report_id,
+                  assignmentSource: 'automatic',
+                  reportData: reportData,
+                  assignmentId: row.id,
+                  busyCount: busyCheck.busyCount
+                });
+                setShowForwardingRequestModal(true);
+              } else {
+                // Auto-assigned and station not busy - auto-accept
+                await handleAssignmentResponse(row.report_id, currentStationId, 'accepted');
+              }
+            }
+          }
+        } catch (e) {
+          console.error('❌ Station mobile: RT assignment handler error:', e);
+        }
+      })
+      .on('postgres_changes', { 
+        event: 'UPDATE', 
+        schema: 'public', 
+        table: 'report_assignments',
+        filter: `assignee_type=eq.station&assignee_id=eq.${currentStationId}`
+      }, async (payload) => {
+        try {
+          const row = payload?.new;
+          const oldRow = payload?.old;
+          if (!row) return;
+          if (row.assignee_type === 'station' && String(row.assignee_id) === String(currentStationId)) {
+            // Handle assignments that become pending (e.g., rerouted assignments)
+            // Check if status changed to pending (was not pending before, or is a new assignment to this station)
+            const wasPending = oldRow?.status === 'pending';
+            const isNowPending = row.status === 'pending';
+            
+            if (isNowPending && !wasPending) {
+              // Fetch report data
+              const response = await fetch('https://fire-detection-api-production-f55b.up.railway.app/get_reports');
+              const reports = response.ok ? await response.json() : [];
+              const reportData = reports.find(r => String(r.id) === String(row.report_id));
+
+              // Check if station is busy
+              const busyCheck = await checkStationIsBusy(currentStationId);
+              
+              if (row.assignment_source === 'manual') {
+                // Admin assigned (including rerouted) - show acceptance modal
+                setPendingAssignmentData({
+                  reportId: row.report_id,
+                  assignmentSource: 'manual',
+                  reportData: reportData,
+                  assignmentId: row.id
+                });
+                setShowAcceptanceModal(true);
+              } else if (row.assignment_source === 'automatic' && busyCheck.isBusy) {
+                // Auto-assigned and station is busy - show forwarding request modal
+                setPendingAssignmentData({
+                  reportId: row.report_id,
+                  assignmentSource: 'automatic',
+                  reportData: reportData,
+                  assignmentId: row.id,
+                  busyCount: busyCheck.busyCount
+                });
+                setShowForwardingRequestModal(true);
+              } else {
+                // Auto-assigned and station not busy - auto-accept
+                await handleAssignmentResponse(row.report_id, currentStationId, 'accepted');
+              }
+            }
+            
+            // If assignment was declined, remove it from the map immediately
+            if (row.status === 'declined' && 
+                row.assignee_type === 'station' && 
+                String(row.assignee_id) === String(currentStationId)) {
+              console.log('🗑️ Assignment declined, removing report from map:', row.report_id);
+              setAssignedReports(prev => prev.filter(r => String(r.id) !== String(row.report_id)));
+              
+              // Mark the related notification as read to stop alarm
+              try {
+                await supabase
+                  .from('notifications')
+                  .update({ is_read: true })
+                  .eq('user_id', currentStationId)
+                  .eq('user_type', 'station')
+                  .eq('type', 'assignment')
+                  .eq('related_report_id', String(row.report_id))
+                  .eq('is_read', false);
+              } catch (notifError) {
+                console.error('Error marking notification as read:', notifError);
+              }
+              
+              // Close info window if this report is currently selected
+              if (selectedReport && String(selectedReport.id) === String(row.report_id)) {
+                setSelectedReport(null);
+                setShowReportModal(false);
+              }
+            }
+          }
+        } catch (e) {
+          console.error('❌ Station mobile: RT assignment update handler error:', e);
+        }
+      })
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [currentStationId, selectedReport]);
+
   if (isLoading) {
     return (
       <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
@@ -925,6 +1072,183 @@ export default function SMap({ reportIdToOpen, onReportOpened }) {
           </View>
         </View>
       </Modal>
+
+        {/* Assignment Acceptance Modal */}
+        <Modal
+          visible={showAcceptanceModal}
+          transparent={true}
+          animationType="fade"
+          onRequestClose={() => setShowAcceptanceModal(false)}
+        >
+          <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center', padding: 20 }}>
+            <View style={{ backgroundColor: 'white', borderRadius: 16, padding: 24, width: '100%', maxWidth: 400 }}>
+              <View style={{ alignItems: 'center', marginBottom: 16 }}>
+                <View style={{ backgroundColor: '#dbeafe', borderRadius: 50, padding: 12 }}>
+                  <MaterialIcons name="assignment" size={32} color="#2563eb" />
+                </View>
+              </View>
+              <Text style={{ fontSize: 24, fontWeight: 'bold', color: '#111827', textAlign: 'center', marginBottom: 8 }}>
+                Assignment Request
+              </Text>
+              <Text style={{ fontSize: 16, color: '#6b7280', textAlign: 'center', marginBottom: 24 }}>
+                Command Center is assigning you a report <Text style={{ fontWeight: '600' }}>
+                  {pendingAssignmentData?.reportData?.address || pendingAssignmentData?.reportData?.geotag_location || 'at a location'}
+                </Text>. Will you accept this assignment?
+              </Text>
+              <View style={{ flexDirection: 'row', gap: 12 }}>
+                <TouchableOpacity
+                  onPress={async () => {
+                    try {
+                      const result = await handleAssignmentResponse(
+                        pendingAssignmentData.reportId,
+                        currentStationId,
+                        'declined'
+                      );
+                      if (result.success) {
+                        // Mark the related notification as read to stop alarm
+                        try {
+                          await supabase
+                            .from('notifications')
+                            .update({ is_read: true })
+                            .eq('user_id', currentStationId)
+                            .eq('user_type', 'station')
+                            .eq('type', 'assignment')
+                            .eq('related_report_id', String(pendingAssignmentData.reportId))
+                            .eq('is_read', false);
+                        } catch (notifError) {
+                          console.error('Error marking notification as read:', notifError);
+                        }
+                        
+                        setShowAcceptanceModal(false);
+                        setPendingAssignmentData(null);
+                      } else {
+                        Alert.alert('Error', result.error || 'Failed to decline assignment. Please try again.');
+                      }
+                    } catch (error) {
+                      console.error('Error declining assignment:', error);
+                      Alert.alert('Error', 'An error occurred. Please try again.');
+                    }
+                  }}
+                  style={{ flex: 1, backgroundColor: '#ef4444', paddingVertical: 12, borderRadius: 12, alignItems: 'center', shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.1, shadowRadius: 4, elevation: 3 }}
+                >
+                  <Text style={{ color: 'white', fontWeight: 'bold', fontSize: 16 }}>No</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  onPress={async () => {
+                    try {
+                      const result = await handleAssignmentResponse(
+                        pendingAssignmentData.reportId,
+                        currentStationId,
+                        'accepted'
+                      );
+                      if (result.success) {
+                        setShowAcceptanceModal(false);
+                        setPendingAssignmentData(null);
+                        Alert.alert('✅ Accepted', 'Assignment accepted successfully!');
+                      } else {
+                        Alert.alert('Error', result.error || 'Failed to accept assignment. Please try again.');
+                      }
+                    } catch (error) {
+                      console.error('Error accepting assignment:', error);
+                      Alert.alert('Error', 'An error occurred. Please try again.');
+                    }
+                  }}
+                  style={{ flex: 1, backgroundColor: '#2563eb', paddingVertical: 12, borderRadius: 12, alignItems: 'center', shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.1, shadowRadius: 4, elevation: 3 }}
+                >
+                  <Text style={{ color: 'white', fontWeight: 'bold', fontSize: 16 }}>Yes</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          </View>
+        </Modal>
+
+        {/* Forwarding Request Modal */}
+        <Modal
+          visible={showForwardingRequestModal}
+          transparent={true}
+          animationType="fade"
+          onRequestClose={() => setShowForwardingRequestModal(false)}
+        >
+          <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center', padding: 20 }}>
+            <View style={{ backgroundColor: 'white', borderRadius: 16, padding: 24, width: '100%', maxWidth: 400 }}>
+              <View style={{ alignItems: 'center', marginBottom: 16 }}>
+                <View style={{ backgroundColor: '#fed7aa', borderRadius: 50, padding: 12 }}>
+                  <MaterialIcons name="warning" size={32} color="#ea580c" />
+                </View>
+              </View>
+              <Text style={{ fontSize: 24, fontWeight: 'bold', color: '#111827', textAlign: 'center', marginBottom: 8 }}>
+                Request Forwarding?
+              </Text>
+              <Text style={{ fontSize: 16, color: '#6b7280', textAlign: 'center', marginBottom: 24 }}>
+                You are currently handling <Text style={{ fontWeight: '600' }}>{pendingAssignmentData?.busyCount || 0} other incident(s)</Text>. 
+                Would you like to request admin for forwarding of this report to another station?
+              </Text>
+              <View style={{ flexDirection: 'row', gap: 12 }}>
+                <TouchableOpacity
+                  onPress={async () => {
+                    try {
+                      await handleAssignmentResponse(
+                        pendingAssignmentData.reportId,
+                        currentStationId,
+                        'accepted'
+                      );
+                    } catch (error) {
+                      console.error('Error accepting assignment:', error);
+                    }
+                    setShowForwardingRequestModal(false);
+                    setPendingAssignmentData(null);
+                  }}
+                  style={{ flex: 1, backgroundColor: '#e5e7eb', paddingVertical: 12, borderRadius: 12, alignItems: 'center', shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.1, shadowRadius: 4, elevation: 3 }}
+                >
+                  <Text style={{ color: '#374151', fontWeight: 'bold', fontSize: 16 }}>No</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  onPress={async () => {
+                    try {
+                      const result = await requestForwarding(pendingAssignmentData.reportId, currentStationId);
+                      if (result.success) {
+                        const declineResult = await handleAssignmentResponse(
+                          pendingAssignmentData.reportId,
+                          currentStationId,
+                          'declined'
+                        );
+                        if (declineResult.success) {
+                          // Mark the related notification as read to stop alarm
+                          try {
+                            await supabase
+                              .from('notifications')
+                              .update({ is_read: true })
+                              .eq('user_id', currentStationId)
+                              .eq('user_type', 'station')
+                              .eq('type', 'assignment')
+                              .eq('related_report_id', String(pendingAssignmentData.reportId))
+                              .eq('is_read', false);
+                          } catch (notifError) {
+                            console.error('Error marking notification as read:', notifError);
+                          }
+                          
+                          setShowForwardingRequestModal(false);
+                          setPendingAssignmentData(null);
+                          Alert.alert('✅ Request Sent', 'Forwarding request sent to admin. They will reroute the incident to another station.');
+                        } else {
+                          Alert.alert('Error', declineResult.error || 'Failed to decline assignment. Please try again.');
+                        }
+                      } else {
+                        Alert.alert('Error', result.error || 'Failed to send forwarding request. Please try again.');
+                      }
+                    } catch (error) {
+                      console.error('Error requesting forwarding:', error);
+                      Alert.alert('Error', 'An error occurred. Please try again.');
+                    }
+                  }}
+                  style={{ flex: 1, backgroundColor: '#2563eb', paddingVertical: 12, borderRadius: 12, alignItems: 'center', shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.1, shadowRadius: 4, elevation: 3 }}
+                >
+                  <Text style={{ color: 'white', fontWeight: 'bold', fontSize: 16 }}>Yes</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          </View>
+        </Modal>
       </View>
     </View>
   );
