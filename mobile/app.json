@@ -13,6 +13,11 @@
       "bundleIdentifier": "com.fira.mobile",
       "config": {
         "googleMapsApiKey": "AIzaSyDv-FC2CTEpLuVAlXCHMtu4XqAEPNtOjos"
+      },
+      "infoPlist": {
+        "NSCameraUsageDescription": "This app requires camera access to take photos of fire incidents for emergency reporting.",
+        "NSPhotoLibraryUsageDescription": "This app requires photo library access to select photos of fire incidents for emergency reporting.",
+        "NSPhotoLibraryAddUsageDescription": "This app requires permission to save photos to your photo library."
       }
     },
     "android": {
@@ -57,6 +62,13 @@
           "icon": "./assets/images/mobilelogo.png",
           "color": "#ff512f",
           "sounds": []
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "This app requires photo library access to select photos of fire incidents for emergency reporting.",
+          "cameraPermission": "This app requires camera access to take photos of fire incidents for emergency reporting."
         }
       ]
     ],

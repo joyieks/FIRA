@@ -1542,8 +1542,8 @@ const Sdashboard = () => {
                   {(selectedAssignedReport.prediction || selectedAssignedReport.confidence) && (
                     <p><strong>AI Fire Detection:</strong> <span className={`ml-1 px-2 py-1 rounded text-xs font-semibold ${selectedAssignedReport.prediction === 'Fire' ? 'bg-red-100 text-red-800' : 'bg-orange-100 text-orange-800'}`}>{selectedAssignedReport.prediction || 'Unknown'}{selectedAssignedReport.confidence ? ` (${selectedAssignedReport.confidence})` : ''}</span></p>
                   )}
-                  {(selectedAssignedReport.smoke_intensity || selectedAssignedReport.smoke_confidence) && (
-                    <p><strong>Smoke Analysis:</strong> {selectedAssignedReport.smoke_intensity || '—'} {selectedAssignedReport.smoke_confidence || ''}</p>
+                  {(selectedAssignedReport.smoke_detection || selectedAssignedReport.smoke_confidence) && (
+                    <p><strong>Smoke Analysis:</strong> {selectedAssignedReport.smoke_detection || '—'} {selectedAssignedReport.smoke_confidence ? `(${selectedAssignedReport.smoke_confidence})` : ''}</p>
                   )}
                   {selectedAssignedReport.structure && (
                     <p><strong>Structure:</strong> {selectedAssignedReport.structure}{selectedAssignedReport.structure_confidence ? ` (${selectedAssignedReport.structure_confidence})` : ''}</p>

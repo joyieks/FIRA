@@ -734,7 +734,7 @@ export default function SMap({ reportIdToOpen, onReportOpened }) {
           const color = getMarkerColor(r);
           const alarmText = toStr(formatAlarm(r));
           const aiText = toStr(formatPrediction(r));
-          const smokeText = r?.smoke_intensity ? toStr(`${r.smoke_intensity}${r.smoke_confidence ? ` ${r.smoke_confidence}` : ''}`) : null;
+          const smokeText = r?.smoke_detection ? toStr(`${r.smoke_detection}${r.smoke_confidence ? ` (${r.smoke_confidence})` : ''}`) : null;
           const structuresText = r?.number_of_structures_on_fire != null ? toStr(r.number_of_structures_on_fire) : null;
           const locText = toStr(r?.address || r?.geotag_location || 'Not specified', 'Not specified');
           const repText = toStr(r?.formatted_timestamp || r?.timestamp);
@@ -1005,7 +1005,7 @@ export default function SMap({ reportIdToOpen, onReportOpened }) {
                   )}
 
                   {/* AI Analysis Section */}
-                  {(selectedReport.prediction || selectedReport.structure || selectedReport.smoke_intensity || formatAlarm(selectedReport)) && (
+                  {(selectedReport.prediction || selectedReport.structure || selectedReport.smoke_detection || formatAlarm(selectedReport)) && (
                     <View style={{ marginBottom: 20 }}>
                       <Text style={{ color: '#6b7280', fontSize: 11, fontWeight: '600', textTransform: 'uppercase', marginBottom: 12, letterSpacing: 1 }}>AI Analysis</Text>
                       <View style={{ borderRadius: 16, padding: 16, backgroundColor: 'rgba(59, 130, 246, 0.05)' }}>
@@ -1020,7 +1020,7 @@ export default function SMap({ reportIdToOpen, onReportOpened }) {
                                 </Text>
                               </View>
                             </View>
-                            {(selectedReport.structure || selectedReport.smoke_intensity || formatAlarm(selectedReport)) && <View style={{ height: 1, marginBottom: 12, backgroundColor: 'rgba(59, 130, 246, 0.2)' }} />}
+                            {(selectedReport.structure || selectedReport.smoke_detection || formatAlarm(selectedReport)) && <View style={{ height: 1, marginBottom: 12, backgroundColor: 'rgba(59, 130, 246, 0.2)' }} />}
                           </>
                         )}
                         {selectedReport.structure && (
@@ -1044,7 +1044,7 @@ export default function SMap({ reportIdToOpen, onReportOpened }) {
                               <View style={{ flex: 1, marginLeft: 12 }}>
                                 <Text style={{ color: '#6b7280', fontSize: 11, marginBottom: 4 }}>Smoke Intensity</Text>
                                 <Text style={{ color: '#1f2937', fontWeight: '600', fontSize: 16 }}>
-                                  {toStr(`${selectedReport.smoke_intensity}${selectedReport.smoke_confidence ? ` ${selectedReport.smoke_confidence}` : ''}`)}
+                                  {toStr(`${selectedReport.smoke_detection}${selectedReport.smoke_confidence ? ` (${selectedReport.smoke_confidence})` : ''}`)}
                                 </Text>
                               </View>
                             </View>

@@ -1403,7 +1403,7 @@ export default function AOverview() {
                       <View style={{ width: '48%', marginBottom: 12 }}>
                         <Text style={{ fontSize: 14, fontWeight: '600', color: '#1e40af', marginBottom: 4 }}>Smoke Intensity:</Text>
                         <Text style={{ fontSize: 16, fontWeight: '700', color: '#1e40af' }}>
-                          {selectedReport.smoke_intensity || 'Unknown'} {selectedReport.smoke_confidence ? `(${selectedReport.smoke_confidence})` : ''}
+                          {selectedReport.smoke_detection || 'Unknown'} {selectedReport.smoke_confidence ? `(${selectedReport.smoke_confidence})` : ''}
                         </Text>
                       </View>
                       <View style={{ width: '48%', marginBottom: 12 }}>

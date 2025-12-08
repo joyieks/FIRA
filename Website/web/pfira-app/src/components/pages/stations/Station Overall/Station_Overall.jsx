@@ -218,7 +218,7 @@ const Station_Overview = () => {
             prediction: r.prediction,
             confidence: r.confidence,
             structure: r.structure,
-            smokeIntensity: r.smoke_intensity,
+            smokeDetection: r.smoke_detection,
             smokeConfidence: r.smoke_confidence,
             numberOfStructures: cleanStructuresValue(r.number_of_structures_on_fire),
             timestamp: r.created_at || r.timestamp,

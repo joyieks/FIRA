@@ -98,7 +98,7 @@ const Overview = () => {
         prediction: report.prediction,
         confidence: report.confidence,
         structure: report.structure,
-        smokeIntensity: report.smoke_intensity,
+        smokeDetection: report.smoke_detection,
         smokeConfidence: report.smoke_confidence,
         numberOfStructures: cleanStructuresValue(report.number_of_structures_on_fire),
         reporterId: report.reporterId,
@@ -1449,7 +1449,7 @@ const Overview = () => {
                       <div>
                         <label className="block text-sm font-medium text-blue-700 mb-2">Smoke Intensity:</label>
                         <span className="text-lg font-semibold text-blue-900">
-                          {selectedReport.smokeIntensity} ({selectedReport.smokeConfidence})
+                          {selectedReport.smokeDetection} {selectedReport.smokeConfidence ? `(${selectedReport.smokeConfidence})` : ''}
                         </span>
                       </div>
                       <div>

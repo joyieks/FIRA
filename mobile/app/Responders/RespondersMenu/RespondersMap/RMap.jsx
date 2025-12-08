@@ -1802,8 +1802,8 @@ export default function RMap({ routingInfo }) {
               <View style={styles.modalFieldContainer}>
                 <Text style={styles.modalFieldLabel}>Smoke Analysis</Text>
                 <Text style={styles.modalFieldValue}>
-                  {toStr(selectedReport?.smoke_intensity || '')} {toStr(selectedReport?.smoke_confidence || '')}
-                  {!selectedReport?.smoke_intensity && !selectedReport?.smoke_confidence && 'Not analyzed'}
+                  {toStr(selectedReport?.smoke_detection || '')} {toStr(selectedReport?.smoke_confidence ? `(${selectedReport.smoke_confidence})` : '')}
+                  {!selectedReport?.smoke_detection && !selectedReport?.smoke_confidence && 'Not analyzed'}
                 </Text>
               </View>
               

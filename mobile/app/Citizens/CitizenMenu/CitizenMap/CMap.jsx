@@ -1349,7 +1349,7 @@ export default function CMap({ reportIdToFocus, setReportIdToFocus }) {
                   )}
 
                   {/* AI Analysis Section */}
-                  {(selectedReport.prediction || selectedReport.structure || selectedReport.smoke_intensity || selectedReport.alarm_level) && (
+                  {(selectedReport.prediction || selectedReport.structure || selectedReport.smoke_detection || selectedReport.alarm_level) && (
                     <View className="mb-5">
                       <Text className="text-gray-500 text-xs font-semibold uppercase mb-3 tracking-wider">AI Analysis</Text>
                       <View className="rounded-2xl p-4" style={{ backgroundColor: 'rgba(59, 130, 246, 0.05)' }}>
@@ -1364,7 +1364,7 @@ export default function CMap({ reportIdToFocus, setReportIdToFocus }) {
                                 </Text>
                               </View>
                             </View>
-                            {(selectedReport.structure || selectedReport.smoke_intensity || selectedReport.alarm_level) && <View className="h-px mb-3" style={{ backgroundColor: 'rgba(59, 130, 246, 0.2)' }} />}
+                            {(selectedReport.structure || selectedReport.smoke_detection || selectedReport.alarm_level) && <View className="h-px mb-3" style={{ backgroundColor: 'rgba(59, 130, 246, 0.2)' }} />}
                           </>
                         )}
                         {selectedReport.structure && (
@@ -1389,7 +1389,7 @@ export default function CMap({ reportIdToFocus, setReportIdToFocus }) {
                               <View className="flex-1 ml-3">
                                 <Text className="text-gray-500 text-xs mb-1">Smoke Intensity</Text>
                                 <Text className="text-gray-800 font-semibold text-base">
-                                  {selectedReport.smoke_intensity} {selectedReport.smoke_confidence ? `(${selectedReport.smoke_confidence})` : ''}
+                                  {selectedReport.smoke_detection} {selectedReport.smoke_confidence ? `(${selectedReport.smoke_confidence})` : ''}
                                 </Text>
                               </View>
                             </View>

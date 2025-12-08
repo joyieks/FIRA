@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { View, Text, ScrollView, TouchableOpacity, Image, Modal, Alert, TextInput, RefreshControl, Animated } from 'react-native';
+import { View, Text, ScrollView, TouchableOpacity, Image, Modal, Alert, TextInput, RefreshControl, Animated, Platform, Linking } from 'react-native';
 import MapView, { Marker, PROVIDER_GOOGLE } from 'react-native-maps';
 import { MaterialIcons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
@@ -1662,7 +1662,30 @@ const CStatus = () => {
     return status === 'granted';
   };
 
-  const handleImagePicker = () => {
+  const handleImagePicker = async () => {
+    // Check if permissions are already granted on iOS
+    if (Platform.OS === 'ios') {
+      const cameraStatus = await ImagePicker.getCameraPermissionsAsync();
+      const mediaStatus = await ImagePicker.getMediaLibraryPermissionsAsync();
+      
+      // If neither permission is granted, request them
+      if (cameraStatus.status !== 'granted' && mediaStatus.status !== 'granted') {
+        const cameraRequest = await ImagePicker.requestCameraPermissionsAsync();
+        const mediaRequest = await ImagePicker.requestMediaLibraryPermissionsAsync();
+        
+        if (cameraRequest.status !== 'granted' && mediaRequest.status !== 'granted') {
+          Alert.alert(
+            'Permissions Required',
+            'Please enable camera or photo library access in Settings to upload images.',
+            [
+              { text: 'Cancel', style: 'cancel' },
+              { text: 'Open Settings', onPress: () => Linking.openSettings() }
+            ]
+          );
+          return;
+        }
+      }
+    }
     setShowImagePickerModal(true);
   };
 
@@ -1953,7 +1976,7 @@ const CStatus = () => {
         image: data?.image_url ? { uri: data.image_url } : data?.photo_url ? { uri: data.photo_url } : { uri: emergencyData.image },
         location: data?.geotag_location || currentLocation,
         progress: data?.prediction === 'Fire' ? 'On Going' : 'Under Control',
-        description: `Emergency reported: ${emergencyData.cause}\nPrediction: ${data?.prediction} (${data?.confidence})\nStructure: ${data?.structure} (${data?.structure_confidence || 'N/A'})\nSmoke: ${data?.smoke_intensity} (${data?.smoke_confidence})\nAlarm: ${data?.alarm_level}`,
+        description: `Emergency reported: ${emergencyData.cause}\nPrediction: ${data?.prediction} (${data?.confidence})\nStructure: ${data?.structure} (${data?.structure_confidence || 'N/A'})\nSmoke: ${data?.smoke_detection} (${data?.smoke_confidence})\nAlarm: ${data?.alarm_level}`,
         reporter: userName,
         reporterId: currentUser.uid,
         timestamp: 'Just now',
@@ -3511,7 +3534,7 @@ const CStatus = () => {
                   )}
 
                   {/* AI Analysis Section */}
-                  {(selectedReport.prediction || selectedReport.structure || selectedReport.smoke_intensity || selectedReport.alarm_level) && (
+                  {(selectedReport.prediction || selectedReport.structure || selectedReport.smoke_detection || selectedReport.alarm_level) && (
                     <View className="mb-5">
                       <Text className="text-gray-500 text-xs font-semibold uppercase mb-3 tracking-wider">AI Analysis</Text>
                       <View className="rounded-2xl p-4" style={{ backgroundColor: 'rgba(59, 130, 246, 0.05)' }}>
@@ -3526,7 +3549,7 @@ const CStatus = () => {
                                 </Text>
                               </View>
                             </View>
-                            {(selectedReport.structure || selectedReport.smoke_intensity || selectedReport.alarm_level) && <View className="h-px mb-3" style={{ backgroundColor: 'rgba(59, 130, 246, 0.2)' }} />}
+                            {(selectedReport.structure || selectedReport.smoke_detection || selectedReport.alarm_level) && <View className="h-px mb-3" style={{ backgroundColor: 'rgba(59, 130, 246, 0.2)' }} />}
                           </>
                         )}
                         {selectedReport.structure && (
@@ -3551,7 +3574,7 @@ const CStatus = () => {
                               <View className="flex-1 ml-3">
                                 <Text className="text-gray-500 text-xs mb-1">Smoke Intensity</Text>
                                 <Text className="text-gray-800 font-semibold text-base">
-                                  {selectedReport.smoke_intensity} {selectedReport.smoke_confidence ? `(${selectedReport.smoke_confidence})` : ''}
+                                  {selectedReport.smoke_detection} {selectedReport.smoke_confidence ? `(${selectedReport.smoke_confidence})` : ''}
                                 </Text>
                               </View>
                             </View>

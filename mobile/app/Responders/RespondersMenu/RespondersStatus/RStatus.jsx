@@ -143,9 +143,9 @@ export default function RStatus({ onNavigateToMap }) {
     const alarmLevel = cleanAlarmLevel(rawAlarmLevel);
     
     const aiDetection = (fireReport.prediction ? `${fireReport.prediction}` : 'Not analyzed') + (fireReport.confidence ? ` (${fireReport.confidence})` : '');
-    const smokeIntensity = fireReport.smoke_intensity || fireReport.smoke_level || '';
+    const smokeDetection = fireReport.smoke_detection || fireReport.smoke_level || '';
     const smokeConfidence = fireReport.smoke_confidence || fireReport.smoke_analysis || '';
-    const smokeAnalysisFromAPI = `${smokeIntensity} ${smokeConfidence}`.trim() || 'Not analyzed';
+    const smokeAnalysisFromAPI = `${smokeDetection} ${smokeConfidence}`.trim() || 'Not analyzed';
     const structureFromAPI = fireReport.structure || fireReport.structure_type || fireReport.building_type || fireReport.property_type || 'Unknown';
     let structuresAffectedFromAPI = fireReport.number_of_structures_on_fire || fireReport.structures_affected || fireReport.affected_structures || fireReport.building_count || fireReport.property_count || 'Unknown';
     if (typeof structuresAffectedFromAPI === 'number') {

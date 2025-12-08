@@ -366,7 +366,7 @@ export async function notifyRespondersOnStatusChange(reportId, newStatus, oldSta
 📊 AI Detection: ${toStr(aiDetection, 'Not analyzed')}
 👤 Reporter: ${reporter}
 📝 Cause: ${cause}
-💨 Smoke Analysis: ${reportData?.smoke_intensity ? toStr(`${reportData.smoke_intensity}${reportData.smoke_confidence ? ` ${reportData.smoke_confidence}` : ''}`) : 'Not analyzed'}
+💨 Smoke Analysis: ${reportData?.smoke_detection ? toStr(`${reportData.smoke_detection}${reportData.smoke_confidence ? ` (${reportData.smoke_confidence})` : ''}`) : 'Not analyzed'}
 🏠 Structure: ${structure}
 🏘️ Structures Affected: ${structuresAffected}
 ⏰ Reported: ${timestamp}
@@ -533,7 +533,7 @@ export async function notifyRespondersOnAlarmChange(reportId, newAlarmLevel, old
 📊 AI Detection: ${toStr(aiDetection, 'Not analyzed')}
 👤 Reporter: ${reporter}
 📝 Cause: ${cause}
-💨 Smoke Analysis: ${reportData?.smoke_intensity ? toStr(`${reportData.smoke_intensity}${reportData.smoke_confidence ? ` ${reportData.smoke_confidence}` : ''}`) : 'Not analyzed'}
+💨 Smoke Analysis: ${reportData?.smoke_detection ? toStr(`${reportData.smoke_detection}${reportData.smoke_confidence ? ` (${reportData.smoke_confidence})` : ''}`) : 'Not analyzed'}
 🏠 Structure: ${structure}
 🏘️ Structures Affected: ${structuresAffected}
 ⏰ Reported: ${timestamp}
