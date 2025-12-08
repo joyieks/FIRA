@@ -61,7 +61,7 @@ const Navbar = () => {
     <nav className="bg-white shadow-md w-full z-10 sticky top-0 left-0 text-gray-800">
       <div className="w-full pl-30 pr-2 py-3 flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <img src="/finalogo.png" alt="Project FIRA" className="w-10 h-10" />
+          <img src="/finalogo.jpg" alt="Project FIRA" className="w-10 h-10" />
           <button onClick={() => scrollToId('home')} className="font-bold text-red-700 hover:text-amber-600">
             Project FIRA
           </button>
