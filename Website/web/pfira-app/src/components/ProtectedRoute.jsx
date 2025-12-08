@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 
-const ProtectedRoute = ({ children, requiredUserType = null }) => {
+const ProtectedRoute = ({ children, allowedRoles = [] }) => {
   const navigate = useNavigate();
   const location = useLocation();
   const [isAuthenticated, setIsAuthenticated] = useState(false);
@@ -9,55 +9,65 @@ const ProtectedRoute = ({ children, requiredUserType = null }) => {
 
   useEffect(() => {
     const checkAuth = () => {
-      const authToken = sessionStorage.getItem('authToken') || localStorage.getItem('authToken');
-      const userType = sessionStorage.getItem('userType') || localStorage.getItem('userType');
-      const loginTime = sessionStorage.getItem('loginTime') || localStorage.getItem('loginTime');
+      const authToken = localStorage.getItem('authToken');
+      const userType = localStorage.getItem('userType');
+      const loginTime = localStorage.getItem('loginTime');
+
+      console.log('🔒 RBAC Check:', { authToken: !!authToken, userType, allowedRoles, path: location.pathname });
 
       // Check if user is authenticated
       if (!authToken || !userType || !loginTime) {
-        // No authentication data found
-        sessionStorage.clear();
-        localStorage.clear(); // Clear any remaining data
+        console.log('❌ RBAC: No authentication found');
+        localStorage.removeItem('authToken');
+        localStorage.removeItem('userType');
+        localStorage.removeItem('loginTime');
+        localStorage.removeItem('userData');
         navigate('/login', { 
           state: { 
             error: 'Please log in to access this page',
             from: location.pathname 
-          } 
+          },
+          replace: true
         });
         return;
       }
 
-      // Check if login time is within 24 hours (optional session timeout)
+      // Check if login time is within 24 hours (session timeout)
       const loginTimestamp = parseInt(loginTime);
       const currentTime = Date.now();
       const sessionTimeout = 24 * 60 * 60 * 1000; // 24 hours in milliseconds
       
       if (currentTime - loginTimestamp > sessionTimeout) {
-        // Session expired
-        localStorage.clear();
+        console.log('❌ RBAC: Session expired');
+        localStorage.removeItem('authToken');
+        localStorage.removeItem('userType');
+        localStorage.removeItem('loginTime');
+        localStorage.removeItem('userData');
         navigate('/login', { 
           state: { 
             error: 'Session expired. Please log in again.',
             from: location.pathname 
-          } 
+          },
+          replace: true
         });
         return;
       }
 
-      // Check if user type matches required type (if specified)
-      if (requiredUserType && userType !== requiredUserType) {
-        // User type doesn't match required type
-        localStorage.clear();
+      // Check if user role is allowed for this route
+      if (allowedRoles.length > 0 && !allowedRoles.includes(userType)) {
+        console.log(`❌ RBAC: Access Denied - User type "${userType}" not in allowed roles:`, allowedRoles);
         navigate('/login', { 
           state: { 
-            error: 'Access denied. You do not have permission to access this page.',
+            error: `Access Denied: You are logged in as "${userType}". This page requires "${allowedRoles.join(' or ')}" role. Please log in with the correct account.`,
             from: location.pathname 
-          } 
+          },
+          replace: true
         });
         return;
       }
 
-      // Authentication successful
+      // Authentication and authorization successful
+      console.log(`✅ RBAC: Access Granted - User "${userType}" authorized`);
       setIsAuthenticated(true);
       setIsLoading(false);
     };

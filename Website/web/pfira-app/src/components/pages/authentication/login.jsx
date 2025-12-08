@@ -149,10 +149,10 @@ const Login = () => {
           userType: 'station'
         };
 
-        sessionStorage.setItem('authToken', `station_${stationCheck.docId}`);
-        sessionStorage.setItem('userType', 'station');
-        sessionStorage.setItem('loginTime', Date.now().toString());
-        sessionStorage.setItem('userData', JSON.stringify(userData));
+        localStorage.setItem('authToken', user.id);
+        localStorage.setItem('userType', 'station');
+        localStorage.setItem('loginTime', Date.now().toString());
+        localStorage.setItem('userData', JSON.stringify(userData));
 
         console.log('🎯 Navigating to station dashboard...');
         navigate('/station-dashboard');
@@ -170,10 +170,10 @@ const Login = () => {
           userType: 'responder'
         };
 
-        sessionStorage.setItem('authToken', `responder_${responderCheck.docId}`);
-        sessionStorage.setItem('userType', 'responder');
-        sessionStorage.setItem('loginTime', Date.now().toString());
-        sessionStorage.setItem('userData', JSON.stringify(userData));
+        localStorage.setItem('authToken', user.id);
+        localStorage.setItem('userType', 'responder');
+        localStorage.setItem('loginTime', Date.now().toString());
+        localStorage.setItem('userData', JSON.stringify(userData));
 
         console.log('🎯 Navigating to responder dashboard...');
         navigate('/responder-dashboard');

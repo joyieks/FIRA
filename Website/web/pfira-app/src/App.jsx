@@ -20,7 +20,7 @@ import Station_Profile from './components/pages/stations/SAccount/Station_Profil
 import Station_Setting from './components/pages/stations/SAccount/Station_Setting.jsx';
 import Station_ChangePass from './components/pages/stations/SAccount/Station_ChangePass.jsx';
 import Sfira_chat from './components/pages/stations/Station Chat/Sfira_chat.jsx';
-// import ProtectedRoute from './components/ProtectedRoute.jsx'; // Temporarily disabled for testing
+import ProtectedRoute from './components/ProtectedRoute.jsx';
 import ForgotPassword from './components/pages/Forgot Password/forgotpassword.jsx';
 import { NotificationProvider } from './contexts/NotificationContext.jsx';
 import { Routes, Route } from 'react-router-dom'
@@ -31,23 +31,29 @@ const App = () => {
       <Route path="/login" element={<Login />} />
       <Route path="/forgot-password" element={<ForgotPassword />} />
 
-      {/* Full-screen map routes */}
+      {/* Full-screen map routes - Protected by role */}
       <Route path="/admin-map" element={
-        <NotificationProvider>
-          <Adashboard />
-        </NotificationProvider>
+        <ProtectedRoute allowedRoles={['admin']}>
+          <NotificationProvider>
+            <Adashboard />
+          </NotificationProvider>
+        </ProtectedRoute>
       } />
       <Route path="/station-map" element={
-        <NotificationProvider>
-          <Sdashboard />
-        </NotificationProvider>
+        <ProtectedRoute allowedRoles={['station']}>
+          <NotificationProvider>
+            <Sdashboard />
+          </NotificationProvider>
+        </ProtectedRoute>
       } />
 
-      {/* Admin routes without protection */}
+      {/* Admin routes - Protected, admin role only */}
       <Route path="/admin-dashboard" element={
-        <NotificationProvider>
-          <AdminLayout />
-        </NotificationProvider>
+        <ProtectedRoute allowedRoles={['admin']}>
+          <NotificationProvider>
+            <AdminLayout />
+          </NotificationProvider>
+        </ProtectedRoute>
       }>
         <Route index element={<Adashboard />} />
         <Route path="overall" element={<Overview />} />
@@ -58,11 +64,13 @@ const App = () => {
         <Route path="settings" element={<Settings />} />
       </Route>
 
-      {/* Station routes without protection */}
+      {/* Station routes - Protected, station role only */}
       <Route path="/station-dashboard" element={
-        <NotificationProvider>
-          <StationLayout />
-        </NotificationProvider>
+        <ProtectedRoute allowedRoles={['station']}>
+          <NotificationProvider>
+            <StationLayout />
+          </NotificationProvider>
+        </ProtectedRoute>
       }>
         <Route index element={<Sdashboard />} />
         <Route path="overall" element={<Station_Overview />} />
