@@ -360,25 +360,28 @@ const StationLayout = ({ children }) => {
   return (
     <div className="flex h-screen bg-gray-100">
       {/* Sidebar */}
-      <div className={`${sidebarOpen ? 'w-64' : 'w-20'} bg-red-700 text-white transition-all duration-300 ease-in-out`}>
-        <div className="flex items-center justify-between p-4 border-b border-red-800">
+      <div className={`${sidebarOpen ? 'w-72' : 'w-20'} bg-red-700 text-white transition-all duration-300 ease-in-out shadow-2xl`}>
+        <div className="flex items-center justify-between p-6 border-b border-red-800">
           {sidebarOpen ? (
             <div className="flex flex-col">
-              <h1 className="text-lg font-bold text-white truncate max-w-48">
-                {stationData.station_name}
+              <h1 className="text-xl font-bold text-white tracking-wide uppercase">
+                STATION CONTROL
               </h1>
-              <p className="text-xs text-red-100 truncate max-w-48">
+              <p className="text-xs text-red-100 mt-1 font-medium">
+                {stationData.station_name}
+              </p>
+              <p className="text-xs text-red-200 truncate max-w-48">
                 {stationData.email}
               </p>
             </div>
           ) : (
             null
           )}
-          <button onClick={toggleSidebar} className="text-white hover:text-blue-200">
-            {sidebarOpen ? <FiX size={24} /> : <FiMenu size={24} />}
+          <button onClick={toggleSidebar} className="text-white hover:bg-red-800 p-2 rounded-lg transition-colors duration-200">
+            {sidebarOpen ? <FiX size={22} /> : <FiMenu size={22} />}
           </button>
         </div>
-        <nav className="mt-6">
+        <nav className="mt-8 px-3">
           <SidebarItem icon={<FaMapLocationDot size={20} />} text="Map Dashboard" to="/station-dashboard" active={location.pathname === '/station-dashboard'} collapsed={!sidebarOpen} />
           <SidebarItem icon={<GrOverview size={20} />} text="Overview" to="/station-dashboard/overall" active={location.pathname === '/station-dashboard/overall'} collapsed={!sidebarOpen} />
           <SidebarItem 
@@ -412,37 +415,38 @@ const StationLayout = ({ children }) => {
             <div className="flex items-center space-x-4">
               {/* Notifications */}
               <div className="relative" ref={notificationsRef}>
-                <button 
+                <button
                   onClick={toggleNotifications}
-                  className="relative p-2 text-gray-400 hover:text-gray-600 focus:outline-none"
+                  className="relative p-2 text-gray-600 hover:bg-gray-100 rounded-lg focus:outline-none transition-colors duration-200"
                 >
-                  <FiBell size={20} />
+                  <FiBell size={22} />
                   {unreadCount > 0 && (
-                    <span className="absolute -top-1 -right-1 bg-red-500 text-white text-xs rounded-full h-5 w-5 flex items-center justify-center">
+                    <span className="absolute -top-1 -right-1 bg-red-600 text-white text-xs font-bold rounded-full h-5 w-5 flex items-center justify-center shadow-md animate-pulse">
                       {unreadCount > 9 ? '9+' : unreadCount}
                     </span>
                   )}
                 </button>
                 {notificationsOpen && (
-                  <div className="absolute right-0 mt-2 w-80 bg-white rounded-md shadow-lg py-1 z-20 max-h-96 overflow-y-auto">
-                    <div className="px-4 py-2 border-b border-gray-200">
-                      <h3 className="text-sm font-medium text-gray-900">Notifications</h3>
+                  <div className="absolute right-0 mt-3 w-96 bg-white rounded-xl shadow-2xl border border-gray-200 overflow-hidden z-20">
+                    <div className="px-5 py-4 bg-gradient-to-r from-red-700 to-red-800 border-b border-red-900">
+                      <h3 className="text-base font-semibold text-white">Notifications</h3>
                       {unreadCount > 0 && (
-                        <p className="text-xs text-gray-500">{unreadCount} unread</p>
+                        <p className="text-xs text-red-100 mt-0.5">{unreadCount} unread message{unreadCount > 1 ? 's' : ''}</p>
                       )}
                     </div>
                     {notifications.length === 0 ? (
-                      <div className="px-4 py-8 text-center text-gray-500">
-                        <FiBell className="mx-auto h-8 w-8 text-gray-400 mb-2" />
-                        <p className="text-sm">No notifications</p>
+                      <div className="px-6 py-12 text-center text-gray-500">
+                        <FiBell className="mx-auto h-12 w-12 text-gray-300 mb-3" />
+                        <p className="text-sm font-medium">No notifications</p>
+                        <p className="text-xs text-gray-400 mt-1">You're all caught up!</p>
                       </div>
                     ) : (
-                      <div className="max-h-64 overflow-y-auto">
+                      <div className="max-h-80 overflow-y-auto divide-y divide-gray-100">
                         {notifications.slice(0, 5).map((notification) => (
                           <div
                             key={notification.id}
-                            className={`px-4 py-3 hover:bg-gray-50 cursor-pointer ${
-                              !notification.is_read ? 'bg-blue-50' : ''
+                            className={`px-5 py-4 hover:bg-red-50 cursor-pointer transition-colors duration-150 ${
+                              !notification.is_read ? 'bg-orange-50 border-l-4 border-l-red-600' : 'border-l-4 border-l-transparent'
                             }`}
                             onClick={() => {
                               setNotificationsOpen(false);
@@ -457,23 +461,23 @@ const StationLayout = ({ children }) => {
                             }}
                           >
                             <div className="flex items-start space-x-3">
-                              <div className="flex-shrink-0">
-                                <FiBell className="h-4 w-4 text-gray-400" />
+                              <div className="flex-shrink-0 mt-0.5">
+                                <span className="text-2xl">🔥</span>
                               </div>
                               <div className="flex-1 min-w-0">
-                                <p className="text-sm font-medium text-gray-900 truncate">
+                                <p className="text-sm font-semibold text-gray-900 truncate">
                                   {notification.title}
                                 </p>
-                                <p className="text-xs text-gray-500 truncate">
+                                <p className="text-sm text-gray-600 truncate mt-0.5">
                                   {notification.message}
                                 </p>
-                                <p className="text-xs text-gray-400 mt-1">
+                                <p className="text-xs text-gray-400 mt-1.5">
                                   {formatDate(notification.created_at)}
                                 </p>
                               </div>
                               {!notification.is_read && (
                                 <div className="flex-shrink-0">
-                                  <div className="h-2 w-2 bg-red-500 rounded-full"></div>
+                                  <div className="h-2.5 w-2.5 bg-red-600 rounded-full shadow-sm"></div>
                                 </div>
                               )}
                             </div>
@@ -482,13 +486,16 @@ const StationLayout = ({ children }) => {
                       </div>
                     )}
                     {notifications.length > 5 && (
-                      <div className="px-4 py-2 border-t border-gray-200">
+                      <div className="px-5 py-3 bg-gray-50 border-t border-gray-200">
                         <Link
                           to="/station-dashboard/notification"
-                          className="text-sm text-red-600 hover:text-red-800 font-medium"
+                          className="text-sm text-red-600 hover:text-red-800 font-semibold flex items-center justify-center group"
                           onClick={() => setNotificationsOpen(false)}
                         >
                           View all notifications
+                          <svg className="w-4 h-4 ml-1 group-hover:translate-x-1 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                          </svg>
                         </Link>
                       </div>
                     )}
@@ -499,28 +506,39 @@ const StationLayout = ({ children }) => {
               <div className="relative" ref={profileRef}>
                 <button 
                   onClick={toggleProfile}
-                  className="flex items-center space-x-2 focus:outline-none"
+                  className="flex items-center space-x-3 focus:outline-none hover:bg-gray-100 px-3 py-2 rounded-lg transition-colors duration-200"
                 >
-                  <div className="w-8 h-8 bg-red-700 rounded-full flex items-center justify-center text-white">
-                    <FiUser size={16} />
+                  <div className="w-10 h-10 bg-red-700 rounded-full flex items-center justify-center text-white shadow-md hover:bg-red-800 transition-colors duration-200">
+                    <FiUser size={18} />
                   </div>
-                  {sidebarOpen && <span className="text-gray-700 truncate max-w-32">{stationData.station_name}</span>}
+                  {sidebarOpen && <span className="text-gray-800 font-medium truncate max-w-32">{stationData.station_name}</span>}
                 </button>
                 {profileOpen && (
-                  <div className="absolute right-0 mt-2 w-48 bg-white rounded-md shadow-lg py-1 z-20">
-                    <Link to="/station-dashboard/profile" className="block px-4 py-2 text-sm text-gray-700 hover:bg-red-600 hover:text-amber-50 flex items-center">
-                      <FiUser className="mr-2" /> Profile
-                    </Link>
-                    <Link to="/station-dashboard/settings" className="block px-4 py-2 text-sm text-gray-700 hover:bg-red-600 hover:text-amber-50 flex items-center">
-                      <FiSettings className="mr-2" /> Settings
-                    </Link>
+                  <div className="absolute right-0 mt-3 w-64 bg-white rounded-xl shadow-2xl border border-gray-200 overflow-hidden z-20">
+                    <div className="px-4 py-3 bg-gradient-to-r from-red-700 to-red-800 border-b border-red-900">
+                      <p className="text-white font-semibold text-sm truncate">{stationData.station_name}</p>
+                      <p className="text-red-100 text-xs mt-0.5 truncate">{stationData.email}</p>
+                    </div>
+                    <div className="py-2">
+                      <Link to="/station-dashboard/profile" className="flex items-center px-4 py-3 text-sm text-gray-700 hover:bg-red-50 hover:text-red-700 transition-colors duration-150 group">
+                        <FiUser className="mr-3 text-gray-400 group-hover:text-red-600" size={18} /> 
+                        <span className="font-medium">Profile</span>
+                      </Link>
+                      <Link to="/station-dashboard/settings" className="flex items-center px-4 py-3 text-sm text-gray-700 hover:bg-red-50 hover:text-red-700 transition-colors duration-150 group">
+                        <FiSettings className="mr-3 text-gray-400 group-hover:text-red-600" size={18} /> 
+                        <span className="font-medium">Settings</span>
+                      </Link>
+                    </div>
                     <div className="border-t border-gray-200"></div>
-                    <button 
-                      onClick={handleLogout}
-                      className="block w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-red-600 hover:text-amber-50 flex items-center"
-                    >
-                      <FiLogOut className="mr-2" /> Logout
-                    </button>
+                    <div className="py-2">
+                      <button 
+                        onClick={handleLogout}
+                        className="w-full flex items-center px-4 py-3 text-sm text-red-600 hover:bg-red-50 transition-colors duration-150 group"
+                      >
+                        <FiLogOut className="mr-3 group-hover:text-red-700" size={18} /> 
+                        <span className="font-medium">Logout</span>
+                      </button>
+                    </div>
                   </div>
                 )}
               </div>
@@ -544,18 +562,18 @@ const SidebarItem = ({ icon, text, to = '#', active = false, collapsed, badge = 
   return (
     <Link 
       to={to}
-      className={`flex items-center px-4 py-3 ${active ? 'bg-white text-red-700' : 'hover:bg-white hover:text-red-700 '} transition-colors duration-200 relative`}>
-      <span className={active ? 'text-red-700' : ' hover:text-red-700'}>
+      className={`flex items-center px-4 py-4 mb-2 rounded-lg group ${active ? 'bg-white text-red-700 shadow-lg' : 'hover:bg-red-800 hover:shadow-md'} transition-all duration-200 relative`}>
+      <span className={`${active ? 'text-red-700' : 'text-white group-hover:text-white'}`}>
         {icon}
       </span>
-      {!collapsed && <span className="ml-3">{text}</span>}
+      {!collapsed && <span className="ml-4 font-medium tracking-wide uppercase text-sm">{text}</span>}
       {badge && !collapsed && (
-        <span className="ml-auto bg-red-500 text-white text-xs rounded-full h-5 w-5 flex items-center justify-center">
+        <span className="ml-auto bg-yellow-400 text-red-900 text-xs font-bold rounded-full h-6 w-6 flex items-center justify-center shadow-md">
           {badge > 9 ? '9+' : badge}
         </span>
       )}
       {badge && collapsed && (
-        <span className="absolute -top-1 -right-1 bg-red-500 text-white text-xs rounded-full h-4 w-4 flex items-center justify-center">
+        <span className="absolute -top-1 -right-1 bg-yellow-400 text-red-900 text-xs font-bold rounded-full h-5 w-5 flex items-center justify-center shadow-md">
           {badge > 9 ? '9+' : badge}
         </span>
       )}
