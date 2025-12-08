@@ -39,21 +39,81 @@ const Overview = () => {
   const [statusFilter, setStatusFilter] = useState('all');
   const [alarmLevelFilter, setAlarmLevelFilter] = useState('all');
   const [timeRangeFilter, setTimeRangeFilter] = useState('all');
+  const [fallbackUsed, setFallbackUsed] = useState(false);
+  const [fetchError, setFetchError] = useState(null);
 
   // API endpoint for fetching reports
   const API_URL = 'https://fire-detection-api-production-f55b.up.railway.app';
 
-  // Fetch reports from Railway API
+  // Fallback: fetch reports directly from Supabase fire_reports when Railway API is down/slow
+  const fetchReportsFallback = async () => {
+    try {
+      console.warn('Using Supabase fallback for reports...');
+      setFallbackUsed(true);
+      const { data, error } = await supabase
+        .from('fire_reports')
+        .select('*')
+        .order('created_at', { ascending: false })
+        .limit(200);
+      if (error) {
+        console.error('Supabase fallback error:', error);
+        setFetchError('Unable to load reports (Railway API timeout and Supabase fallback failed).');
+        setReports([]);
+        return;
+      }
+      const transformed = (data || []).map((report) => {
+        const aiOverride = chatAlarmByReport[String(report.id)];
+        const suggested = aiOverride || report.recommended_alarm_level || report.alarm_level || determineSuggestedAlarm(report.number_of_structures_on_fire);
+        return {
+          id: report.id,
+          time: formatTime(report.formatted_timestamp || report.created_at || report.timestamp),
+          reporter: report.reporter || 'Unknown Reporter',
+          location: report.address || report.geotag_location || 'Location unavailable',
+          status: report.status || determineStatus(report.prediction),
+          suggestedAlarmLevel: suggested,
+          finalAlarmLevel: report.final_fire_alarm_level || report.alarm_level || '1st Alarm',
+          description: report.cause_of_fire || 'No cause specified',
+          picture: report.image_url,
+          minutesAgo: calculateMinutesAgo(report.created_at || report.timestamp),
+          prediction: report.prediction,
+          confidence: report.confidence,
+          structure: report.structure,
+          smokeIntensity: report.smoke_intensity,
+          smokeConfidence: report.smoke_confidence,
+          numberOfStructures: cleanStructuresValue(report.number_of_structures_on_fire),
+          reporterId: report.reporterId,
+          timestamp: report.created_at || report.timestamp,
+          latitude: report.latitude,
+          longitude: report.longitude,
+          address: report.address,
+          geotag_location: report.geotag_location,
+          cancelled_by: report.cancelled_by,
+          cancellation_reason: report.cancellation_reason
+        };
+      });
+      setReports(transformed);
+      setLastRefresh(new Date());
+      setFetchError('Loaded via Supabase fallback because Railway API was unavailable.');
+    } catch (err) {
+      console.error('Unexpected fallback error:', err);
+      setFetchError('Unable to load reports (Railway API timeout and fallback failed).');
+      setReports([]);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  // Fetch reports from Railway API (with timeout and fallback)
   const fetchReports = async () => {
+    setFetchError(null);
+    setFallbackUsed(false);
     try {
       setIsLoading(true);
       console.log('Fetching reports from Railway API...');
       
-      // Add timeout to prevent infinite loading
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
       
-      // Fetch from Railway API
       const response = await fetch(`${API_URL}/get_reports`, {
         signal: controller.signal
       });
@@ -62,8 +122,7 @@ const Overview = () => {
       
       if (!response.ok) {
         console.error('Railway API error:', response.status, response.statusText);
-        setReports([]);
-        setIsLoading(false);
+        await fetchReportsFallback();
         return;
       }
       
@@ -79,7 +138,6 @@ const Overview = () => {
         return;
       }
       
-      // Transform Railway API data to match the expected format
       const transformedReports = data.map(report => {
         const aiOverride = chatAlarmByReport[String(report.id)];
         const suggested = aiOverride || report.recommended_alarm_level || report.alarm_level || determineSuggestedAlarm(report.number_of_structures_on_fire);
@@ -123,8 +181,9 @@ const Overview = () => {
       } else {
         console.error('Error loading reports:', error);
       }
-      setReports([]);
+      await fetchReportsFallback();
     } finally {
+      // fetchReportsFallback handles isLoading when called; ensure we clear it if we never hit fallback
       setIsLoading(false);
     }
   };  
@@ -1149,6 +1208,13 @@ const Overview = () => {
             </div>
           )}
         </div>
+
+        {/* Error / Fallback banner */}
+        {fetchError && (
+          <div className="bg-yellow-50 border border-yellow-200 text-yellow-800 rounded-lg px-4 py-3 mb-4 text-sm">
+            {fetchError}
+          </div>
+        )}
 
         {/* Loading State */}
         {isLoading && (

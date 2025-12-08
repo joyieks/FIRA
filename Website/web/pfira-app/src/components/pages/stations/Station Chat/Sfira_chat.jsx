@@ -33,6 +33,7 @@ const Sfira_chat = () => {
   const [isUploadingImage, setIsUploadingImage] = useState(false);
   const [activeIncidentId, setActiveIncidentId] = useState(null);
   const [ongoingIncidents, setOngoingIncidents] = useState([]);
+  const [incidentMenuOpen, setIncidentMenuOpen] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [refreshUnreadTick, setRefreshUnreadTick] = useState(0); // bump to refetch unread
 
@@ -299,22 +300,88 @@ const Sfira_chat = () => {
     fetchUsers();
   }, [currentStationId]);
 
-  // Fetch ongoing incidents for dropdown selection
+  // Fetch ongoing incidents assigned to this station for dropdown selection
   useEffect(() => {
     const fetchIncidents = async () => {
+      if (!currentStationId) return;
       try {
-        // Expecting an incidents table or reports endpoint mirrored into Supabase as 'fire_reports'
-        const { data, error } = await supabase
+        // Grab assignments where this station is the assignee (exclude declined)
+        // Avoid type mismatch by filtering assignee_id in JS using string compare
+        const { data: assignments, error: assignErr } = await supabase
+          .from('report_assignments')
+          .select('report_id, status, assignee_id')
+          .eq('assignee_type', 'station');
+        if (assignErr) return;
+
+        const allowedReportIds = (assignments || [])
+          .filter((a) => String(a.assignee_id) === String(currentStationId))
+          .filter((a) => !a.status || a.status !== 'declined')
+          .map((a) => a.report_id)
+          .filter(Boolean);
+
+        if (allowedReportIds.length === 0) {
+          setOngoingIncidents([]);
+          setActiveIncidentId(null);
+          return;
+        }
+
+        const allowedSet = new Set(allowedReportIds.map((r) => String(r)));
+
+        // 1) Supabase fire_reports (may be minimal/missing address)
+        const { data: reports, error: reportsErr } = await supabase
           .from('fire_reports')
-          .select('id, address, status, created_at')
-          .eq('status', 'On Going')
+          .select('id, address, geotag_location, status, created_at, updated_at, recommended_alarm_level, alarm_level, suggested_alarm_level')
+          .in('id', allowedReportIds)
           .order('created_at', { ascending: false })
-          .limit(50);
-        if (!error) setOngoingIncidents(data || []);
+          .limit(100);
+
+        const mergedById = new Map();
+        if (!reportsErr && reports) {
+          reports.forEach((r) => mergedById.set(String(r.id), r));
+        }
+
+        // 2) External API (richer address/status) to fill gaps
+        try {
+          const apiResp = await fetch('https://fire-detection-api-production-f55b.up.railway.app/get_reports');
+          if (apiResp.ok) {
+            const apiData = await apiResp.json();
+            apiData
+              .filter((r) => allowedSet.has(String(r.id)))
+              .forEach((r) => {
+                const existing = mergedById.get(String(r.id)) || {};
+                mergedById.set(String(r.id), {
+                  ...r,
+                  ...existing,
+                  address: existing.address || r.address || r.geotag_location,
+                });
+              });
+          }
+        } catch (apiErr) {
+          console.warn('⚠️ Incident API fetch failed, using Supabase-only data', apiErr);
+        }
+
+        // 3) Ensure every allowed ID appears at least once
+        allowedReportIds.forEach((rid) => {
+          const key = String(rid);
+          if (!mergedById.has(key)) {
+            mergedById.set(key, { id: rid, address: 'Assigned report', status: 'Unknown' });
+          }
+        });
+
+        // Filter out resolved/fire out
+        const merged = Array.from(mergedById.values()).filter((r) => {
+          const status = (r.status || '').toString().toLowerCase();
+          return !status.includes('fire out') && !status.includes('resolved');
+        });
+        setOngoingIncidents(merged);
+        // Reset selection if the current one is no longer valid
+        if (activeIncidentId && !merged.some((r) => String(r.id) === String(activeIncidentId))) {
+          setActiveIncidentId(null);
+        }
       } catch (_) {}
     };
     fetchIncidents();
-  }, []);
+  }, [currentStationId, activeIncidentId]);
 
   // Fetch unread messages
   useEffect(() => {
@@ -694,8 +761,8 @@ const Sfira_chat = () => {
 
   const handleSendMessage = async () => {
     if (newMessage.trim() === '' || !selectedUser || !currentStationId) return;
-    // Gate AI: require context for non-responder conversations
-    const shouldGate = selectedUser.type !== 'responder' && !activeIncidentId;
+    // Gate AI: require an incident context for stations
+    const shouldGate = !activeIncidentId;
 
     try {
       const messageData = {
@@ -824,6 +891,45 @@ const Sfira_chat = () => {
         ? 'bg-red-600 text-white'
         : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
     }`;
+  };
+
+  const formatIncidentLabel = (incident) => {
+    if (!incident) return 'Unknown incident';
+    const address = incident.address || incident.geotag_location || 'Assigned report';
+
+    // Normalize status: avoid "Unknown", default to On Going
+    const rawStatus = (incident.status || '').toString().trim();
+    const statusLower = rawStatus.toLowerCase();
+    const status =
+      !rawStatus || statusLower === 'unknown'
+        ? 'On Going'
+        : rawStatus;
+
+    // Prefer admin/final alarm; avoid "Unknown", default to 1st Alarm
+    const alarmRaw =
+      incident.alarm_level ||
+      incident.recommended_alarm_level ||
+      incident.suggested_alarm_level ||
+      '1st Alarm';
+    const alarmStr = (alarmRaw || '').toString();
+    const alarmCleaned = alarmStr
+      .replace(/- structure count not provided/gi, '')
+      .trim();
+    const alarmLower = alarmCleaned.toLowerCase();
+    const alarm =
+      !alarmCleaned || alarmLower === 'unknown'
+        ? '1st Alarm'
+        : alarmCleaned;
+
+    const time = incident.created_at || incident.updated_at || incident.timestamp;
+    const timePart = time ? ` — ${new Date(time).toLocaleString()}` : '';
+    return `${address} — ${status} — ${alarm}${timePart}`;
+  };
+
+  const currentIncidentLabel = () => {
+    if (!activeIncidentId) return 'No incident';
+    const inc = ongoingIncidents.find((i) => String(i.id) === String(activeIncidentId));
+    return inc ? formatIncidentLabel(inc) : 'No incident';
   };
 
   return (
@@ -1104,22 +1210,62 @@ const Sfira_chat = () => {
 
             {/* Message Input with Incident Selector */}
             <div className="p-4 border-t border-gray-200 bg-white flex-shrink-0">
-              {/* Incident context selector placed above input; dropdown opens upward via CSS positioning */}
-              <div className="mb-3 flex items-center justify-between">
-                <div className="text-xs text-gray-500">Context: {activeIncidentId ? `Incident #${activeIncidentId}` : 'None selected'}</div>
-                <div className="relative">
-                  <select
-                    value={activeIncidentId || ''}
-                    onChange={(e) => setActiveIncidentId(e.target.value || null)}
-                    className="px-2 py-1 text-xs border border-gray-300 rounded-md focus:ring-2 focus:ring-red-500 focus:border-red-500"
-                  >
-                    <option value="">No incident</option>
-                    {ongoingIncidents.map((inc) => (
-                      <option key={inc.id} value={inc.id}>
-                        {inc.id} — {inc.address || 'Unknown address'}
-                      </option>
-                    ))}
-                  </select>
+              {/* Incident context selector card */}
+              <div className="mb-3">
+                <div className="flex items-center justify-between">
+                  <div className="text-xs font-semibold text-gray-600">Incident context</div>
+                  <div className="text-[11px] text-gray-400">Required for AI analysis</div>
+                </div>
+                <div className="mt-2 flex flex-col sm:flex-row sm:items-center sm:gap-3">
+                  <div className="flex-1">
+                    <div className="relative">
+                      <button
+                        type="button"
+                        onClick={() => setIncidentMenuOpen((v) => !v)}
+                        className="w-full bg-white border border-gray-200 rounded-lg shadow-sm px-3 py-2 text-left flex items-center justify-between hover:border-red-300 focus:outline-none focus:ring-2 focus:ring-red-500"
+                      >
+                        <div className="flex flex-col">
+                          <span className="text-[11px] text-gray-500">Select</span>
+                          <span className="text-sm text-gray-800 line-clamp-1">{currentIncidentLabel()}</span>
+                        </div>
+                        <span className="text-gray-400 text-xs ml-3">▲</span>
+                      </button>
+                      {incidentMenuOpen && (
+                        <div className="absolute right-0 bottom-full mb-2 w-full max-h-60 overflow-y-auto bg-white border border-gray-200 rounded-lg shadow-lg z-20 text-sm">
+                          <button
+                            className={`block w-full text-left px-3 py-2 hover:bg-red-50 ${!activeIncidentId ? 'bg-gray-50' : ''}`}
+                            onClick={() => {
+                              setActiveIncidentId(null);
+                              setIncidentMenuOpen(false);
+                            }}
+                          >
+                            No incident
+                          </button>
+                          {ongoingIncidents.map((inc) => (
+                            <button
+                              key={inc.id}
+                              className={`block w-full text-left px-3 py-2 hover:bg-red-50 ${String(activeIncidentId) === String(inc.id) ? 'bg-gray-50' : ''}`}
+                              onClick={() => {
+                                setActiveIncidentId(inc.id);
+                                setIncidentMenuOpen(false);
+                              }}
+                            >
+                              {formatIncidentLabel(inc)}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                  <div className="text-[11px] text-gray-500 mt-2 sm:mt-0">
+                    {activeIncidentId ? (() => {
+                      const selectedIncident = ongoingIncidents.find(inc => String(inc.id) === String(activeIncidentId));
+                      const incidentName = selectedIncident 
+                        ? (selectedIncident.address || selectedIncident.geotag_location || 'Assigned report')
+                        : 'Selected incident';
+                      return `AI is now Analyzing your chats and linking to: ${incidentName}`;
+                    })() : 'No incident selected'}
+                  </div>
                 </div>
               </div>
               {isEmergencyMode && (
