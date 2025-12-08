@@ -11,6 +11,7 @@ export default function SChatPage({ contact, onBack, currentStationId }) {
   const [editText, setEditText] = useState('');
   const [activeIncidentId, setActiveIncidentId] = useState(null);
   const [ongoingIncidents, setOngoingIncidents] = useState([]);
+  const [incidentPickerVisible, setIncidentPickerVisible] = useState(false);
   const messagesRef = useRef(null);
 
   const getContactIcon = (type) => {
@@ -60,18 +61,48 @@ export default function SChatPage({ contact, onBack, currentStationId }) {
 
   useEffect(() => {
     const fetchIncidents = async () => {
+      if (!currentStationId) return;
       try {
-        const { data } = await supabase
+        const { data: assignments, error: assignErr } = await supabase
+          .from('report_assignments')
+          .select('report_id, status, assignee_id')
+          .eq('assignee_type', 'station');
+        if (assignErr) return;
+
+        const allowedIds = (assignments || [])
+          .filter((a) => String(a.assignee_id) === String(currentStationId))
+          .filter((a) => !a.status || a.status !== 'declined')
+          .map((a) => a.report_id)
+          .filter(Boolean);
+
+        if (allowedIds.length === 0) {
+          setOngoingIncidents([]);
+          setActiveIncidentId(null);
+          return;
+        }
+
+        const { data: reports, error: reportsErr } = await supabase
           .from('fire_reports')
           .select('id, address, status, created_at')
-          .eq('status', 'On Going')
+          .in('id', allowedIds)
           .order('created_at', { ascending: false })
           .limit(50);
-        setOngoingIncidents(data || []);
+
+        if (!reportsErr) {
+          const resolved = reports || [];
+          const fallbackIds = allowedIds
+            .filter((rid) => !resolved.some((r) => String(r.id) === String(rid)))
+            .map((rid) => ({ id: rid, address: 'Assigned report', status: 'Unknown' }));
+          const merged = [...resolved, ...fallbackIds];
+          setOngoingIncidents(merged);
+          if (activeIncidentId && !merged.some((r) => String(r.id) === String(activeIncidentId))) {
+            setActiveIncidentId(null);
+          }
+        }
       } catch (_) {}
     };
     fetchIncidents();
-  }, []);
+  }, [currentStationId, activeIncidentId]);
 
   useEffect(() => {
     const fetchThread = async () => {
@@ -125,8 +156,8 @@ export default function SChatPage({ contact, onBack, currentStationId }) {
     if (!error && data && data[0]) {
       setMessages((prev) => [...prev, data[0]]);
       setTimeout(scrollToBottom, 100);
-      // Gate AI like web: allow if responder or incident selected
-      const shouldGate = contact.type !== 'responder' && !activeIncidentId;
+      // Gate AI: require incident context for stations
+      const shouldGate = !activeIncidentId;
       if (!shouldGate) {
         try {
           const analysis = await analyzeMessageForFireAlarm(text);
@@ -315,15 +346,24 @@ export default function SChatPage({ contact, onBack, currentStationId }) {
         {/* Incident context selector */}
         <View className="mb-2">
           <View className="flex-row items-center justify-between">
-            <Text className="text-xs text-gray-500">Context: {activeIncidentId ? `Incident #${activeIncidentId}` : 'None selected'}</Text>
-            <View className="border border-gray-300 rounded px-2 py-1">
-              <TextInput
-                value={activeIncidentId ? String(activeIncidentId) : ''}
-                onChangeText={(v) => setActiveIncidentId(v ? v : null)}
-                placeholder="Incident ID"
-                className="text-xs text-gray-700"
-              />
-            </View>
+            <Text className="text-xs text-gray-500">
+              {activeIncidentId ? (() => {
+                const selectedIncident = ongoingIncidents.find(inc => String(inc.id) === String(activeIncidentId));
+                const incidentName = selectedIncident 
+                  ? (selectedIncident.address || selectedIncident.geotag_location || 'Assigned report')
+                  : 'Selected incident';
+                return `AI is now Analyzing your chats and linking to: ${incidentName}`;
+              })() : 'No incident selected'}
+            </Text>
+            <TouchableOpacity
+              className="border border-gray-300 rounded px-2 py-1 flex-row items-center"
+              onPress={() => setIncidentPickerVisible(true)}
+            >
+              <Text className="text-xs text-gray-700 mr-1">
+                {activeIncidentId ? 'Change' : 'Select'}
+              </Text>
+              <Ionicons name="chevron-down" size={14} color="#4B5563" />
+            </TouchableOpacity>
           </View>
         </View>
         <View className="flex-row items-center">
@@ -355,6 +395,61 @@ export default function SChatPage({ contact, onBack, currentStationId }) {
           </TouchableOpacity>
         </View>
       </View>
+
+    {/* Incident picker modal */}
+    <Modal
+      visible={incidentPickerVisible}
+      transparent={true}
+      animationType="slide"
+    >
+      <View className="flex-1 bg-black bg-opacity-50 justify-end">
+        <View className="bg-white rounded-t-2xl p-4 max-h-[70%]">
+          <View className="flex-row items-center justify-between mb-3">
+            <Text className="text-lg font-semibold text-gray-800">Assigned incidents</Text>
+            <TouchableOpacity onPress={() => setIncidentPickerVisible(false)}>
+              <Ionicons name="close" size={22} color="#6B7280" />
+            </TouchableOpacity>
+          </View>
+          {ongoingIncidents.length === 0 ? (
+            <View className="py-6 items-center">
+              <Text className="text-gray-500 text-sm text-center">
+                No assigned ongoing incidents available.
+              </Text>
+            </View>
+          ) : (
+            <ScrollView className="max-h-[50vh]">
+              {ongoingIncidents.map((inc) => (
+                <TouchableOpacity
+                  key={inc.id}
+                  className="p-3 border-b border-gray-100"
+                  onPress={() => {
+                    setActiveIncidentId(inc.id);
+                    setIncidentPickerVisible(false);
+                  }}
+                >
+                  <Text className="font-semibold text-gray-800">Incident #{inc.id}</Text>
+                  <Text className="text-sm text-gray-600 mt-1" numberOfLines={1}>
+                    {inc.address || 'No address provided'}
+                  </Text>
+                  <Text className="text-xs text-gray-400 mt-1">
+                    {inc.created_at ? new Date(inc.created_at).toLocaleString() : ''}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+          )}
+          <TouchableOpacity
+            className="mt-3 py-3 items-center rounded-lg border border-gray-200"
+            onPress={() => {
+              setActiveIncidentId(null);
+              setIncidentPickerVisible(false);
+            }}
+          >
+            <Text className="text-sm text-gray-700">Clear selection</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    </Modal>
 
       {/* Edit Message Modal */}
       <Modal
