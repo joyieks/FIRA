@@ -92,7 +92,7 @@ const ProtectedRoute = ({ children, allowedRoles = [] }) => {
     return () => {
       window.removeEventListener('storage', handleStorageChange);
     };
-  }, [navigate, location, requiredUserType]);
+  }, [navigate, location, allowedRoles]);
 
   // Show loading while checking authentication
   if (isLoading) {

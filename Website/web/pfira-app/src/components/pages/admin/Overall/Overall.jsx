@@ -317,6 +317,50 @@ const Overview = () => {
     };
   }, [showSummaryReport]);
 
+  // Check localStorage for summary report trigger (from notification toast/list click)
+  useEffect(() => {
+    const checkSummaryReportTrigger = () => {
+      const reportId = localStorage.getItem('showSummaryReportId');
+      const timestamp = localStorage.getItem('showSummaryTimestamp');
+      
+      if (reportId && timestamp) {
+        console.log('🔥 Found summary report trigger in localStorage:', reportId);
+        // Check if this is a recent trigger (within last 10 seconds)
+        const timeDiff = Date.now() - parseInt(timestamp);
+        if (timeDiff < 10000) {
+          console.log('🔥 Opening summary report from notification click:', reportId);
+          setSummaryReportId(reportId);
+          setShowSummaryReport(true);
+          
+          // Clear the localStorage flags
+          localStorage.removeItem('showSummaryReportId');
+          localStorage.removeItem('showSummaryTimestamp');
+        } else {
+          console.log('⏰ Summary trigger expired (older than 10 seconds)');
+          // Clear expired flags
+          localStorage.removeItem('showSummaryReportId');
+          localStorage.removeItem('showSummaryTimestamp');
+        }
+      }
+    };
+    
+    // Check immediately on mount
+    checkSummaryReportTrigger();
+    
+    // Also check periodically for 5 seconds in case page was loading
+    const interval = setInterval(checkSummaryReportTrigger, 500);
+    
+    // Stop checking after 5 seconds
+    const timeout = setTimeout(() => {
+      clearInterval(interval);
+    }, 5000);
+    
+    return () => {
+      clearInterval(interval);
+      clearTimeout(timeout);
+    };
+  }, []);
+
   // Fetch station assignments for all reports
   useEffect(() => {
     const fetchStationAssignments = async () => {
@@ -1109,23 +1153,25 @@ const Overview = () => {
     <div className="min-h-screen bg-gray-50 p-4" onClick={() => {}}>
       <div className="w-full">
         {/* Header */}
-        <div className="flex justify-between items-center mb-6">
-          <h1 className="text-2xl font-bold text-gray-900">Emergency Reports Overview</h1>
+        <div className="bg-white border-b-2 border-gray-900 px-8 py-6 mb-6 rounded-lg shadow-sm">
+          <h1 className="text-3xl font-bold text-gray-900 uppercase tracking-tight">Emergency Reports Overview</h1>
+          <p className="text-sm text-gray-600 mt-1">Official Fire Incident Documentation System</p>
         </div>
 
         {/* Search and Filters */}
-        <div className="bg-white rounded-xl shadow-sm p-8 mb-6">
-          <div className="flex flex-col lg:flex-row gap-6">
+        <div className="bg-white rounded-lg shadow-md border border-gray-300 p-6 mb-6">
+          <div className="flex flex-col lg:flex-row gap-4">
             {/* Search Bar */}
             <div className="flex-1">
+              <label className="block text-xs font-bold text-gray-700 uppercase mb-2 tracking-wide">Search Reports</label>
               <div className="relative">
-                <FiSearch className="absolute left-4 top-1/2 transform -translate-y-1/2 text-gray-400 w-6 h-6" />
+                <FiSearch className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-500 w-5 h-5" />
                 <input
                   type="text"
-                  placeholder="Search report by location, reporter, cause, or structure type..."
+                  placeholder="Search by location, reporter, cause, or structure type..."
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
-                  className="w-full pl-12 pr-6 py-4 text-lg border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:border-red-500"
+                  className="w-full pl-10 pr-4 py-3 text-sm border-2 border-gray-300 rounded focus:ring-2 focus:ring-gray-900 focus:border-gray-900 font-medium"
                 />
               </div>
             </div>
@@ -1133,23 +1179,24 @@ const Overview = () => {
             {/* Filter Toggle */}
             <button
               onClick={() => setShowFilters(!showFilters)}
-              className="flex items-center space-x-3 px-8 py-4 border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors font-medium text-lg"
+              className="flex items-center justify-center space-x-2 px-6 py-3 border-2 border-gray-900 bg-white rounded hover:bg-gray-900 hover:text-white transition-all font-bold text-sm uppercase tracking-wide"
             >
-              <FiFilter className="w-6 h-6" />
-              <span>FILTERS</span>
+              <FiFilter className="w-4 h-4" />
+              <span>Filters</span>
             </button>
           </div>
 
           {/* Filter Options */}
           {showFilters && (
-            <div className="mt-8 pt-8 border-t border-gray-200">
-              <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
+            <div className="mt-6 pt-6 border-t-2 border-gray-300">
+              <h3 className="text-sm font-bold text-gray-900 uppercase mb-4 tracking-wide">Filter Options</h3>
+              <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-3">Status</label>
+                  <label className="block text-xs font-bold text-gray-700 uppercase mb-2 tracking-wide">Status</label>
                   <select 
                     value={statusFilter}
                     onChange={(e) => setStatusFilter(e.target.value)}
-                    className="w-full px-4 py-3 text-lg border border-gray-300 rounded-md focus:ring-red-500 focus:border-red-500"
+                    className="w-full px-3 py-2 text-sm border-2 border-gray-300 rounded focus:ring-2 focus:ring-gray-900 focus:border-gray-900 font-medium"
                   >
                     <option value="all">All Statuses</option>
                     <option value="On Going">On Going</option>
@@ -1159,11 +1206,11 @@ const Overview = () => {
                   </select>
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-3">Fire Alarm Level</label>
+                  <label className="block text-xs font-bold text-gray-700 uppercase mb-2 tracking-wide">Fire Alarm Level</label>
                   <select 
                     value={alarmLevelFilter}
                     onChange={(e) => setAlarmLevelFilter(e.target.value)}
-                    className="w-full px-4 py-3 text-lg border border-gray-300 rounded-md focus:ring-red-500 focus:border-red-500"
+                    className="w-full px-3 py-2 text-sm border-2 border-gray-300 rounded focus:ring-2 focus:ring-gray-900 focus:border-gray-900 font-medium"
                   >
                     <option value="all">All Levels</option>
                     <option value="1st Alarm">1st Alarm</option>
@@ -1179,11 +1226,11 @@ const Overview = () => {
                   </select>
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-3">Time Range</label>
+                  <label className="block text-xs font-bold text-gray-700 uppercase mb-2 tracking-wide">Time Range</label>
                   <select 
                     value={timeRangeFilter}
                     onChange={(e) => setTimeRangeFilter(e.target.value)}
-                    className="w-full px-4 py-3 text-lg border border-gray-300 rounded-md focus:ring-red-500 focus:border-red-500"
+                    className="w-full px-3 py-2 text-sm border-2 border-gray-300 rounded focus:ring-2 focus:ring-gray-900 focus:border-gray-900 font-medium"
                   >
                     <option value="all">All Times</option>
                     <option value="today">Today</option>
@@ -1199,7 +1246,7 @@ const Overview = () => {
                       setAlarmLevelFilter('all');
                       setTimeRangeFilter('all');
                     }}
-                    className="w-full px-6 py-3 bg-gray-500 text-white rounded-md hover:bg-gray-600 transition-colors text-lg font-medium"
+                    className="w-full px-4 py-2 bg-gray-900 text-white rounded hover:bg-gray-700 transition-colors text-sm font-bold uppercase tracking-wide"
                   >
                     Clear Filters
                   </button>

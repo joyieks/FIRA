@@ -1264,20 +1264,24 @@ const Station_Overview = () => {
       <div className="max-w-none mx-auto">
         <div className="w-full">
           {/* Header */}
-          
+          <div className="bg-white border-b-2 border-gray-900 px-8 py-6 mb-6 rounded-lg shadow-sm">
+            <h1 className="text-3xl font-bold text-gray-900 uppercase tracking-tight">Emergency Reports Overview</h1>
+            <p className="text-sm text-gray-600 mt-1">Station Fire Incident Response System</p>
+          </div>
 
           {/* Search and Reports Table */}
-          <div className="bg-white rounded-xl shadow-sm p-12 mb-6 w-full">
+          <div className="bg-white rounded-lg shadow-md border border-gray-300 p-6 mb-6 w-full">
             {/* Search Bar */}
             <div className="mb-6">
+              <label className="block text-xs font-bold text-gray-700 uppercase mb-2 tracking-wide">Search Reports</label>
               <div className="relative">
-                <FiSearch className="absolute left-4 top-1/2 transform -translate-y-1/2 text-gray-400 w-6 h-6" />
+                <FiSearch className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-500 w-5 h-5" />
                 <input
                   type="text"
-                  placeholder="Search emergency reports..."
+                  placeholder="Search by location, reporter, status, or alarm level..."
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
-                  className="w-full pl-12 pr-6 py-4 text-lg border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:border-red-500"
+                  className="w-full pl-10 pr-4 py-3 text-sm border-2 border-gray-300 rounded focus:ring-2 focus:ring-gray-900 focus:border-gray-900 font-medium"
                 />
               </div>
             </div>

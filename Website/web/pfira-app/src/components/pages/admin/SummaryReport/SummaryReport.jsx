@@ -162,169 +162,136 @@ const SummaryReport = ({ reportId, isOpen, onClose }) => {
       setDownloading(true);
       const element = document.getElementById('summary-report-content');
       if (!element) {
-        throw new Error('Report content element not found');
+        alert('Report content not found. Please try again.');
+        setDownloading(false);
+        return;
       }
       
-      // Helper function to convert oklch to RGB based on class names
-      const getRgbFromClass = (el) => {
-        const classList = Array.from(el.classList);
-        const rgbMap = {
-          // Text colors
-          'text-red-600': 'rgb(220, 38, 38)',
-          'text-blue-600': 'rgb(37, 99, 235)',
-          'text-green-600': 'rgb(22, 163, 74)',
-          'text-purple-600': 'rgb(147, 51, 234)',
-          'text-orange-600': 'rgb(234, 88, 12)',
-          'text-gray-500': 'rgb(107, 114, 128)',
-          'text-gray-600': 'rgb(75, 85, 99)',
-          'text-gray-700': 'rgb(55, 65, 81)',
-          'text-gray-900': 'rgb(17, 24, 39)',
-          // Background colors
-          'bg-gray-50': 'rgb(249, 250, 251)',
-          'bg-white': 'rgb(255, 255, 255)',
-          'bg-red-600': 'rgb(220, 38, 38)',
-          'bg-blue-600': 'rgb(37, 99, 235)',
-          // Border colors
-          'border-gray-200': 'rgb(229, 231, 235)',
-          'border-gray-300': 'rgb(209, 213, 219)',
-        };
+      // Clone the element to avoid modifying the original
+      const clone = element.cloneNode(true);
+      clone.style.position = 'absolute';
+      clone.style.left = '-9999px';
+      clone.style.top = '0';
+      clone.style.width = element.offsetWidth + 'px';
+      document.body.appendChild(clone);
+      
+      // Remove all Tailwind classes and force RGB colors
+      const allElements = [clone, ...clone.querySelectorAll('*')];
+      allElements.forEach(el => {
+        // Get computed styles BEFORE removing classes
+        const computedStyle = window.getComputedStyle(el);
+        const color = computedStyle.color;
+        const bgColor = computedStyle.backgroundColor;
+        const borderColor = computedStyle.borderColor;
+        const fontSize = computedStyle.fontSize;
+        const fontWeight = computedStyle.fontWeight;
+        const padding = computedStyle.padding;
+        const margin = computedStyle.margin;
+        const display = computedStyle.display;
+        const flexDirection = computedStyle.flexDirection;
+        const alignItems = computedStyle.alignItems;
+        const justifyContent = computedStyle.justifyContent;
+        const gap = computedStyle.gap;
+        const borderRadius = computedStyle.borderRadius;
+        const borderWidth = computedStyle.borderWidth;
         
-        // Find matching class
-        for (const className of classList) {
-          if (rgbMap[className]) {
-            return rgbMap[className];
-          }
+        // Remove all classes to avoid oklch (handle SVG elements differently)
+        if (el instanceof SVGElement) {
+          el.setAttribute('class', '');
+        } else {
+          el.className = '';
         }
-        return null;
-      };
-      
-      // Store original styles and apply inline RGB styles to all elements (including the element itself)
-      const allElements = [element, ...element.querySelectorAll('*')];
-      const originalStyles = new Map();
-      
-      allElements.forEach((el) => {
-        try {
-          const computed = window.getComputedStyle(el);
-          const styleObj = {};
-          
-          // Check color
-          if (computed.color && (computed.color.includes('oklch') || computed.color.includes('oklab'))) {
-            const rgbColor = getRgbFromClass(el);
-            if (rgbColor) {
-              styleObj.color = rgbColor;
-            } else {
-              styleObj.color = 'rgb(17, 24, 39)'; // Default gray-900
-            }
-          }
-          
-          // Check background color
-          if (computed.backgroundColor && (computed.backgroundColor.includes('oklch') || computed.backgroundColor.includes('oklab'))) {
-            const rgbBg = getRgbFromClass(el);
-            if (rgbBg) {
-              styleObj.backgroundColor = rgbBg;
-            } else {
-              styleObj.backgroundColor = 'rgb(255, 255, 255)'; // Default white
-            }
-          }
-          
-          // Check border color
-          if (computed.borderColor && (computed.borderColor.includes('oklch') || computed.borderColor.includes('oklab'))) {
-            const rgbBorder = getRgbFromClass(el);
-            if (rgbBorder) {
-              styleObj.borderColor = rgbBorder;
-            } else {
-              styleObj.borderColor = 'rgb(229, 231, 235)'; // Default gray-200
-            }
-          }
-          
-          // Store original and apply new styles
-          if (Object.keys(styleObj).length > 0) {
-            originalStyles.set(el, {});
-            Object.keys(styleObj).forEach(prop => {
-              const camelProp = prop.replace(/-([a-z])/g, (g) => g[1].toUpperCase());
-              originalStyles.get(el)[camelProp] = el.style[camelProp] || '';
-              el.style.setProperty(prop, styleObj[prop], 'important');
-            });
-          }
-        } catch (err) {
-          console.warn('Error processing element styles:', err);
+        
+        // Apply inline styles with RGB
+        el.style.color = color.includes('oklch') || color.includes('oklab') ? 'rgb(17, 24, 39)' : color;
+        el.style.backgroundColor = bgColor.includes('oklch') || bgColor.includes('oklab') ? 'rgb(255, 255, 255)' : bgColor;
+        el.style.borderColor = borderColor.includes('oklch') || borderColor.includes('oklab') ? 'rgb(229, 231, 235)' : borderColor;
+        el.style.fontSize = fontSize;
+        el.style.fontWeight = fontWeight;
+        el.style.padding = padding;
+        el.style.margin = margin;
+        el.style.display = display;
+        el.style.flexDirection = flexDirection;
+        el.style.alignItems = alignItems;
+        el.style.justifyContent = justifyContent;
+        el.style.gap = gap;
+        el.style.borderRadius = borderRadius;
+        el.style.borderWidth = borderWidth;
+        el.style.backgroundImage = 'none';
+        
+        // Hide buttons
+        if (el.tagName === 'BUTTON') {
+          el.style.display = 'none';
         }
-      });
-      
-      // Temporarily hide buttons
-      const buttons = element.querySelectorAll('button');
-      const buttonDisplays = new Map();
-      buttons.forEach(btn => {
-        buttonDisplays.set(btn, btn.style.display);
-        btn.style.display = 'none';
-      });
-      
-      // Create canvas from HTML with onclone to ensure styles are applied
-      const canvas = await html2canvas(element, {
-        scale: 2,
-        useCORS: true,
-        logging: false,
-        backgroundColor: '#ffffff',
-        foreignObjectRendering: false, // Disable foreignObject rendering which might have issues with oklch
-        ignoreElements: (el) => {
-          return el.tagName === 'BUTTON';
-        },
-        onclone: (clonedDoc, clonedElement) => {
-          // Add a style sheet to override any remaining oklch colors
-          const style = clonedDoc.createElement('style');
-          style.textContent = `
-            * {
-              color: rgb(17, 24, 39) !important;
-            }
-            .text-red-600, .text-red-600 * { color: rgb(220, 38, 38) !important; }
-            .text-blue-600, .text-blue-600 * { color: rgb(37, 99, 235) !important; }
-            .text-green-600, .text-green-600 * { color: rgb(22, 163, 74) !important; }
-            .text-purple-600, .text-purple-600 * { color: rgb(147, 51, 234) !important; }
-            .text-orange-600, .text-orange-600 * { color: rgb(234, 88, 12) !important; }
-            .text-gray-500, .text-gray-500 * { color: rgb(107, 114, 128) !important; }
-            .text-gray-600, .text-gray-600 * { color: rgb(75, 85, 99) !important; }
-            .text-gray-700, .text-gray-700 * { color: rgb(55, 65, 81) !important; }
-            .text-gray-900, .text-gray-900 * { color: rgb(17, 24, 39) !important; }
-            .bg-gray-50 { background-color: rgb(249, 250, 251) !important; }
-            .bg-white { background-color: rgb(255, 255, 255) !important; }
-            .bg-red-600 { background-color: rgb(220, 38, 38) !important; }
-            .bg-blue-600 { background-color: rgb(37, 99, 235) !important; }
-            .border-gray-200 { border-color: rgb(229, 231, 235) !important; }
-            .border-gray-300 { border-color: rgb(209, 213, 219) !important; }
-          `;
-          clonedDoc.head.insertBefore(style, clonedDoc.head.firstChild);
-        }
-      });
-      
-      // Restore original styles
-      originalStyles.forEach((styles, el) => {
-        Object.keys(styles).forEach(prop => {
-          el.style[prop] = styles[prop];
-        });
-      });
-      
-      // Restore button displays
-      buttonDisplays.forEach((display, btn) => {
-        btn.style.display = display;
       });
 
-      const imgData = canvas.toDataURL('image/png');
+      // Generate canvas with higher quality
+      const canvas = await html2canvas(clone, {
+        scale: 2,
+        useCORS: true,
+        allowTaint: true,
+        logging: false,
+        backgroundColor: '#ffffff',
+        windowWidth: clone.scrollWidth,
+        windowHeight: clone.scrollHeight,
+      });
       
-      // Create PDF
+      // Remove clone
+      document.body.removeChild(clone);
+
+      const imgData = canvas.toDataURL('image/png', 1.0);
+      
+      // Create PDF with proper A4 sizing and margins
       const pdf = new jsPDF('p', 'mm', 'a4');
-      const pdfWidth = pdf.internal.pageSize.getWidth();
-      const pdfHeight = pdf.internal.pageSize.getHeight();
+      const pdfWidth = pdf.internal.pageSize.getWidth(); // 210mm
+      const pdfHeight = pdf.internal.pageSize.getHeight(); // 297mm
+      
+      // Set margins (15mm on all sides)
+      const margin = 15;
+      const contentWidth = pdfWidth - (margin * 2); // 180mm
+      const contentHeight = pdfHeight - (margin * 2); // 267mm
+      
       const imgWidth = canvas.width;
       const imgHeight = canvas.height;
-      const ratio = Math.min((pdfWidth - 20) / imgWidth, (pdfHeight - 20) / imgHeight);
-      const imgScaledWidth = imgWidth * ratio;
-      const imgScaledHeight = imgHeight * ratio;
       
-      // Add image to PDF
-      pdf.addImage(imgData, 'PNG', 10, 10, imgScaledWidth, imgScaledHeight);
+      // Calculate scaling to fit content area
+      const ratio = contentWidth / imgWidth;
+      const scaledWidth = contentWidth;
+      const scaledHeight = imgHeight * ratio;
+      
+      // Add pages if content is longer than one page
+      let yPosition = 0;
+      let pageNumber = 1;
+      
+      while (yPosition < scaledHeight) {
+        if (pageNumber > 1) {
+          pdf.addPage();
+        }
+        
+        // Calculate source position in canvas
+        const sourceY = yPosition / ratio;
+        const sourceHeight = Math.min(contentHeight / ratio, imgHeight - sourceY);
+        const targetHeight = sourceHeight * ratio;
+        
+        // Create canvas section for this page
+        const pageCanvas = document.createElement('canvas');
+        pageCanvas.width = imgWidth;
+        pageCanvas.height = sourceHeight;
+        const pageCtx = pageCanvas.getContext('2d');
+        
+        // Draw the section of the original canvas
+        pageCtx.drawImage(canvas, 0, sourceY, imgWidth, sourceHeight, 0, 0, imgWidth, sourceHeight);
+        const pageImgData = pageCanvas.toDataURL('image/png', 1.0);
+        
+        // Add to PDF
+        pdf.addImage(pageImgData, 'PNG', margin, margin, scaledWidth, targetHeight);
+        
+        yPosition += contentHeight;
+        pageNumber++;
+      }
       
       // Generate filename
-      const reportNumber = reportId ? String(reportId).substring(0, 8) : 'REPORT';
+      const reportNumber = reportId ? String(reportId).substring(0, 8).toUpperCase() : 'REPORT';
       const filename = `FIRA_Summary_Report_${reportNumber}_${new Date().toISOString().split('T')[0]}.pdf`;
       
       // Save PDF
@@ -333,7 +300,7 @@ const SummaryReport = ({ reportId, isOpen, onClose }) => {
       setDownloading(false);
     } catch (error) {
       console.error('Error generating PDF:', error);
-      alert('Failed to generate PDF. Please try again.');
+      alert('Failed to generate PDF. Error: ' + error.message);
       setDownloading(false);
     }
   };
@@ -372,221 +339,259 @@ const SummaryReport = ({ reportId, isOpen, onClose }) => {
   const fireOutTime = statusHistory.find(s => s.status === 'Fire Out')?.timestamp || reportData.updated_at;
 
   return (
-    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4 overflow-y-auto">
-      <div className="bg-white rounded-2xl shadow-2xl max-w-4xl w-full my-8 relative">
-        {/* Header with close and download buttons */}
-        <div className="sticky top-0 bg-white border-b border-gray-200 px-6 py-4 flex justify-between items-center rounded-t-2xl z-10">
-          <h2 className="text-2xl font-bold text-gray-900">Fire Incident Summary Report</h2>
+    <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-start justify-center z-50 p-4 overflow-y-auto">
+      <div className="bg-white rounded-lg shadow-2xl w-full my-4 relative border border-gray-300" style={{ maxWidth: '210mm', minHeight: '297mm' }}>
+        {/* Header - Sticky */}
+        <div className="sticky top-0 bg-white px-8 py-4 flex justify-between items-center border-b-2 border-gray-900 z-20">
+          <div className="flex items-center space-x-3">
+            <FiAlertTriangle className="w-6 h-6 text-gray-900" />
+            <div>
+              <h2 className="text-xl font-bold text-gray-900">Fire Incident Summary Report</h2>
+              <p className="text-gray-600 text-sm">Official Document</p>
+            </div>
+          </div>
           <div className="flex space-x-2">
             <button
               onClick={downloadPDF}
               disabled={downloading}
-              className="flex items-center space-x-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg transition-colors disabled:opacity-50"
+              style={{ backgroundColor: '#000', color: '#fff' }}
+              className="flex items-center space-x-2 px-4 py-2 rounded hover:opacity-80 transition-opacity disabled:opacity-50 font-semibold text-sm"
             >
-              <FiDownload className="w-5 h-5" />
+              <FiDownload className="w-4 h-4" />
               <span>{downloading ? 'Generating...' : 'Download PDF'}</span>
             </button>
             <button
               onClick={onClose}
-              className="text-gray-500 hover:text-gray-700 transition-colors"
+              className="text-gray-600 hover:text-gray-900 transition-colors p-2"
             >
               <FiX className="w-6 h-6" />
             </button>
           </div>
         </div>
 
-        {/* Report Content */}
-        <div id="summary-report-content" className="p-8 bg-white">
-          {/* Header with Logo */}
-          <div className="text-center mb-8 border-b-2 border-gray-300 pb-6">
-            <div className="flex items-center justify-center mb-4">
-              <div className="bg-red-600 text-white px-6 py-3 rounded-lg">
-                <h1 className="text-3xl font-bold">PROJECT FIRA</h1>
-                <p className="text-sm mt-1">Fire Incident Response & Analysis</p>
-              </div>
+        {/* Report Content - A4 Bond Paper Size */}
+        <div id="summary-report-content" className="p-6 bg-white" style={{ width: '210mm', minHeight: '297mm' }}>
+          {/* Header */}
+          <div className="text-center mb-4 pb-3 border-b-2 border-gray-900">
+            <div className="mb-2">
+              <h1 className="text-2xl font-bold text-gray-900">PROJECT FIRA</h1>
+              <p className="text-xs text-gray-600">Fire Incident Response & Analysis System</p>
             </div>
-            <h2 className="text-2xl font-bold text-gray-900 mt-4">FIRE INCIDENT SUMMARY REPORT</h2>
-            <p className="text-gray-600 mt-2">Official Government Document</p>
+            <div className="border-2 border-gray-900 rounded py-1 px-4 inline-block">
+              <h2 className="text-xl font-bold text-gray-900">FIRE INCIDENT SUMMARY REPORT</h2>
+              <p className="text-gray-600 font-semibold text-xs uppercase">Official Documentation</p>
+            </div>
+            <p className="text-gray-600 mt-1 font-medium text-xs">Report No. <span className="font-bold text-gray-900">{String(reportId).substring(0, 8).toUpperCase()}</span></p>
           </div>
 
-          {/* Report Information */}
-          <div className="space-y-6 mb-8">
-            {/* Basic Information */}
-            <div className="bg-gray-50 p-6 rounded-lg border border-gray-200">
-              <h3 className="text-xl font-bold text-gray-900 mb-4 flex items-center">
-                <FiAlertTriangle className="w-6 h-6 mr-2 text-red-600" />
-                Incident Information
-              </h3>
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <p className="text-sm font-semibold text-gray-600">Report ID</p>
-                  <p className="text-lg font-bold text-gray-900">{String(reportId).substring(0, 8)}</p>
+          {/* Report Information - 2 Column Grid */}
+          <div className="grid grid-cols-2 gap-3 mb-4">
+            {/* Left Column */}
+            <div className="space-y-3">
+              {/* Incident Information */}
+              <div className="border-2 border-gray-900 p-3 rounded">
+                <div className="flex items-center mb-2">
+                  <FiAlertTriangle className="w-4 h-4 text-gray-900 mr-2" />
+                  <h3 className="text-sm font-bold text-gray-900 uppercase">Incident Information</h3>
                 </div>
-                <div>
-                  <p className="text-sm font-semibold text-gray-600">Final Alarm Level</p>
-                  <p className="text-lg font-bold text-red-600">
-                    {reportData.final_fire_alarm_level || '1st Alarm'}
-                  </p>
+                <div className="space-y-2">
+                  <div className="border border-gray-300 p-2 rounded">
+                    <p className="text-xs font-bold text-gray-600 uppercase">Report ID</p>
+                    <p className="text-sm font-bold text-gray-900">{String(reportId).substring(0, 8).toUpperCase()}</p>
+                  </div>
+                  <div className="border border-gray-300 p-2 rounded">
+                    <p className="text-xs font-bold text-gray-600 uppercase">Final Alarm Level</p>
+                    <p className="text-sm font-bold text-gray-900">{reportData.final_fire_alarm_level || '1st Alarm'}</p>
+                  </div>
+                  <div className="border border-gray-300 p-2 rounded">
+                    <p className="text-xs font-bold text-gray-600 uppercase">Status</p>
+                    <p className="text-sm font-bold text-gray-900">Fire Out - Resolved</p>
+                  </div>
+                  <div className="border border-gray-300 p-2 rounded">
+                    <p className="text-xs font-bold text-gray-600 uppercase">Report Date</p>
+                    <p className="text-xs font-bold text-gray-900">{new Date(reportSubmittedTime).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })}</p>
+                  </div>
                 </div>
               </div>
-            </div>
 
-            {/* Timeline */}
-            <div className="bg-gray-50 p-6 rounded-lg border border-gray-200">
-              <h3 className="text-xl font-bold text-gray-900 mb-4 flex items-center">
-                <FiClock className="w-6 h-6 mr-2 text-blue-600" />
-                Incident Timeline
-              </h3>
-              <div className="space-y-3">
-                <div className="flex justify-between items-center border-b border-gray-200 pb-2">
-                  <span className="font-semibold text-gray-700">Report Submitted:</span>
-                  <span className="text-gray-900">{formatDateTime(reportSubmittedTime)}</span>
+              {/* Timeline */}
+              <div className="border-2 border-gray-900 p-3 rounded">
+                <div className="flex items-center mb-2">
+                  <FiClock className="w-4 h-4 text-gray-900 mr-2" />
+                  <h3 className="text-sm font-bold text-gray-900 uppercase">Incident Timeline</h3>
                 </div>
-                {underControlTime && (
-                  <div className="flex justify-between items-center border-b border-gray-200 pb-2">
-                    <span className="font-semibold text-gray-700">Response Time (Under Control):</span>
-                    <span className="text-gray-900">{formatDateTime(underControlTime)}</span>
+                <div className="border border-gray-300 p-2 rounded space-y-1">
+                  <div className="pb-1 border-b border-gray-300">
+                    <p className="text-xs font-bold text-gray-600 uppercase">Report Submitted</p>
+                    <p className="text-xs font-semibold text-gray-900">{formatDateTime(reportSubmittedTime)}</p>
                   </div>
-                )}
-                {fireOutTime && (
-                  <div className="flex justify-between items-center border-b border-gray-200 pb-2">
-                    <span className="font-semibold text-gray-700">Resolution Time (Fire Out):</span>
-                    <span className="text-gray-900">{formatDateTime(fireOutTime)}</span>
-                  </div>
-                )}
-              </div>
-            </div>
-
-            {/* Station Information */}
-            {stationData && (
-              <div className="bg-gray-50 p-6 rounded-lg border border-gray-200">
-                <h3 className="text-xl font-bold text-gray-900 mb-4 flex items-center">
-                  <FiHome className="w-6 h-6 mr-2 text-green-600" />
-                  Responding Station
-                </h3>
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <p className="text-sm font-semibold text-gray-600">Station Name</p>
-                    <p className="text-lg font-bold text-gray-900">{stationData.station_name || 'N/A'}</p>
-                  </div>
-                  <div>
-                    <p className="text-sm font-semibold text-gray-600">Assigned At</p>
-                    <p className="text-lg text-gray-900">{formatDateTime(stationData.assigned_at)}</p>
-                  </div>
-                  {stationData.address && (
-                    <div className="col-span-2">
-                      <p className="text-sm font-semibold text-gray-600">Station Address</p>
-                      <p className="text-lg text-gray-900">{stationData.address}</p>
+                  {underControlTime && (
+                    <div className="pb-1 border-b border-gray-300">
+                      <p className="text-xs font-bold text-gray-600 uppercase">Under Control</p>
+                      <p className="text-xs font-semibold text-gray-900">{formatDateTime(underControlTime)}</p>
+                    </div>
+                  )}
+                  {fireOutTime && (
+                    <div>
+                      <p className="text-xs font-bold text-gray-600 uppercase">Fire Out (Resolved)</p>
+                      <p className="text-xs font-bold text-gray-900">{formatDateTime(fireOutTime)}</p>
                     </div>
                   )}
                 </div>
               </div>
-            )}
 
-            {/* Reporter Information */}
-            <div className="bg-gray-50 p-6 rounded-lg border border-gray-200">
-              <h3 className="text-xl font-bold text-gray-900 mb-4 flex items-center">
-                <FiUser className="w-6 h-6 mr-2 text-purple-600" />
-                Reporter Information
-              </h3>
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <p className="text-sm font-semibold text-gray-600">Reporter Name</p>
-                  <p className="text-lg font-bold text-gray-900">{reportData.reporter || reportData.reporter_name || 'Anonymous'}</p>
+              {/* Reporter Information */}
+              <div className="border-2 border-gray-900 p-3 rounded">
+                <div className="flex items-center mb-2">
+                  <FiUser className="w-4 h-4 text-gray-900 mr-2" />
+                  <h3 className="text-sm font-bold text-gray-900 uppercase">Reporter Information</h3>
                 </div>
-                <div>
-                  <p className="text-sm font-semibold text-gray-600">Cause of Fire</p>
-                  <p className="text-lg text-gray-900">{reportData.cause_of_fire || 'Not specified'}</p>
+                <div className="border border-gray-300 p-2 rounded space-y-1">
+                  <div>
+                    <p className="text-xs font-bold text-gray-600 uppercase">Reporter Name</p>
+                    <p className="text-xs font-bold text-gray-900">{reportData.reporter || reportData.reporter_name || 'Anonymous'}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs font-bold text-gray-600 uppercase">Cause of Fire</p>
+                    <p className="text-xs font-semibold text-gray-900">{reportData.cause_of_fire || 'Not specified'}</p>
+                  </div>
                 </div>
               </div>
             </div>
 
-            {/* Location Information */}
-            <div className="bg-gray-50 p-6 rounded-lg border border-gray-200">
-              <h3 className="text-xl font-bold text-gray-900 mb-4 flex items-center">
-                <FiMapPin className="w-6 h-6 mr-2 text-orange-600" />
-                Incident Location
-              </h3>
-              <p className="text-lg text-gray-900">
-                {reportData.address || reportData.geotag_location || reportData.resolved_address || 'Location unavailable'}
-              </p>
-              {(reportData.latitude && reportData.longitude) && (
-                <p className="text-sm text-gray-600 mt-2">
-                  Coordinates: {parseFloat(reportData.latitude).toFixed(6)}, {parseFloat(reportData.longitude).toFixed(6)}
-                </p>
-              )}
-            </div>
-
-            {/* Fire Image */}
-            {reportData.image_url && (
-              <div className="bg-gray-50 p-6 rounded-lg border border-gray-200">
-                <h3 className="text-xl font-bold text-gray-900 mb-4">Incident Photograph</h3>
-                <div className="flex justify-center">
-                  <img
-                    src={reportData.image_url}
-                    alt="Fire incident"
-                    className="max-w-full h-auto rounded-lg shadow-md"
-                    style={{ maxHeight: '400px' }}
-                  />
-                </div>
-              </div>
-            )}
-
-            {/* Alarm Level History */}
-            {alarmLevelHistory.length > 0 && (
-              <div className="bg-gray-50 p-6 rounded-lg border border-gray-200">
-                <h3 className="text-xl font-bold text-gray-900 mb-4">Alarm Level Changes</h3>
-                <div className="space-y-2">
-                  {alarmLevelHistory.map((change, index) => (
-                    <div key={index} className="flex justify-between items-center border-b border-gray-200 pb-2">
-                      <span className="font-semibold text-red-600">{change.level}</span>
-                      <span className="text-gray-900">{formatDateTime(change.timestamp)}</span>
+            {/* Right Column */}
+            <div className="space-y-3">
+              {/* Station Information */}
+              {stationData && (
+                <div className="border-2 border-gray-900 p-3 rounded">
+                  <div className="flex items-center mb-2">
+                    <FiHome className="w-4 h-4 text-gray-900 mr-2" />
+                    <h3 className="text-sm font-bold text-gray-900 uppercase">Responding Fire Station</h3>
+                  </div>
+                  <div className="border border-gray-300 p-2 rounded space-y-1">
+                    <div>
+                      <p className="text-xs font-bold text-gray-600 uppercase">Station Name</p>
+                      <p className="text-xs font-bold text-gray-900">{stationData.station_name || 'N/A'}</p>
                     </div>
-                  ))}
+                    <div>
+                      <p className="text-xs font-bold text-gray-600 uppercase">Assignment Time</p>
+                      <p className="text-xs font-semibold text-gray-900">{formatDateTime(stationData.assigned_at)}</p>
+                    </div>
+                    {stationData.address && (
+                      <div>
+                        <p className="text-xs font-bold text-gray-600 uppercase">Station Address</p>
+                        <p className="text-xs text-gray-900">{stationData.address}</p>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* Location Information */}
+              <div className="border-2 border-gray-900 p-3 rounded">
+                <div className="flex items-center mb-2">
+                  <FiMapPin className="w-4 h-4 text-gray-900 mr-2" />
+                  <h3 className="text-sm font-bold text-gray-900 uppercase">Incident Location</h3>
+                </div>
+                <div className="border border-gray-300 p-2 rounded">
+                  <p className="text-xs font-semibold text-gray-900 mb-1">
+                    {reportData.address || reportData.geotag_location || reportData.resolved_address || 'Location unavailable'}
+                  </p>
+                  {(reportData.latitude && reportData.longitude) && (
+                    <div className="border-t border-gray-300 pt-1 mt-1">
+                      <p className="text-xs font-bold text-gray-600 uppercase">GPS Coordinates</p>
+                      <p className="text-xs font-mono font-semibold text-gray-900">
+                        {parseFloat(reportData.latitude).toFixed(6)}, {parseFloat(reportData.longitude).toFixed(6)}
+                      </p>
+                    </div>
+                  )}
                 </div>
               </div>
-            )}
 
-            {/* Additional Details */}
-            <div className="bg-gray-50 p-6 rounded-lg border border-gray-200">
-              <h3 className="text-xl font-bold text-gray-900 mb-4">Additional Details</h3>
-              <div className="grid grid-cols-2 gap-4">
-                {reportData.number_of_structures_on_fire && (
-                  <div>
-                    <p className="text-sm font-semibold text-gray-600">Structures Affected</p>
-                    <p className="text-lg text-gray-900">{reportData.number_of_structures_on_fire}</p>
-                  </div>
-                )}
-                {reportData.structure && (
-                  <div>
-                    <p className="text-sm font-semibold text-gray-600">Structure Type</p>
-                    <p className="text-lg text-gray-900">{reportData.structure}</p>
-                  </div>
-                )}
-                {reportData.confidence && (
-                  <div>
-                    <p className="text-sm font-semibold text-gray-600">Detection Confidence</p>
-                    <p className="text-lg text-gray-900">{(parseFloat(reportData.confidence) * 100).toFixed(2)}%</p>
-                  </div>
-                )}
+              {/* Technical Analysis */}
+              <div className="border-2 border-gray-900 p-3 rounded">
+                <h3 className="text-sm font-bold text-gray-900 mb-2 uppercase">Technical Analysis</h3>
+                <div className="grid grid-cols-2 gap-2">
+                  {reportData.number_of_structures_on_fire && (
+                    <div className="border border-gray-300 p-2 rounded text-center">
+                      <p className="text-xs font-bold text-gray-600 uppercase">Structures</p>
+                      <p className="text-xl font-bold text-gray-900">{reportData.number_of_structures_on_fire}</p>
+                    </div>
+                  )}
+                  {reportData.structure && (
+                    <div className="border border-gray-300 p-2 rounded text-center">
+                      <p className="text-xs font-bold text-gray-600 uppercase">Type</p>
+                      <p className="text-xs font-bold text-gray-900">{reportData.structure}</p>
+                    </div>
+                  )}
+                  {reportData.confidence && (
+                    <div className="border border-gray-300 p-2 rounded text-center col-span-2">
+                      <p className="text-xs font-bold text-gray-600 uppercase">AI Confidence</p>
+                      <p className="text-xl font-bold text-gray-900">{(parseFloat(reportData.confidence) * 100).toFixed(1)}%</p>
+                    </div>
+                  )}
+                </div>
               </div>
+
+              {/* Alarm Level History */}
+              {alarmLevelHistory.length > 0 && (
+                <div className="border-2 border-gray-900 p-3 rounded">
+                  <h3 className="text-sm font-bold text-gray-900 mb-2 uppercase">Alarm Level Changes</h3>
+                  <div className="border border-gray-300 p-2 rounded space-y-1">
+                    {alarmLevelHistory.map((change, index) => (
+                      <div key={index} className="pb-1 border-b border-gray-300 last:border-b-0">
+                        <p className="text-xs font-bold text-gray-600 uppercase">{change.level}</p>
+                        <p className="text-xs font-semibold text-gray-900">{formatDateTime(change.timestamp)}</p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
           </div>
 
+          {/* Fire Image - Full Width */}
+          {reportData.image_url && (
+            <div className="border-2 border-gray-900 p-3 rounded mb-4">
+              <h3 className="text-sm font-bold text-gray-900 mb-2 uppercase text-center">Incident Photograph</h3>
+              <div className="flex justify-center border border-gray-300 p-2 rounded">
+                <img
+                  src={reportData.image_url}
+                  alt="Fire incident"
+                  className="max-w-full h-auto rounded"
+                  style={{ maxHeight: '200px' }}
+                />
+              </div>
+              <p className="text-center text-xs text-gray-600 mt-1">Official incident documentation photograph</p>
+            </div>
+          )}
+
           {/* Footer */}
-          <div className="mt-8 pt-6 border-t-2 border-gray-300 text-center">
-            <p className="text-sm text-gray-600">
-              This is an official government document generated by Project FIRA
-            </p>
-            <p className="text-xs text-gray-500 mt-2">
-              Generated on {new Date().toLocaleString('en-US', {
-                year: 'numeric',
-                month: 'long',
-                day: 'numeric',
-                hour: 'numeric',
-                minute: '2-digit'
-              })}
-            </p>
+          <div className="pt-3 border-t-2 border-gray-900">
+            <div className="border-2 border-gray-900 p-3 rounded text-center">
+              <div className="inline-block bg-gray-900 text-white px-3 py-1 rounded mb-2">
+                <p className="font-bold text-xs uppercase">Official Government Document</p>
+              </div>
+              <p className="text-xs text-gray-700 font-semibold mb-1">
+                This is an authenticated fire incident report generated by Project FIRA
+              </p>
+              <p className="text-xs text-gray-700 mb-2">
+                Bureau of Fire Protection - Fire Incident Response & Analysis System
+              </p>
+              <p className="text-xs text-gray-600 font-semibold uppercase border-t border-gray-300 pt-2">
+                Generated: {new Date().toLocaleString('en-US', {
+                  year: 'numeric',
+                  month: 'long',
+                  day: 'numeric',
+                  hour: 'numeric',
+                  minute: '2-digit',
+                  hour12: true
+                })}
+              </p>
+              <p className="text-xs text-gray-500 italic mt-1">
+                Document ID: FIRA-{String(reportId).substring(0, 8).toUpperCase()}-{new Date().getFullYear()}
+              </p>
+            </div>
           </div>
         </div>
       </div>

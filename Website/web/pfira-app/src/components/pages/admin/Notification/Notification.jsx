@@ -27,18 +27,31 @@ const Notification = () => {
 
   // Do NOT stop alarm just by opening the page; only stop on mark-as-read
 
-  // Navigate to map with report details
+  // Navigate to map with report details or overview for fire out
   const handleNotificationClick = (notification) => {
     if (notification.related_report_id) {
-      // Store the report ID in localStorage for Adashboard to pick up
-      localStorage.setItem('selectedReportId', notification.related_report_id);
-      // Add timestamp to force reload detection
-      localStorage.setItem('lastNotificationClick', JSON.stringify({
-        reportId: notification.related_report_id,
-        timestamp: Date.now()
-      }));
-      // Navigate to the map dashboard
-      navigate('/admin-dashboard');
+      // Check if this is a fire out notification
+      const isFireOut = (notification.title || '').toLowerCase().includes('fire out') || 
+                       (notification.message || '').toLowerCase().includes('fire out') ||
+                       (notification.message || '').toLowerCase().includes('fire is out') ||
+                       (notification.message || '').toLowerCase().includes('fire is now out');
+      
+      if (isFireOut) {
+        // Fire Out: Navigate to Overall page with summary
+        localStorage.setItem('showSummaryReportId', notification.related_report_id);
+        localStorage.setItem('showSummaryTimestamp', Date.now().toString());
+        navigate('/admin-dashboard/overall');
+      } else {
+        // Regular notification: Navigate to map dashboard
+        localStorage.setItem('selectedReportId', notification.related_report_id);
+        // Add timestamp to force reload detection
+        localStorage.setItem('lastNotificationClick', JSON.stringify({
+          reportId: notification.related_report_id,
+          timestamp: Date.now()
+        }));
+        navigate('/admin-dashboard');
+      }
+      
       // Mark as read when clicked
       if (!notification.is_read) {
         markAsRead(notification.id);

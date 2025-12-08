@@ -4,26 +4,21 @@ import { supabase } from '../../../../config/supabase';
 import emailjs from '@emailjs/browser';
 import { GoogleMap, Marker, useJsApiLoader } from '@react-google-maps/api';
 
+// Move libraries outside component to prevent re-initialization
+const GOOGLE_MAPS_LIBRARIES = ['places'];
 
 const Auser_management = () => {
   const GOOGLE_MAPS_API_KEY = 'AIzaSyBX5taF1AgNhicxw5_BXUJDs6ouniAuiQI';
   
   const { isLoaded: isMapLoaded, loadError } = useJsApiLoader({
+    id: 'google-map-user-management',
     googleMapsApiKey: GOOGLE_MAPS_API_KEY,
-    libraries: ['places']
+    libraries: GOOGLE_MAPS_LIBRARIES
   });
 
-  // Log map loading errors
-  useEffect(() => {
-    if (loadError) {
-      console.error('Google Maps load error:', loadError);
-    }
-  }, [loadError]);
-
-  // Initialize EmailJS
+  // Initialize EmailJS once
   useEffect(() => {
     emailjs.init('N_WM9SM_s6cRQPVgT');
-    console.log('EmailJS initialized with key:', 'N_WM9SM_s6cRQPVgT');
   }, []);
 
   const [activeTab, setActiveTab] = useState('citizens');
@@ -52,6 +47,8 @@ const Auser_management = () => {
   const [isSearching, setIsSearching] = useState(false);
   const [mapInstance, setMapInstance] = useState(null);
   const [placesService, setPlacesService] = useState(null);
+  const [citizenReports, setCitizenReports] = useState([]);
+  const [loadingReports, setLoadingReports] = useState(false);
   const [newStation, setNewStation] = useState({
     name: '',
     stationId: '',
@@ -70,10 +67,15 @@ const Auser_management = () => {
   const [users, setUsers] = useState({ stations: [], citizens: [] });
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
+  const [fetchError, setFetchError] = useState(null);
 
   useEffect(() => {
+    let mounted = true;
+    
     const fetchUsers = async () => {
+      if (!mounted) return;
       setLoading(true);
+      setFetchError(null);
       try {
         // Fetch in parallel for faster loads
         const [citizensRes, stationsRes, respondersRes] = await Promise.all([
@@ -81,6 +83,8 @@ const Auser_management = () => {
           supabase.from('station_users').select('*'),
           supabase.from('responders').select('station_id')
         ]);
+
+        if (!mounted) return;
 
         if (citizensRes.error) {
           console.error('Error fetching citizens from Supabase:', citizensRes.error);
@@ -193,16 +197,83 @@ const Auser_management = () => {
         console.log('📊 Citizens data sample:', citizens.slice(0, 2));
         console.log('📊 Stations data sample:', stations.slice(0, 2));
 
-        setUsers({ citizens, stations });
+        if (mounted) {
+          setUsers({ citizens, stations });
+        }
       } catch (error) {
         console.error("Error fetching users:", error);
+        if (mounted) {
+          setFetchError(error.message || 'Failed to load user data');
+          setUsers({ citizens: [], stations: [] });
+        }
       } finally {
-        setLoading(false);
+        if (mounted) {
+          setLoading(false);
+        }
       }
     };
 
     fetchUsers();
+
+    return () => {
+      mounted = false;
+    };
   }, []);
+
+  // Fetch citizen reports when viewing reports section
+  useEffect(() => {
+    let mounted = true;
+
+    const fetchCitizenReports = async () => {
+      if (!selectedCitizen || activeProfileSection !== 'reports') {
+        setCitizenReports([]);
+        return;
+      }
+
+      setLoadingReports(true);
+      try {
+        const response = await fetch('https://fire-detection-api-production-f55b.up.railway.app/get_reports');
+        if (!response.ok) {
+          throw new Error('Failed to fetch reports');
+        }
+
+        const allReports = await response.json();
+        console.log('📊 All reports fetched:', allReports.length);
+
+        // Filter for this citizen's Fire Out reports
+        const fireOutReports = allReports.filter(report => {
+          const isFireOut = report.status?.toLowerCase().includes('fire out');
+          const matchesReporter = 
+            report.reporter?.toLowerCase().includes(selectedCitizen.name?.toLowerCase()) ||
+            report.reporter?.toLowerCase().includes(selectedCitizen.email?.toLowerCase()) ||
+            report.email?.toLowerCase() === selectedCitizen.email?.toLowerCase();
+          
+          return isFireOut && matchesReporter;
+        });
+
+        console.log('🔥 Fire Out reports for citizen:', fireOutReports.length);
+        
+        if (mounted) {
+          setCitizenReports(fireOutReports);
+        }
+      } catch (error) {
+        console.error('Error fetching citizen reports:', error);
+        if (mounted) {
+          setCitizenReports([]);
+        }
+      } finally {
+        if (mounted) {
+          setLoadingReports(false);
+        }
+      }
+    };
+
+    fetchCitizenReports();
+
+    return () => {
+      mounted = false;
+    };
+  }, [selectedCitizen, activeProfileSection]);
 
   // Filter users based on search query
   const filteredUsers = users[activeTab]?.filter(user => {
@@ -723,11 +794,44 @@ const Auser_management = () => {
     }
   };
 
-  // Calculate statistics
-  const totalUsers = users.citizens.length + users.stations.length;
+  // Calculate statistics safely
+  const totalUsers = (users?.citizens?.length || 0) + (users?.stations?.length || 0);
 
-  const activeUsers = users.citizens.filter(u => u.status === 'active').length + 
-                     users.stations.filter(u => u.status === 'active').length;
+  const activeUsers = (users?.citizens?.filter(u => u.status === 'active')?.length || 0) + 
+                     (users?.stations?.filter(u => u.status === 'active')?.length || 0);
+
+  // Show loading screen while fetching data
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-16 w-16 border-b-4 border-red-600 mx-auto mb-4"></div>
+          <p className="text-gray-600 text-lg font-medium">Loading user data...</p>
+        </div>
+      </div>
+    );
+  }
+
+  // Show error screen if data fetch failed
+  if (fetchError) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+        <div className="text-center max-w-md">
+          <div className="text-red-600 mb-4">
+            <FiUserX className="w-16 h-16 mx-auto" />
+          </div>
+          <h3 className="text-xl font-semibold text-gray-900 mb-2">Failed to Load Data</h3>
+          <p className="text-gray-600 mb-4">{fetchError}</p>
+          <button
+            onClick={() => window.location.reload()}
+            className="px-6 py-3 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors"
+          >
+            Reload Page
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <>
@@ -934,17 +1038,6 @@ const Auser_management = () => {
                           >
                             <FiClock className="w-4 h-4" />
                           </button>
-                          <button 
-                            onClick={() => {
-                              setSelectedCitizen(user);
-                              setShowCitizenProfileModal(true);
-                              setActiveProfileSection('edit');
-                            }}
-                            className="p-2 text-yellow-600 hover:bg-yellow-50 rounded-full"
-                            title="Edit Profile"
-                          >
-                            <FiEdit2 className="w-4 h-4" />
-                          </button>
                           <button
                             onClick={() => handleToggleStatus(activeTab, user.id)}
                             className={`p-2 rounded-full ${
@@ -982,14 +1075,12 @@ const Auser_management = () => {
                     <h2 className="text-2xl font-bold text-gray-900 mb-1">
                       {activeTab === 'citizens' ? 
                         (activeProfileSection === 'profile' ? 'Citizen Profile' : 
-                         activeProfileSection === 'edit' ? 'Citizen Edit Profile' : 
                          activeProfileSection === 'reports' ? 'Citizen Reports History' : 'Citizen Profile') 
                         : 'Station Profile'}
                     </h2>
                     <p className="text-gray-600">
                       {activeProfileSection === 'profile' ? 'View and manage user information' :
-                       activeProfileSection === 'edit' ? 'Update user information and details' :
-                       activeProfileSection === 'reports' ? '' : 
+                       activeProfileSection === 'reports' ? 'View resolved fire reports' : 
                        'View and manage user information'}
                     </p>
                   </div>
@@ -1014,19 +1105,6 @@ const Auser_management = () => {
                       <span className="flex items-center">
                         <FiUser className="w-4 h-4 mr-2" />
                         Profile
-                      </span>
-                    </button>
-                    <button
-                      onClick={() => setActiveProfileSection('edit')}
-                      className={`px-6 py-3 text-sm font-medium rounded-lg transition-all duration-200 ${
-                        activeProfileSection === 'edit'
-                          ? 'text-white bg-gradient-to-r from-red-600 to-red-700 shadow-sm'
-                          : 'text-gray-500 hover:text-gray-700 hover:bg-gray-100'
-                      }`}
-                    >
-                      <span className="flex items-center">
-                        <FiEdit2 className="w-4 h-4 mr-2" />
-                        Edit Profile
                       </span>
                     </button>
                     <button
@@ -1142,64 +1220,172 @@ const Auser_management = () => {
                                     {/* Reports History Section */}
                    {activeProfileSection === 'reports' && (
                      <div className="space-y-6">
-                       
-                       
-                       <div className="space-y-4">
-                         {/* Sample reports - you can replace this with real data */}
-                         <div className="bg-white border border-gray-200 rounded-xl p-6 shadow-sm hover:shadow-md transition-all duration-200">
-                           <div className="flex justify-between items-start">
-                             <div className="flex-1">
-                               <div className="flex items-center mb-2">
-                                 <h4 className="text-lg font-semibold text-gray-900">Fire Emergency Report</h4>
-                                 <span className="ml-3 px-3 py-1 bg-red-100 text-red-800 text-xs font-medium rounded-full border border-red-200">Emergency</span>
-                               </div>
-                               <p className="text-gray-600 mb-2">Location: 123 Main Street, City</p>
-                               <p className="text-sm text-gray-500">Reported on: {new Date().toLocaleDateString()}</p>
-                             </div>
-                             <div className="ml-4">
-                               <button className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors">
-                                 <FiEye className="w-4 h-4" />
-                               </button>
-                             </div>
-                           </div>
+                       {loadingReports ? (
+                         <div className="flex justify-center items-center py-12">
+                           <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-red-600"></div>
+                           <p className="ml-4 text-gray-600">Loading Fire Out reports...</p>
                          </div>
-                         
-                         <div className="bg-white border border-gray-200 rounded-xl p-6 shadow-sm hover:shadow-md transition-all duration-200">
-                           <div className="flex justify-between items-start">
-                             <div className="flex-1">
-                               <div className="flex items-center mb-2">
-                                 <h4 className="text-lg font-semibold text-gray-900">Suspicious Activity</h4>
-                                 <span className="ml-3 px-3 py-1 bg-yellow-100 text-yellow-800 text-xs font-medium rounded-full border border-yellow-200">Warning</span>
-                               </div>
-                               <p className="text-gray-600 mb-2">Location: 456 Oak Avenue</p>
-                               <p className="text-sm text-gray-500">Reported on: {new Date(Date.now() - 86400000).toLocaleDateString()}</p>
-                             </div>
-                             <div className="ml-4">
-                               <button className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors">
-                                 <FiEye className="w-4 h-4" />
-                               </button>
-                             </div>
-                           </div>
+                       ) : citizenReports.length === 0 ? (
+                         <div className="bg-white border border-gray-200 rounded-xl p-8 text-center">
+                           <FiFileText className="w-16 h-16 text-gray-300 mx-auto mb-4" />
+                           <h4 className="text-lg font-semibold text-gray-900 mb-2">No Fire Out Reports</h4>
+                           <p className="text-gray-600">This citizen has no resolved fire reports yet.</p>
                          </div>
-                         
-                         <div className="bg-white border border-gray-200 rounded-xl p-6 shadow-sm hover:shadow-md transition-all duration-200">
-                           <div className="flex justify-between items-start">
-                             <div className="flex-1">
-                               <div className="flex items-center mb-2">
-                                 <h4 className="text-lg font-semibold text-gray-900">Fire Safety Concern</h4>
-                                 <span className="ml-3 px-3 py-1 bg-blue-100 text-blue-800 text-xs font-medium rounded-full border border-blue-200">Info</span>
+                       ) : (
+                         <div className="space-y-4">
+                           {citizenReports.map((report, index) => (
+                             <div key={index} className="bg-white border border-gray-200 rounded-xl overflow-hidden shadow-sm hover:shadow-md transition-all duration-200">
+                               {/* Red Header */}
+                               <div className="bg-red-600 px-6 py-4 flex items-center">
+                                 <span className="text-3xl mr-3">🔥</span>
+                                 <h3 className="text-white text-xl font-bold">Fire Report</h3>
                                </div>
-                               <p className="text-gray-600 mb-2">Location: 789 Pine Road</p>
-                               <p className="text-sm text-gray-500">Reported on: {new Date(Date.now() - 172800000).toLocaleDateString()}</p>
+
+                               {/* Report Content */}
+                               <div className="p-6 space-y-4">
+                                 {/* Reporter and Reported Time - Side by Side */}
+                                 <div className="grid grid-cols-2 gap-4">
+                                   <div>
+                                     <span className="text-gray-600 font-medium block mb-1">Reporter:</span>
+                                     <span className="text-gray-900 font-semibold">{report.reporter || selectedCitizen.name}</span>
+                                   </div>
+                                   <div>
+                                     <span className="text-gray-600 font-medium block mb-1">Reported:</span>
+                                     <span className="text-gray-900 font-semibold">
+                                       {report.created_at || report.timestamp 
+                                         ? new Date(report.created_at || report.timestamp).toLocaleString('en-US', {
+                                             month: 'short',
+                                             day: 'numeric',
+                                             year: 'numeric',
+                                             hour: 'numeric',
+                                             minute: '2-digit',
+                                             hour12: true
+                                           }).replace(',', '')
+                                         : 'N/A'}
+                                     </span>
+                                   </div>
+                                 </div>
+
+                                 {/* Location with Coordinates */}
+                                 <div>
+                                   <span className="text-gray-600 font-medium block mb-1">Location:</span>
+                                   <span className="text-blue-600 font-semibold block">{report.address || report.geotag_location || 'Location not available'}</span>
+                                   {(report.latitude || report.longitude) && (
+                                     <span className="text-gray-500 text-sm">
+                                       Coordinates: {report.latitude || 'N/A'}, {report.longitude || 'N/A'}
+                                     </span>
+                                   )}
+                                 </div>
+
+                                 {/* Cause of Fire */}
+                                 {report.cause_of_fire && (
+                                   <div>
+                                     <span className="text-gray-600 font-medium block mb-1">Cause of Fire:</span>
+                                     <span className="text-gray-900 font-semibold">{report.cause_of_fire}</span>
+                                   </div>
+                                 )}
+
+                                 {/* AI Analysis Results Section */}
+                                 <div className="bg-blue-50 rounded-lg p-4">
+                                   <h4 className="text-blue-900 font-bold mb-3">AI Analysis Results</h4>
+                                   
+                                   <div className="grid grid-cols-2 gap-4">
+                                     {/* Fire Detection */}
+                                     <div>
+                                       <span className="text-blue-700 font-medium block mb-1">Fire Detection:</span>
+                                       <span className="text-blue-900 font-semibold block">
+                                         {report.prediction || 'N/A'} ({report.confidence ? typeof report.confidence === 'number' ? `${(report.confidence * 100).toFixed(2)}%` : report.confidence : 'N/A'})
+                                       </span>
+                                     </div>
+
+                                     {/* Structure Type */}
+                                     <div>
+                                       <span className="text-blue-700 font-medium block mb-1">Structure Type:</span>
+                                       <span className="text-blue-900 font-semibold block">
+                                         {report.structure || 'Unknown'}
+                                         {report.structure_confidence && (
+                                           <span className="text-sm text-blue-700"> ({typeof report.structure_confidence === 'number' ? `${(report.structure_confidence * 100).toFixed(2)}%` : report.structure_confidence})</span>
+                                         )}
+                                       </span>
+                                     </div>
+
+                                     {/* Smoke Intensity */}
+                                     <div>
+                                       <span className="text-blue-700 font-medium block mb-1">Smoke Intensity:</span>
+                                       <span className="text-blue-900 font-semibold block">
+                                         {report.smoke_detection || report.smoke_intensity || 'N/A'} {report.smoke_confidence && (
+                                           <span className="text-sm text-blue-700">
+                                             ({typeof report.smoke_confidence === 'number' ? `${(report.smoke_confidence * 100).toFixed(2)}%` : report.smoke_confidence})
+                                           </span>
+                                         )}
+                                       </span>
+                                     </div>
+
+                                     {/* Structures Affected */}
+                                     <div>
+                                       <span className="text-blue-700 font-medium block mb-1">Structures Affected:</span>
+                                       <span className="text-blue-900 font-semibold block">
+                                         {report.number_of_structures_on_fire || report.structures_affected || 'Unknown'}
+                                       </span>
+                                     </div>
+                                   </div>
+                                 </div>
+
+                                 {/* Status and Alarm Levels */}
+                                 <div className="grid grid-cols-3 gap-4">
+                                   {/* Current Status */}
+                                   <div>
+                                     <span className="text-gray-600 font-medium block mb-2">Current Status:</span>
+                                     <span className="bg-green-100 text-green-800 px-3 py-1 rounded text-sm font-bold inline-block">
+                                       {report.status || 'Fire Out'}
+                                     </span>
+                                   </div>
+
+                                   {/* Suggested Alarm Level */}
+                                   {report.suggested_alarm_level && (
+                                     <div>
+                                       <span className="text-gray-600 font-medium block mb-2">Suggested Alarm Level:</span>
+                                       <span className="bg-gray-100 text-gray-800 px-3 py-1 rounded text-sm font-bold inline-block">
+                                         {report.suggested_alarm_level}
+                                       </span>
+                                     </div>
+                                   )}
+
+                                   {/* Final Alarm Level */}
+                                   {report.alarm_level && (
+                                     <div>
+                                       <span className="text-gray-600 font-medium block mb-2">Final Alarm Level:</span>
+                                       <span className={`px-3 py-1 rounded text-sm font-bold inline-block ${
+                                         report.alarm_level === '1st Alarm' ? 'bg-yellow-400 text-yellow-900' :
+                                         report.alarm_level === '2nd Alarm' ? 'bg-orange-400 text-orange-900' :
+                                         report.alarm_level === '3rd Alarm' ? 'bg-red-500 text-white' :
+                                         'bg-gray-300 text-gray-900'
+                                       }`}>
+                                         {report.alarm_level}
+                                       </span>
+                                     </div>
+                                   )}
+                                 </div>
+
+                                 {/* Report Image */}
+                                 {report.image_url && (
+                                   <div className="mt-4">
+                                     <img 
+                                       src={report.image_url} 
+                                       alt="Fire report" 
+                                       className="w-full rounded-lg border border-gray-200"
+                                       onError={(e) => {
+                                         e.target.onerror = null;
+                                         e.target.src = 'https://via.placeholder.com/400x300?text=Image+Not+Available';
+                                       }}
+                                     />
+                                   </div>
+                                 )}
+                               </div>
                              </div>
-                             <div className="ml-4">
-                               <button className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors">
-                                 <FiEye className="w-4 h-4" />
-                               </button>
-                             </div>
-                           </div>
+                           ))}
                          </div>
-                       </div>
+                       )}
                      </div>
                    )}
 
@@ -1861,7 +2047,6 @@ const Auser_management = () => {
           </div>
         </div>
       )}
-          )}
 
           {/* Responders Modal */}
           {showRespondersModal && selectedStation && (
