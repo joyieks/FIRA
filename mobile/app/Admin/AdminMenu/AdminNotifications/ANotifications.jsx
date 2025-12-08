@@ -109,19 +109,43 @@ export default function ANotifications({ onUnreadCountChange }) {
     try {
       setLoading(true);
       // Query for admin notifications - either matching currentAdminId OR user_id='admin' (for system-wide admin notifications)
-      const { data, error } = await supabase
-        .from('notifications')
-        .select('*')
-        .eq('user_type', 'admin')
-        .or(`user_id.eq.${currentAdminId},user_id.eq.admin`)
-        .order('created_at', { ascending: false });
+      // Use separate queries and merge results to avoid .or() syntax issues
+      const [specificQuery, adminQuery] = await Promise.all([
+        supabase
+          .from('notifications')
+          .select('*')
+          .eq('user_type', 'admin')
+          .eq('user_id', currentAdminId)
+          .order('created_at', { ascending: false }),
+        supabase
+          .from('notifications')
+          .select('*')
+          .eq('user_type', 'admin')
+          .eq('user_id', 'admin')
+          .order('created_at', { ascending: false })
+      ]);
 
-      if (error) {
-        console.error('📱 Error fetching notifications:', error);
-        return;
+      if (specificQuery.error) {
+        console.error('📱 Error fetching specific admin notifications:', specificQuery.error);
+      }
+      if (adminQuery.error) {
+        console.error('📱 Error fetching general admin notifications:', adminQuery.error);
       }
 
-      setNotifications(data || []);
+      // Merge and deduplicate by ID
+      const allNotifications = [...(specificQuery.data || []), ...(adminQuery.data || [])];
+      const uniqueNotifications = Array.from(
+        new Map(allNotifications.map(n => [n.id, n])).values()
+      );
+      
+      // Sort by created_at descending
+      uniqueNotifications.sort((a, b) => {
+        const dateA = new Date(a.created_at);
+        const dateB = new Date(b.created_at);
+        return dateB - dateA;
+      });
+
+      setNotifications(uniqueNotifications);
     } catch (err) {
       console.error('📱 Error loading notifications:', err);
     } finally {
@@ -210,7 +234,8 @@ export default function ANotifications({ onUnreadCountChange }) {
         schema: 'public',
         table: 'notifications'
       }, (payload) => {
-        if (payload.new?.user_id === currentAdminId && payload.new?.user_type === 'admin') {
+        if (payload.new?.user_type === 'admin' && 
+            (payload.new?.user_id === currentAdminId || payload.new?.user_id === 'admin')) {
           setNotifications(prev => 
             prev.map(notification => 
               notification.id === payload.new.id ? payload.new : notification
@@ -267,6 +292,49 @@ export default function ANotifications({ onUnreadCountChange }) {
       // AAlertsWorker will handle stopping the alarm via real-time subscription
     } catch (err) {
       console.error('📱 Error marking notification as read:', err);
+    }
+  };
+
+  // Stop alarm by marking all unread fire alerts and status change notifications as read
+  const stopAlarm = async () => {
+    try {
+      if (!currentAdminId) return;
+      
+      // Get all unread fire_alert and status change notifications
+      const unreadAlerts = notifications.filter(n => 
+        !n.is_read && 
+        (n.type === 'fire_alert' || (n.title && n.title.includes('Status Changed')))
+      );
+
+      if (unreadAlerts.length === 0) {
+        console.log('📱 No unread alerts to mark as read');
+        return;
+      }
+
+      // Mark all as read
+      const alertIds = unreadAlerts.map(n => n.id);
+      const { error } = await supabase
+        .from('notifications')
+        .update({ is_read: true })
+        .in('id', alertIds);
+
+      if (error) {
+        console.error('📱 Error marking alerts as read:', error);
+        return;
+      }
+
+      // Update local state
+      setNotifications(prev => 
+        prev.map(notification => 
+          alertIds.includes(notification.id)
+            ? { ...notification, is_read: true }
+            : notification
+        )
+      );
+
+      console.log('✅ Marked', alertIds.length, 'alerts as read - alarm should stop');
+    } catch (err) {
+      console.error('📱 Error stopping alarm:', err);
     }
   };
 
@@ -353,6 +421,12 @@ export default function ANotifications({ onUnreadCountChange }) {
     }
   }, [unreadCount, onUnreadCountChange]);
 
+  // Check if there are any unread fire alerts or status change notifications
+  const hasActiveAlarm = notifications.some(n => 
+    !n.is_read && 
+    (n.type === 'fire_alert' || (n.title && n.title.includes('Status Changed')))
+  );
+
   return (
     <View className="flex-1 bg-gray-50">
       <View className="bg-white border-b border-gray-200 pt-20">
@@ -363,6 +437,15 @@ export default function ANotifications({ onUnreadCountChange }) {
           <TouchableOpacity className="bg-gray-200 px-4 py-2 rounded-lg mr-2">
             <Text className="text-gray-700 font-medium">Unread ({unreadCount})</Text>
           </TouchableOpacity>
+          {hasActiveAlarm && (
+            <TouchableOpacity 
+              onPress={stopAlarm}
+              className="bg-red-600 px-4 py-2 rounded-lg mr-2 flex-row items-center"
+            >
+              <MaterialIcons name="stop" size={18} color="#fff" />
+              <Text className="text-white font-medium ml-1">Stop Alarm</Text>
+            </TouchableOpacity>
+          )}
         </ScrollView>
       </View>
 

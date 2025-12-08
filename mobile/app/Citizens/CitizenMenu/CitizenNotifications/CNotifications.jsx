@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { View, Text, ScrollView, TouchableOpacity, Image, RefreshControl } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -12,6 +12,7 @@ const CNotifications = ({ onUnreadCountChange, setActiveTab, setReportIdToFocus 
   const [loading, setLoading] = useState(true);
   const [currentUserId, setCurrentUserId] = useState(null);
   const [submittedReport, setSubmittedReport] = useState(null);
+  const [activeFilter, setActiveFilter] = useState('all'); // 'all', 'myReports', 'nearby'
 
   // Get current user ID from AsyncStorage (custom auth system)
   useEffect(() => {
@@ -367,6 +368,36 @@ const CNotifications = ({ onUnreadCountChange, setActiveTab, setReportIdToFocus 
 
   const unreadCount = notifications.filter(n => !n.read).length;
 
+  // Filter notifications based on active filter
+  const filteredNotifications = useMemo(() => {
+    if (activeFilter === 'all') {
+      return notifications;
+    } else if (activeFilter === 'myReports') {
+      // Filter for notifications about user's own reports
+      return notifications.filter(notif => {
+        const title = notif.title || '';
+        return (
+          notif.type === 'user_action' ||
+          title.includes('Acknowledged') ||
+          title.includes('Resolved') ||
+          title.includes('Alarm Level') ||
+          title.includes('Status Changed') ||
+          title.includes('invalidated')
+        );
+      });
+    } else if (activeFilter === 'nearby') {
+      // Filter for nearby fire incidents
+      return notifications.filter(notif => {
+        return (
+          notif.type === 'emergency' ||
+          notif.type === 'fire_alert' ||
+          (notif.title && notif.title.includes('Nearby'))
+        );
+      });
+    }
+    return notifications;
+  }, [notifications, activeFilter]);
+
   // Call the callback whenever unread count changes
   useEffect(() => {
     if (onUnreadCountChange) {
@@ -386,14 +417,41 @@ const CNotifications = ({ onUnreadCountChange, setActiveTab, setReportIdToFocus 
       {/* Filter Tabs */}
       <View className="bg-white border-b border-gray-200 pt-12">
         <View className="flex-row px-4 py-2">
-          <TouchableOpacity className="bg-fire px-4 py-2 rounded-lg mr-2">
-            <Text className="text-white font-medium">All</Text>
+          <TouchableOpacity 
+            onPress={() => setActiveFilter('all')}
+            className={`px-4 py-2 rounded-lg mr-2 ${
+              activeFilter === 'all' ? 'bg-fire' : 'bg-gray-200'
+            }`}
+          >
+            <Text className={`font-medium ${
+              activeFilter === 'all' ? 'text-white' : 'text-gray-700'
+            }`}>
+              All
+            </Text>
           </TouchableOpacity>
-          <TouchableOpacity className="bg-gray-200 px-4 py-2 rounded-lg mr-2">
-            <Text className="text-gray-700 font-medium">Emergency</Text>
+          <TouchableOpacity 
+            onPress={() => setActiveFilter('myReports')}
+            className={`px-4 py-2 rounded-lg mr-2 ${
+              activeFilter === 'myReports' ? 'bg-fire' : 'bg-gray-200'
+            }`}
+          >
+            <Text className={`font-medium ${
+              activeFilter === 'myReports' ? 'text-white' : 'text-gray-700'
+            }`}>
+              My Reports
+            </Text>
           </TouchableOpacity>
-          <TouchableOpacity className="bg-gray-200 px-4 py-2 rounded-lg">
-            <Text className="text-gray-700 font-medium">System</Text>
+          <TouchableOpacity 
+            onPress={() => setActiveFilter('nearby')}
+            className={`px-4 py-2 rounded-lg ${
+              activeFilter === 'nearby' ? 'bg-fire' : 'bg-gray-200'
+            }`}
+          >
+            <Text className={`font-medium ${
+              activeFilter === 'nearby' ? 'text-white' : 'text-gray-700'
+            }`}>
+              Nearby
+            </Text>
           </TouchableOpacity>
         </View>
       </View>
@@ -403,14 +461,18 @@ const CNotifications = ({ onUnreadCountChange, setActiveTab, setReportIdToFocus 
         <View className="flex-1 items-center justify-center">
           <Text className="text-gray-500">Loading notifications...</Text>
         </View>
-      ) : notifications.length === 0 ? (
+      ) : filteredNotifications.length === 0 ? (
         <View className="flex-1 items-center justify-center px-8">
           <MaterialIcons name="notifications-off" size={64} color="#9ca3af" />
           <Text className="text-xl font-bold text-gray-600 mt-4 mb-2">
-            No Notifications
+            {activeFilter === 'all' ? 'No Notifications' : 
+             activeFilter === 'myReports' ? 'No Report Updates' :
+             'No Nearby Incidents'}
           </Text>
           <Text className="text-gray-500 text-center">
-            You're all caught up! We'll notify you when there are important updates.
+            {activeFilter === 'all' ? "You're all caught up! We'll notify you when there are important updates." :
+             activeFilter === 'myReports' ? "You don't have any updates about your reports yet." :
+             "There are no nearby fire incidents at the moment."}
           </Text>
         </View>
       ) : (
@@ -516,7 +578,7 @@ const CNotifications = ({ onUnreadCountChange, setActiveTab, setReportIdToFocus 
             </TouchableOpacity>
           )}
 
-          {notifications.map((notification) => {
+          {filteredNotifications.map((notification) => {
             const icon = getNotificationIcon(notification.type, notification.title);
             const priorityColor = getPriorityColor(notification.priority);
             const isNearbyIncident = notification.type === 'emergency' || notification.type === 'fire_alert';
