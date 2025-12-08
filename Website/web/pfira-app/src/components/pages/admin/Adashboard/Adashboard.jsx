@@ -1963,9 +1963,9 @@ const Adashboard = () => {
                     </span>
                   </div>
 
-                  {/* AI Fire Detection */}
+                  {/* AI Fire Analysis */}
                   <div className="flex items-start space-x-2">
-                    <span className="text-gray-500">AI Fire Detection:</span>
+                    <span className="text-gray-500">AI Fire Analysis:</span>
                     <span className={`px-3 py-1 rounded-full text-xs font-bold ${
                       selectedReport.prediction === 'Fire' ? 'bg-red-600 text-white' : 'bg-orange-500 text-white'
                     }`}>
@@ -1973,18 +1973,18 @@ const Adashboard = () => {
                     </span>
                   </div>
 
-                  {/* Smoke Analysis */}
+                  {/* AI Smoke Analysis */}
                   {(selectedReport.smoke_intensity || selectedReport.smoke_confidence) && (
                     <div className="flex items-start space-x-2">
-                      <span className="text-gray-500">Smoke Analysis:</span>
+                      <span className="text-gray-500">AI Smoke Analysis:</span>
                       <span className="font-medium text-gray-900">{selectedReport.smoke_intensity || ''} {selectedReport.smoke_confidence || ''}</span>
                     </div>
                   )}
 
-                  {/* Structure */}
+                  {/* AI Structure Analysis */}
                   {selectedReport.structure && (
                     <div className="flex items-start space-x-2">
-                      <span className="text-gray-500">Structure:</span>
+                      <span className="text-gray-500">AI Structure Analysis:</span>
                       <span className="font-medium text-gray-900">{selectedReport.structure}{selectedReport.structure_confidence ? ` (${selectedReport.structure_confidence})` : ''}</span>
                     </div>
                   )}

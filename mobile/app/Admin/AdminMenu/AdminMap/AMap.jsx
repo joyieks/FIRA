@@ -1628,20 +1628,20 @@ export default function AMap({ isSidebarOpen = false }) {
                     </View>
                   ) : null}
 
-                  {/* AI Fire Detection */}
+                  {/* AI Fire Analysis */}
                   {selectedReport.prediction ? (
                     <View style={styles.modalRow}>
-                      <Text style={styles.modalLabel}>AI Fire Detection:</Text>
+                      <Text style={styles.modalLabel}>AI Fire Analysis:</Text>
                       <View style={[styles.badge, { backgroundColor: '#fee2e2' }]}>
                         <Text style={[styles.badgeText, { color: '#991b1b' }]}>{formatPredictionBadge(selectedReport)}</Text>
                       </View>
                     </View>
                   ) : null}
 
-                  {/* Smoke Analysis */}
+                  {/* AI Smoke Analysis */}
                   {selectedReport.smoke_intensity ? (
                     <View style={styles.modalRow}>
-                      <Text style={styles.modalLabel}>Smoke Analysis:</Text>
+                      <Text style={styles.modalLabel}>AI Smoke Analysis:</Text>
                       <Text style={styles.modalValue}>{selectedReport.smoke_intensity}{selectedReport.smoke_confidence ? ` ${selectedReport.smoke_confidence}` : ''}</Text>
                     </View>
                   ) : null}

@@ -1789,7 +1789,7 @@ export default function RMap({ routingInfo }) {
               
               {/* AI Detection with Badge */}
               <View style={styles.modalFieldContainer}>
-                <Text style={styles.modalFieldLabel}>AI Fire Detection</Text>
+                <Text style={styles.modalFieldLabel}>AI Fire Analysis</Text>
                 <View style={styles.modalBadge}>
                   <Text style={styles.modalBadgeText}>
                     {toStr(selectedReport?.prediction || 'Unknown')}

@@ -412,9 +412,9 @@ export default function RStatus({ onNavigateToMap }) {
                     </View>
                   </View>
 
-                  {/* AI Fire Detection with Badge */}
+                  {/* AI Fire Analysis with Badge */}
                   <View className="mb-3">
-                    <Text className="text-gray-600 text-sm font-semibold mb-1">AI Fire Detection</Text>
+                    <Text className="text-gray-600 text-sm font-semibold mb-1">AI Fire Analysis</Text>
                     <View className="bg-red-600 px-3 py-1 rounded-full self-start">
                       <Text className="text-white text-sm font-bold">{selectedAssignment.aiDetection}</Text>
                     </View>
