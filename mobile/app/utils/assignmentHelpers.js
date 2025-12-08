@@ -81,19 +81,17 @@ export const checkStationIsBusy = async (stationId) => {
 /**
  * Find the nearest N stations to a given location
  */
-export const findNearestStations = async (lat, lng, excludeStationId = null, limit = 5) => {
+export const findNearestStations = async (lat, lng, excludeStationId = null, limit = 5, incidentLocation = null) => {
   try {
     if (!lat || !lng || isNaN(lat) || isNaN(lng)) {
       console.error('❌ Invalid coordinates for findNearestStations');
       return [];
     }
 
-    // Fetch all stations
+    // Fetch all stations (removed account_status filter to get all stations)
     const { data: stations, error } = await supabase
       .from('station_users')
-      .select('id, station_name, lat, lng, address')
-      .eq('account_status', 'active')
-      .or('status.eq.active,status.is.null');
+      .select('id, station_name, lat, lng, address');
 
     if (error) {
       console.error('❌ Error fetching stations:', error);
@@ -118,10 +116,20 @@ export const findNearestStations = async (lat, lng, excludeStationId = null, lim
         const stationLat = parseFloat(station.lat);
         const stationLng = parseFloat(station.lng);
         const distance = calculateDistance(lat, lng, stationLat, stationLng);
+        let distanceToIncident = null;
+        let distanceToIncidentKm = null;
+
+        if (incidentLocation && !isNaN(incidentLocation.lat) && !isNaN(incidentLocation.lng)) {
+          distanceToIncident = calculateDistance(stationLat, stationLng, incidentLocation.lat, incidentLocation.lng);
+          distanceToIncidentKm = (distanceToIncident / 1000).toFixed(2);
+        }
+
         return {
           ...station,
           distance: distance,
-          distanceKm: (distance / 1000).toFixed(2)
+          distanceKm: (distance / 1000).toFixed(2),
+          distanceToIncident: distanceToIncident,
+          distanceToIncidentKm: distanceToIncidentKm
         };
       })
       .sort((a, b) => a.distance - b.distance)
@@ -135,6 +143,39 @@ export const findNearestStations = async (lat, lng, excludeStationId = null, lim
 };
 
 /**
+ * Find the nearest N stations to a given station (used as fallback)
+ */
+export const findNearestStationsToStation = async (referenceStationId, excludeStationId = null, limit = 5, incidentLocation = null) => {
+  try {
+    // Get the reference station's coordinates
+    const { data: refStation, error: refError } = await supabase
+      .from('station_users')
+      .select('lat, lng')
+      .eq('id', referenceStationId)
+      .single();
+
+    if (refError || !refStation) {
+      console.error('❌ Error fetching reference station:', refError);
+      return [];
+    }
+
+    const refLat = parseFloat(refStation.lat);
+    const refLng = parseFloat(refStation.lng);
+
+    if (isNaN(refLat) || isNaN(refLng)) {
+      console.error('❌ Invalid reference station coordinates');
+      return [];
+    }
+
+    // Use findNearestStations with the reference station's location
+    return await findNearestStations(refLat, refLng, excludeStationId, limit, incidentLocation);
+  } catch (error) {
+    console.error('❌ Error in findNearestStationsToStation:', error);
+    return [];
+  }
+};
+
+/**
  * Handle assignment response (accept or decline)
  */
 export const handleAssignmentResponse = async (reportId, stationId, response) => {
@@ -143,19 +184,85 @@ export const handleAssignmentResponse = async (reportId, stationId, response) =>
       return { success: false, error: 'Invalid response. Must be "accepted" or "declined"' };
     }
 
+    // Update assignment status
+    // Build update payload - only include status (updated_at is optional and may not exist)
+    const updatePayload = { 
+      status: response
+    };
+    
     const { error } = await supabase
       .from('report_assignments')
-      .update({ 
-        status: response,
-        updated_at: new Date().toISOString()
-      })
+      .update(updatePayload)
       .eq('report_id', String(reportId))
       .eq('assignee_type', 'station')
       .eq('assignee_id', stationId);
 
     if (error) {
       console.error('❌ Error updating assignment response:', error);
+      // Check if error is due to missing status column (migration not run)
+      if (error.message && (error.message.includes('column') && error.message.includes('does not exist'))) {
+        if (error.message.includes('status')) {
+          return { 
+            success: false, 
+            error: 'Database migration required! Please run assignment-status-migration.sql in Supabase SQL Editor first.' 
+          };
+        }
+      }
       return { success: false, error: error.message };
+    }
+
+    // If declined, create notification for admin
+    if (response === 'declined') {
+      try {
+        // Get station name
+        const { data: stationData } = await supabase
+          .from('station_users')
+          .select('station_name')
+          .eq('id', stationId)
+          .single();
+        
+        const stationName = stationData?.station_name || 'Unknown Station';
+        
+        // Get report details
+        const API_URL = 'https://fire-detection-api-production-f55b.up.railway.app';
+        let reportData = null;
+        try {
+          const reportRes = await fetch(`${API_URL}/get_reports`);
+          if (reportRes.ok) {
+            const allReports = await reportRes.json();
+            reportData = allReports.find(r => String(r.id) === String(reportId));
+          }
+        } catch (err) {
+          console.error('Error fetching report data for notification:', err);
+        }
+        
+        const locationInfo = reportData?.address || reportData?.geotag_location || 'Location unavailable';
+        
+        // Create notification for all admins (use a special identifier or fetch admin IDs)
+        // For now, we'll use 'admin' as user_id and admin type, which should work with the notifications query
+        // The mobile admin notifications screen should query for user_type='admin'
+        const { error: notifError } = await supabase
+          .from('notifications')
+          .insert({
+            user_id: 'admin', // Use 'admin' as identifier for all admins
+            user_type: 'admin',
+            type: 'assignment',
+            related_report_id: String(reportId),
+            title: `⚠️ Station Declined Assignment`,
+            message: `${stationName} has declined the assignment for the fire report at ${locationInfo}. Please reroute this incident to another station.`,
+            priority: 'urgent',
+            is_read: false
+          });
+        
+        if (notifError) {
+          console.error('❌ Error creating admin notification for declined assignment:', notifError);
+        } else {
+          console.log('✅ Created admin notification for declined assignment');
+        }
+      } catch (notifErr) {
+        console.error('❌ Error creating admin notification:', notifErr);
+        // Don't fail the assignment update if notification fails
+      }
     }
 
     return { success: true };

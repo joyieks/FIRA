@@ -536,12 +536,94 @@ export default function SMap({ reportIdToOpen, onReportOpened }) {
           console.error('❌ Station mobile: RT assignment handler error:', e);
         }
       })
+      .on('postgres_changes', { 
+        event: 'UPDATE', 
+        schema: 'public', 
+        table: 'report_assignments',
+        filter: `assignee_type=eq.station&assignee_id=eq.${currentStationId}`
+      }, async (payload) => {
+        try {
+          const row = payload?.new;
+          const oldRow = payload?.old;
+          if (!row) return;
+          if (row.assignee_type === 'station' && String(row.assignee_id) === String(currentStationId)) {
+            // Handle assignments that become pending (e.g., rerouted assignments)
+            // Check if status changed to pending (was not pending before, or is a new assignment to this station)
+            const wasPending = oldRow?.status === 'pending';
+            const isNowPending = row.status === 'pending';
+            
+            if (isNowPending && !wasPending) {
+              // Fetch report data
+              const response = await fetch('https://fire-detection-api-production-f55b.up.railway.app/get_reports');
+              const reports = response.ok ? await response.json() : [];
+              const reportData = reports.find(r => String(r.id) === String(row.report_id));
+
+              // Check if station is busy
+              const busyCheck = await checkStationIsBusy(currentStationId);
+              
+              if (row.assignment_source === 'manual') {
+                // Admin assigned (including rerouted) - show acceptance modal
+                setPendingAssignmentData({
+                  reportId: row.report_id,
+                  assignmentSource: 'manual',
+                  reportData: reportData,
+                  assignmentId: row.id
+                });
+                setShowAcceptanceModal(true);
+              } else if (row.assignment_source === 'automatic' && busyCheck.isBusy) {
+                // Auto-assigned and station is busy - show forwarding request modal
+                setPendingAssignmentData({
+                  reportId: row.report_id,
+                  assignmentSource: 'automatic',
+                  reportData: reportData,
+                  assignmentId: row.id,
+                  busyCount: busyCheck.busyCount
+                });
+                setShowForwardingRequestModal(true);
+              } else {
+                // Auto-assigned and station not busy - auto-accept
+                await handleAssignmentResponse(row.report_id, currentStationId, 'accepted');
+              }
+            }
+            
+            // If assignment was declined, remove it from the map immediately
+            if (row.status === 'declined' && 
+                row.assignee_type === 'station' && 
+                String(row.assignee_id) === String(currentStationId)) {
+              console.log('🗑️ Assignment declined, removing report from map:', row.report_id);
+              setAssignedReports(prev => prev.filter(r => String(r.id) !== String(row.report_id)));
+              
+              // Mark the related notification as read to stop alarm
+              try {
+                await supabase
+                  .from('notifications')
+                  .update({ is_read: true })
+                  .eq('user_id', currentStationId)
+                  .eq('user_type', 'station')
+                  .eq('type', 'assignment')
+                  .eq('related_report_id', String(row.report_id))
+                  .eq('is_read', false);
+              } catch (notifError) {
+                console.error('Error marking notification as read:', notifError);
+              }
+              
+              // Close info window if this report is currently selected
+              if (selectedReport && String(selectedReport.id) === String(row.report_id)) {
+                setSelectedReport(null);
+                setShowReportModal(false);
+              }
+            }
+          }
+        } catch (e) {
+          console.error('❌ Station mobile: RT assignment update handler error:', e);
+        }
+      })
       .subscribe();
 
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [currentStationId]);
+  }, [currentStationId, selectedReport]);
 
   if (isLoading) {
     return (
@@ -1023,6 +1105,20 @@ export default function SMap({ reportIdToOpen, onReportOpened }) {
                         'declined'
                       );
                       if (result.success) {
+                        // Mark the related notification as read to stop alarm
+                        try {
+                          await supabase
+                            .from('notifications')
+                            .update({ is_read: true })
+                            .eq('user_id', currentStationId)
+                            .eq('user_type', 'station')
+                            .eq('type', 'assignment')
+                            .eq('related_report_id', String(pendingAssignmentData.reportId))
+                            .eq('is_read', false);
+                        } catch (notifError) {
+                          console.error('Error marking notification as read:', notifError);
+                        }
+                        
                         setShowAcceptanceModal(false);
                         setPendingAssignmentData(null);
                       } else {
@@ -1117,6 +1213,20 @@ export default function SMap({ reportIdToOpen, onReportOpened }) {
                           'declined'
                         );
                         if (declineResult.success) {
+                          // Mark the related notification as read to stop alarm
+                          try {
+                            await supabase
+                              .from('notifications')
+                              .update({ is_read: true })
+                              .eq('user_id', currentStationId)
+                              .eq('user_type', 'station')
+                              .eq('type', 'assignment')
+                              .eq('related_report_id', String(pendingAssignmentData.reportId))
+                              .eq('is_read', false);
+                          } catch (notifError) {
+                            console.error('Error marking notification as read:', notifError);
+                          }
+                          
                           setShowForwardingRequestModal(false);
                           setPendingAssignmentData(null);
                           Alert.alert('✅ Request Sent', 'Forwarding request sent to admin. They will reroute the incident to another station.');

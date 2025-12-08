@@ -2486,26 +2486,13 @@ const Adashboard = () => {
               )}
             </div>
 
-            <div className="flex space-x-4">
-              <button
-                onClick={() => {
-                  setShowRerouteModal(false);
-                  setSelectedRerouteStation('');
-                  setPendingAssignment(null);
-                  setStationActiveCounts({});
-                }}
-                className="flex-1 bg-gradient-to-r from-gray-200 to-gray-300 hover:from-gray-300 hover:to-gray-400 text-gray-800 font-semibold px-6 py-3 rounded-xl transition-all shadow-lg hover:shadow-xl transform hover:scale-105"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleReroute}
-                disabled={!selectedRerouteStation}
-                className="flex-1 bg-gradient-to-r from-orange-500 to-orange-600 hover:from-orange-600 hover:to-orange-700 disabled:from-gray-300 disabled:to-gray-400 disabled:cursor-not-allowed text-white font-semibold px-6 py-3 rounded-xl transition-all shadow-lg hover:shadow-xl transform hover:scale-105 disabled:transform-none"
-              >
-                Reroute
-              </button>
-            </div>
+            <button
+              onClick={handleReroute}
+              disabled={!selectedRerouteStation}
+              className="w-full bg-gradient-to-r from-orange-500 to-orange-600 hover:from-orange-600 hover:to-orange-700 disabled:from-gray-300 disabled:to-gray-400 disabled:cursor-not-allowed text-white font-semibold px-6 py-3 rounded-xl transition-all shadow-lg hover:shadow-xl transform hover:scale-105 disabled:transform-none"
+            >
+              Reroute
+            </button>
           </div>
         </div>
       )}

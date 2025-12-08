@@ -4,6 +4,7 @@ import { MaterialIcons } from '@expo/vector-icons';
 import { supabase } from '../../../config/supabase';
 import { notifyRespondersOnStatusChange, notifyRespondersOnAlarmChange, fetchReportData } from '../../../services/responderNotificationService';
 import { notifyAllUsersOnStatusChange, notifyAllUsersOnAlarmChange } from '../../../services/universalNotificationService';
+import { checkStationIsBusy, findNearestStations, findNearestStationsToStation, calculateDistance } from '../../../utils/assignmentHelpers';
 
 const API_URL = 'https://fire-detection-api-production-f55b.up.railway.app';
 
@@ -29,11 +30,22 @@ export default function AOverview() {
   const [isAssigning, setIsAssigning] = useState(false);
   const [assignedResponders, setAssignedResponders] = useState([]);
   const [isLoadingAssigned, setIsLoadingAssigned] = useState(false);
+  const [currentStationAssignment, setCurrentStationAssignment] = useState(null); // { stationId, stationName, status }
   const [showStatusConfirmModal, setShowStatusConfirmModal] = useState(false);
   const [showAlarmConfirmModal, setShowAlarmConfirmModal] = useState(false);
   const [pendingStatusChange, setPendingStatusChange] = useState(null);
   const [pendingAlarmChange, setPendingAlarmChange] = useState(null);
   const [assignedStationReportIds, setAssignedStationReportIds] = useState(new Set()); // Set of report_id strings with station assigned
+  
+  // Reroute modal state
+  const [showRerouteModal, setShowRerouteModal] = useState(false);
+  const [nearestStations, setNearestStations] = useState([]);
+  const [pendingAssignment, setPendingAssignment] = useState(null);
+  const [selectedRerouteStation, setSelectedRerouteStation] = useState('');
+  const [stationActiveCounts, setStationActiveCounts] = useState({});
+  
+  // Waiting for station approval modal state
+  const [showWaitingApprovalModal, setShowWaitingApprovalModal] = useState(false);
 
   const fetchReports = useCallback(async () => {
     try {
@@ -229,7 +241,7 @@ export default function AOverview() {
     })();
   }, []);
 
-  // Load assigned responders when a report is selected
+  // Load assigned responders and station assignment when a report is selected
   useEffect(() => {
     const loadAssignedResponders = async (reportId) => {
       try {
@@ -274,11 +286,63 @@ export default function AOverview() {
       }
     };
 
+    const loadStationAssignment = async (reportId) => {
+      try {
+        setCurrentStationAssignment(null);
+        setAssignStationId(null);
+
+        if (!reportId) return;
+
+        // Fetch station assignment (only accepted or pending, not declined)
+        const { data: assignment, error } = await supabase
+          .from('report_assignments')
+          .select('assignee_id, status')
+          .eq('report_id', reportId)
+          .eq('assignee_type', 'station')
+          .in('status', ['accepted', 'pending'])
+          .order('assigned_at', { ascending: false })
+          .limit(1)
+          .single();
+
+        if (error) {
+          // No assignment found or other error - that's okay
+          if (error.code !== 'PGRST116') { // PGRST116 = no rows returned
+            console.error('Error fetching station assignment:', error);
+          }
+          setCurrentStationAssignment(null);
+          return;
+        }
+
+        if (assignment) {
+          // Fetch station name
+          const { data: stationData } = await supabase
+            .from('station_users')
+            .select('station_name')
+            .eq('id', assignment.assignee_id)
+            .single();
+
+          setCurrentStationAssignment({
+            stationId: assignment.assignee_id,
+            stationName: stationData?.station_name || 'Unknown Station',
+            status: assignment.status
+          });
+        } else {
+          setCurrentStationAssignment(null);
+        }
+      } catch (e) {
+        console.error('Failed loading station assignment:', e);
+        setCurrentStationAssignment(null);
+      }
+    };
+
     if (selectedReport?.id) {
       loadAssignedResponders(selectedReport.id);
+      loadStationAssignment(selectedReport.id);
     } else {
       setAssignedResponders([]);
       setIsLoadingAssigned(false);
+      setCurrentStationAssignment(null);
+      setAssignStationId(null);
     }
   }, [selectedReport?.id]);
 
@@ -705,6 +769,122 @@ export default function AOverview() {
       updateFinalAlarmLevel(editReport.id, pendingAlarmChange.alarm);
       setShowAlarmConfirmModal(false);
       setPendingAlarmChange(null);
+    }
+  };
+
+  // Fetch active incident counts for stations in reroute modal
+  useEffect(() => {
+    if (nearestStations.length > 0 && showRerouteModal) {
+      const fetchActiveCounts = async () => {
+        const counts = {};
+        await Promise.all(
+          nearestStations.map(async (station) => {
+            try {
+              const busyCheck = await checkStationIsBusy(station.id);
+              counts[station.id] = busyCheck.busyCount || 0;
+            } catch (error) {
+              console.error(`Error fetching active count for station ${station.id}:`, error);
+              counts[station.id] = 0;
+            }
+          })
+        );
+        setStationActiveCounts(counts);
+      };
+      fetchActiveCounts();
+    } else {
+      setStationActiveCounts({});
+    }
+  }, [nearestStations, showRerouteModal]);
+
+  // Handle reroute to selected station
+  const handleReroute = async () => {
+    if (!selectedRerouteStation || !pendingAssignment) {
+      Alert.alert('Error', 'Please select a station to reroute to.');
+      return;
+    }
+
+    try {
+      // Remove the declined assignment
+      await supabase
+        .from('report_assignments')
+        .delete()
+        .eq('report_id', pendingAssignment.reportId)
+        .eq('assignee_type', 'station')
+        .eq('assignee_id', pendingAssignment.stationId);
+
+      // Ensure any other existing assignments for this report are also removed
+      await supabase
+        .from('report_assignments')
+        .delete()
+        .eq('report_id', pendingAssignment.reportId)
+        .neq('assignee_id', pendingAssignment.stationId);
+
+      // Get new station name
+      const { data: newStationData } = await supabase
+        .from('station_users')
+        .select('station_name')
+        .eq('id', selectedRerouteStation)
+        .single();
+
+      const newStationName = newStationData?.station_name || 'Station';
+
+      // Create new assignment to the selected station (always pending for reroutes)
+      const payload = {
+        report_id: pendingAssignment.reportId,
+        assignee_type: 'station',
+        assignee_id: selectedRerouteStation,
+        assigned_at: new Date().toISOString(),
+        status: 'pending',
+        assignment_source: 'manual',
+        note: `Rerouted from ${pendingAssignment.stationName}`
+      };
+
+      const { error } = await supabase
+        .from('report_assignments')
+        .insert(payload);
+
+      if (error) {
+        if (error.message && (error.message.includes('column') && error.message.includes('does not exist'))) {
+          Alert.alert('Database Migration Required', 'Please run the migration SQL file (assignment-status-migration.sql) in your Supabase SQL Editor first.');
+          return;
+        }
+        throw error;
+      }
+
+      // Create notification for new station
+      if (selectedReport) {
+        const locationInfo = selectedReport.address || selectedReport.geotag_location || 'Location unavailable';
+        const reporterName = selectedReport.reporter_name || selectedReport.reporter || 'Unknown Reporter';
+        const title = `🚨 Fire Report Rerouted to Your Station - Action Required`;
+        const message = `Command Center is rerouting a fire report to your station.\n\nLocation: ${locationInfo}\nReporter: ${reporterName}\nPrevious station: ${pendingAssignment.stationName}\n\nWill you accept this assignment?`;
+        
+        const { error: notifError } = await supabase
+          .from('notifications')
+          .insert({
+            user_id: selectedRerouteStation,
+            user_type: 'station',
+            type: 'assignment',
+            related_report_id: String(pendingAssignment.reportId),
+            title: title,
+            message: message,
+            priority: 'urgent',
+            is_read: false
+          });
+
+        if (notifError) {
+          console.error('❌ Error creating reroute notification:', notifError);
+        }
+      }
+
+      const reroutedStation = nearestStations.find(s => s.id === selectedRerouteStation);
+      Alert.alert('✅ Rerouted', `Report rerouted to ${reroutedStation?.station_name || 'selected station'}. The station will be notified and must approve the assignment.`);
+      setShowRerouteModal(false);
+      setSelectedRerouteStation('');
+      setPendingAssignment(null);
+      setStationActiveCounts({});
+    } catch (e) {
+      console.error('❌ Reroute failed:', e);
+      Alert.alert('Error', 'Failed to reroute report. Check console.');
     }
   };
 
@@ -1273,11 +1453,40 @@ export default function AOverview() {
                     </View>
                   </View>
 
-                  {/* Assign to Station */}
+                  {/* Assign/Forward to Station */}
                   <View style={{ marginBottom: 20 }}>
-                    <Text style={{ fontSize: 16, fontWeight: '600', color: '#374151', marginBottom: 8 }}>Assign to Station:</Text>
+                    <Text style={{ fontSize: 16, fontWeight: '600', color: '#374151', marginBottom: 8 }}>
+                      {currentStationAssignment ? 'Forward to Station:' : 'Assign to Station:'}
+                    </Text>
+                    
+                    {/* Show currently assigned station if exists */}
+                    {currentStationAssignment && (
+                      <View style={{ backgroundColor: '#eff6ff', borderWidth: 1, borderColor: '#bfdbfe', borderRadius: 8, padding: 12, marginBottom: 12 }}>
+                        <Text style={{ fontSize: 14, fontWeight: '600', color: '#1e40af', marginBottom: 4 }}>
+                          Currently Assigned To:
+                        </Text>
+                        <Text style={{ fontSize: 16, fontWeight: '700', color: '#1e3a8a' }}>
+                          {currentStationAssignment.stationName}
+                        </Text>
+                        {currentStationAssignment.status === 'pending' && (
+                          <Text style={{ fontSize: 12, color: '#f59e0b', marginTop: 4 }}>
+                            ⏳ Awaiting Station Confirmation
+                          </Text>
+                        )}
+                        {currentStationAssignment.status === 'accepted' && (
+                          <Text style={{ fontSize: 12, color: '#10b981', marginTop: 4 }}>
+                            ✅ Station Accepted
+                          </Text>
+                        )}
+                      </View>
+                    )}
+                    
                     <View style={{ borderWidth: 1, borderColor: '#d1d5db', borderRadius: 8, overflow: 'hidden' }}>
-                      <ScrollView style={{ maxHeight: 180 }}>
+                      <ScrollView 
+                        style={{ maxHeight: 180 }} 
+                        nestedScrollEnabled={true}
+                        showsVerticalScrollIndicator={true}
+                      >
                         {(stations || []).map((s) => (
                           <TouchableOpacity
                             key={s.id}
@@ -1304,21 +1513,182 @@ export default function AOverview() {
                         if (!assignStationId || !selectedReport?.id) return;
                         try {
                           setIsAssigning(true);
-                          const payload = { report_id: String(selectedReport.id), assignee_type: 'station', assignee_id: assignStationId };
-                          // Prefer insert; if schema enforces unique report_id, use upsert on report_id
+                          
+                          // Check if station is busy
+                          const busyCheck = await checkStationIsBusy(assignStationId);
+                          
+                          if (busyCheck.isBusy) {
+                            // Station is busy - set assignment to pending and show waiting modal
+                            // First, delete any existing assignment for this report to avoid conflicts
+                            await supabase
+                              .from('report_assignments')
+                              .delete()
+                              .eq('report_id', String(selectedReport.id))
+                              .eq('assignee_type', 'station');
+                            
+                            const payload = {
+                              report_id: String(selectedReport.id),
+                              assignee_type: 'station',
+                              assignee_id: assignStationId,
+                              assigned_at: new Date().toISOString(),
+                              status: 'pending',
+                              assignment_source: 'manual',
+                              note: currentStationAssignment ? `Forwarded from ${currentStationAssignment.stationName}` : null
+                            };
+                            
+                            // Use insert instead of upsert to ensure INSERT listener is triggered
+                            const { error } = await supabase
+                              .from('report_assignments')
+                              .insert(payload);
+                            
+                            if (error) {
+                              // Check if error is due to missing columns (migration not run)
+                              if (error.message && (error.message.includes('column') && error.message.includes('does not exist'))) {
+                                Alert.alert('Database Migration Required', 'Please run the migration SQL file (assignment-status-migration.sql) in your Supabase SQL Editor first.');
+                                setIsAssigning(false);
+                                return;
+                              }
+                              throw error;
+                            }
+
+                            // Get station name for modal
+                            const { data: stationData } = await supabase
+                              .from('station_users')
+                              .select('station_name')
+                              .eq('id', assignStationId)
+                              .single();
+
+                            setPendingAssignment({
+                              reportId: String(selectedReport.id),
+                              stationId: assignStationId,
+                              stationName: stationData?.station_name || 'Station'
+                            });
+                            setShowWaitingApprovalModal(true);
+
+                            // Create notification for the assigned station
+                            const locationInfo = selectedReport.address || selectedReport.geotag_location || 'Location unavailable';
+                            const reporterName = selectedReport.reporter_name || selectedReport.reporter || 'Unknown Reporter';
+                            const title = `🚨 New Fire Report Assignment - Action Required`;
+                            const message = `Command Center is ${currentStationAssignment ? 'forwarding' : 'assigning'} you a report.\n\nLocation: ${locationInfo}\nReporter: ${reporterName}\n\nWill you accept this assignment?`;
+                            
+                            await supabase
+                              .from('notifications')
+                              .insert({
+                                user_id: assignStationId,
+                                user_type: 'station',
+                                type: 'assignment',
+                                related_report_id: String(selectedReport.id),
+                                title: title,
+                                message: message,
+                                priority: 'urgent',
+                                is_read: false
+                              });
+
+                            // Mark this report as assigned locally for the badge
+                            setAssignedStationReportIds(prev => {
+                              const next = new Set(prev);
+                              next.add(String(selectedReport.id));
+                              return next;
+                            });
+                            
+                            // Refresh the current assignment
+                            const { data: newAssignment } = await supabase
+                              .from('report_assignments')
+                              .select('assignee_id, status')
+                              .eq('report_id', String(selectedReport.id))
+                              .eq('assignee_type', 'station')
+                              .in('status', ['accepted', 'pending'])
+                              .order('assigned_at', { ascending: false })
+                              .limit(1)
+                              .single();
+                            
+                            if (newAssignment) {
+                              const { data: newStationData } = await supabase
+                                .from('station_users')
+                                .select('station_name')
+                                .eq('id', newAssignment.assignee_id)
+                                .single();
+                              
+                              setCurrentStationAssignment({
+                                stationId: newAssignment.assignee_id,
+                                stationName: newStationData?.station_name || 'Unknown Station',
+                                status: newAssignment.status
+                              });
+                            }
+                            
+                            setAssignStationId(null);
+                            setIsAssigning(false);
+                            return; // Don't show success alert, modal will handle it
+                          }
+                          
+                          // Station is not busy - proceed normally with accepted status
+                          // First, delete any existing assignment for this report
+                          await supabase
+                            .from('report_assignments')
+                            .delete()
+                            .eq('report_id', String(selectedReport.id))
+                            .eq('assignee_type', 'station');
+                          
+                          const payload = {
+                            report_id: String(selectedReport.id),
+                            assignee_type: 'station',
+                            assignee_id: assignStationId,
+                            assigned_at: new Date().toISOString(),
+                            status: 'accepted',
+                            assignment_source: 'manual',
+                            note: currentStationAssignment ? `Forwarded from ${currentStationAssignment.stationName}` : null
+                          };
+                          
                           const { error } = await supabase
                             .from('report_assignments')
-                            .upsert(payload, { onConflict: 'report_id,assignee_type,assignee_id' });
-                          if (error) throw error;
-                          Alert.alert('Assigned', 'Report assigned to station successfully.');
+                            .insert(payload);
+                          
+                          if (error) {
+                            // Check if error is due to missing columns (migration not run)
+                            if (error.message && (error.message.includes('column') && error.message.includes('does not exist'))) {
+                              Alert.alert('Database Migration Required', 'Please run the migration SQL file (assignment-status-migration.sql) in your Supabase SQL Editor first.');
+                              setIsAssigning(false);
+                              return;
+                            }
+                            throw error;
+                          }
+                          
+                          // Refresh the current assignment
+                          const { data: newAssignment } = await supabase
+                            .from('report_assignments')
+                            .select('assignee_id, status')
+                            .eq('report_id', String(selectedReport.id))
+                            .eq('assignee_type', 'station')
+                            .in('status', ['accepted', 'pending'])
+                            .order('assigned_at', { ascending: false })
+                            .limit(1)
+                            .single();
+                          
+                          if (newAssignment) {
+                            const { data: newStationData } = await supabase
+                              .from('station_users')
+                              .select('station_name')
+                              .eq('id', newAssignment.assignee_id)
+                              .single();
+                            
+                            setCurrentStationAssignment({
+                              stationId: newAssignment.assignee_id,
+                              stationName: newStationData?.station_name || 'Unknown Station',
+                              status: newAssignment.status
+                            });
+                          }
+                          
+                          Alert.alert(currentStationAssignment ? 'Forwarded' : 'Assigned', `Report ${currentStationAssignment ? 'forwarded' : 'assigned'} to station successfully.`);
                           // Mark this report as assigned locally for the badge
                           setAssignedStationReportIds(prev => {
                             const next = new Set(prev);
                             next.add(String(selectedReport.id));
                             return next;
                           });
+                          
+                          setAssignStationId(null);
                         } catch (e) {
-                          Alert.alert('Error', e.message || 'Failed to assign station');
+                          Alert.alert('Error', e.message || `Failed to ${currentStationAssignment ? 'forward' : 'assign'} station`);
                         } finally {
                           setIsAssigning(false);
                         }
@@ -1326,7 +1696,9 @@ export default function AOverview() {
                       disabled={!assignStationId || isAssigning}
                       style={{ marginTop: 10, backgroundColor: !assignStationId || isAssigning ? '#9ca3af' : '#ef4444', paddingVertical: 10, borderRadius: 8, alignItems: 'center' }}
                     >
-                      <Text style={{ color: 'white', fontWeight: '700' }}>{isAssigning ? 'Assigning...' : 'Assign Station'}</Text>
+                      <Text style={{ color: 'white', fontWeight: '700' }}>
+                        {isAssigning ? (currentStationAssignment ? 'Forwarding...' : 'Assigning...') : (currentStationAssignment ? 'Forward Station' : 'Assign Station')}
+                      </Text>
                     </TouchableOpacity>
                   </View>
 
@@ -1665,6 +2037,141 @@ export default function AOverview() {
                 <Text style={{ color: 'white', fontWeight: '600', fontSize: 16 }}>Confirm</Text>
               </TouchableOpacity>
             </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Reroute Modal - Station Too Busy */}
+      <Modal
+        visible={showRerouteModal}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={() => {
+          setShowRerouteModal(false);
+          setSelectedRerouteStation('');
+          setPendingAssignment(null);
+          setStationActiveCounts({});
+        }}
+      >
+        <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'center', alignItems: 'center', padding: 20 }}>
+          <View style={{ backgroundColor: 'white', borderRadius: 16, padding: 24, width: '100%', maxWidth: 500, maxHeight: '80%' }}>
+            <View style={{ alignItems: 'center', marginBottom: 16 }}>
+              <View style={{ backgroundColor: '#fed7aa', borderRadius: 50, padding: 12 }}>
+                <MaterialIcons name="warning" size={32} color="#ea580c" />
+              </View>
+            </View>
+            <Text style={{ fontSize: 24, fontWeight: 'bold', color: '#111827', textAlign: 'center', marginBottom: 8 }}>
+              Station Declined Assignment
+            </Text>
+            <Text style={{ fontSize: 16, color: '#6b7280', textAlign: 'center', marginBottom: 16 }}>
+              <Text style={{ fontWeight: '600' }}>{pendingAssignment?.stationName}</Text> has declined this assignment and is unable to handle this report. 
+              Please reroute the incident to one of the nearest stations:
+            </Text>
+            {selectedReport && (
+              <View style={{ backgroundColor: '#dbeafe', borderLeftWidth: 4, borderLeftColor: '#2563eb', padding: 12, borderRadius: 8, marginBottom: 16 }}>
+                <Text style={{ fontSize: 14, color: '#1e40af', fontWeight: '600', marginBottom: 4 }}>Report Location:</Text>
+                <Text style={{ fontSize: 14, color: '#1e3a8a' }}>
+                  {selectedReport.address || selectedReport.geotag_location || 'Location unavailable'}
+                </Text>
+              </View>
+            )}
+            
+            <ScrollView style={{ maxHeight: 300, marginBottom: 24 }}>
+              {nearestStations.length > 0 ? (
+                nearestStations.map((station) => (
+                  <TouchableOpacity
+                    key={station.id}
+                    onPress={() => setSelectedRerouteStation(station.id)}
+                    style={{
+                      flexDirection: 'row',
+                      alignItems: 'center',
+                      padding: 12,
+                      borderRadius: 8,
+                      marginBottom: 8,
+                      borderWidth: 2,
+                      borderColor: selectedRerouteStation === station.id ? '#2563eb' : '#e5e7eb',
+                      backgroundColor: selectedRerouteStation === station.id ? '#eff6ff' : '#f9fafb'
+                    }}
+                  >
+                    <View style={{ width: 20, height: 20, borderRadius: 10, borderWidth: 2, borderColor: selectedRerouteStation === station.id ? '#2563eb' : '#9ca3af', backgroundColor: selectedRerouteStation === station.id ? '#2563eb' : 'transparent', marginRight: 12 }} />
+                    <View style={{ flex: 1 }}>
+                      <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 4 }}>
+                        <Text style={{ fontWeight: '600', color: '#111827', fontSize: 16 }}>
+                          {station.station_name || 'Station'}
+                        </Text>
+                        {stationActiveCounts[station.id] > 0 && (
+                          <View style={{ marginLeft: 8, backgroundColor: '#f59e0b', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 12, minWidth: 28, alignItems: 'center', justifyContent: 'center' }}>
+                            <Text style={{ fontSize: 12, fontWeight: '700', color: '#ffffff' }}>
+                              {stationActiveCounts[station.id]}
+                            </Text>
+                          </View>
+                        )}
+                      </View>
+                      <Text style={{ color: '#6b7280', fontSize: 14 }}>
+                        {station.distanceToIncidentKm 
+                          ? `${station.distanceToIncidentKm} km from incident` 
+                          : station.distanceKm 
+                            ? `${station.distanceKm} km away` 
+                            : 'Distance unavailable (no coordinates)'}
+                      </Text>
+                    </View>
+                  </TouchableOpacity>
+                ))
+              ) : (
+                <Text style={{ color: '#6b7280', textAlign: 'center', padding: 20 }}>No stations available.</Text>
+              )}
+            </ScrollView>
+
+            <TouchableOpacity
+              onPress={handleReroute}
+              disabled={!selectedRerouteStation}
+              style={{ 
+                width: '100%',
+                backgroundColor: selectedRerouteStation ? '#ea580c' : '#d1d5db', 
+                paddingVertical: 12, 
+                borderRadius: 8, 
+                alignItems: 'center' 
+              }}
+            >
+              <Text style={{ color: 'white', fontWeight: 'bold', fontSize: 16 }}>Reroute</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Waiting for Station Approval Modal */}
+      <Modal
+        visible={showWaitingApprovalModal}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={() => {
+          setShowWaitingApprovalModal(false);
+          setPendingAssignment(null);
+        }}
+      >
+        <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'center', alignItems: 'center', padding: 20 }}>
+          <View style={{ backgroundColor: 'white', borderRadius: 16, padding: 24, width: '100%', maxWidth: 400 }}>
+            <View style={{ alignItems: 'center', marginBottom: 16 }}>
+              <View style={{ backgroundColor: '#dbeafe', borderRadius: 50, padding: 12 }}>
+                <MaterialIcons name="schedule" size={32} color="#2563eb" />
+              </View>
+            </View>
+            <Text style={{ fontSize: 24, fontWeight: 'bold', color: '#111827', textAlign: 'center', marginBottom: 8 }}>
+              Waiting for Station Approval
+            </Text>
+            <Text style={{ fontSize: 16, color: '#6b7280', textAlign: 'center', marginBottom: 24 }}>
+              The assignment has been sent to <Text style={{ fontWeight: '600' }}>{pendingAssignment?.stationName}</Text>. 
+              Please wait for their response.
+            </Text>
+            <TouchableOpacity
+              onPress={() => {
+                setShowWaitingApprovalModal(false);
+                setPendingAssignment(null);
+              }}
+              style={{ backgroundColor: '#2563eb', paddingVertical: 12, borderRadius: 8, alignItems: 'center' }}
+            >
+              <Text style={{ color: 'white', fontWeight: 'bold', fontSize: 16 }}>Okay</Text>
+            </TouchableOpacity>
           </View>
         </View>
       </Modal>
