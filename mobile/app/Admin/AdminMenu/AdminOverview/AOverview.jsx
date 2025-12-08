@@ -1,5 +1,8 @@
 import React, { useEffect, useMemo, useState, useCallback } from 'react';
-import { View, Text, TouchableOpacity, ScrollView, RefreshControl, TextInput, Modal, Image, Platform, Alert } from 'react-native';
+import { View, Text, TouchableOpacity, ScrollView, RefreshControl, TextInput, Modal, Image, Platform, Alert, ActivityIndicator } from 'react-native';
+import * as Print from 'expo-print';
+import * as Sharing from 'expo-sharing';
+import * as FileSystem from 'expo-file-system';
 import { MaterialIcons } from '@expo/vector-icons';
 import { supabase } from '../../../config/supabase';
 import { notifyRespondersOnStatusChange, notifyRespondersOnAlarmChange, fetchReportData } from '../../../services/responderNotificationService';
@@ -43,6 +46,11 @@ export default function AOverview() {
   const [pendingAssignment, setPendingAssignment] = useState(null);
   const [selectedRerouteStation, setSelectedRerouteStation] = useState('');
   const [stationActiveCounts, setStationActiveCounts] = useState({});
+  // Fire-out summary/PDF
+  const [showSummaryModal, setShowSummaryModal] = useState(false);
+  const [summaryData, setSummaryData] = useState(null);
+  const [summaryLoading, setSummaryLoading] = useState(false);
+  const [summaryDownloading, setSummaryDownloading] = useState(false);
   
   // Waiting for station approval modal state
   const [showWaitingApprovalModal, setShowWaitingApprovalModal] = useState(false);
@@ -110,6 +118,409 @@ export default function AOverview() {
       setLoading(false);
     }
   }, []);
+
+  // Build printable HTML for summary (lightweight vs web version)
+  const formatDateTime = (timestamp) => {
+    if (!timestamp) return 'N/A';
+    try {
+      const date = new Date(timestamp);
+      return date.toLocaleString('en-US', {
+        year: 'numeric',
+        month: 'long',
+        day: 'numeric',
+        hour: 'numeric',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: true
+      });
+    } catch {
+      return 'N/A';
+    }
+  };
+
+  const buildSummaryHtml = (data) => {
+    const report = data?.report || {};
+    const station = data?.station || {};
+    const statusHistory = data?.statusHistory || [];
+    const alarmLevelHistory = data?.alarmLevelHistory || [];
+    
+    const submittedAt = report.created_at || report.timestamp || report.time;
+    const underControlTime = statusHistory.find(s => s.status === 'Under Control')?.timestamp;
+    const fireOutTime = report.updated_at || data?.fireOutTime;
+    const location = report.address || report.geotag_location || report.resolved_address || 'Location unavailable';
+    const reporter = report.reporter || report.reporter_name || report.user_name || 'Anonymous';
+    const alarm = report.final_fire_alarm_level || report.final_alarm_level || report.recommended_alarm_level || report.alarm_level || '1st Alarm';
+    const stationName = station.station_name || 'Unassigned';
+    const stationAssignedAt = station.assigned_at;
+    const cause = report.cause_of_fire || 'Not specified';
+    const structures = report.number_of_structures_on_fire || 'Not specified';
+    const structureType = report.structure || '';
+    const confidence = report.confidence ? (parseFloat(report.confidence) * 100).toFixed(2) + '%' : '';
+    const smokeDetection = report.smoke_detection || report.smokeDetection || 'N/A';
+    const smokeConfidence = report.smoke_confidence ? (parseFloat(report.smoke_confidence) * 100).toFixed(2) + '%' : '';
+    const prediction = report.prediction || 'Unknown';
+    const coordinates = (report.latitude && report.longitude) 
+      ? `${parseFloat(report.latitude).toFixed(6)}, ${parseFloat(report.longitude).toFixed(6)}`
+      : '';
+
+    return `
+      <!DOCTYPE html>
+      <html>
+        <head>
+          <meta charset="UTF-8">
+          <style>
+            * { margin: 0; padding: 0; box-sizing: border-box; }
+            body { font-family: Arial, sans-serif; padding: 32px; color: #111827; background: #fff; }
+            .header { text-align: center; margin-bottom: 32px; padding-bottom: 24px; border-bottom: 2px solid #d1d5db; }
+            .logo { background: #dc2626; color: white; padding: 12px 24px; border-radius: 8px; display: inline-block; margin-bottom: 16px; }
+            .logo h1 { font-size: 24px; font-weight: bold; }
+            .logo p { font-size: 12px; margin-top: 4px; }
+            .title { font-size: 20px; font-weight: bold; color: #111827; margin-top: 16px; }
+            .subtitle { color: #6b7280; margin-top: 8px; }
+            .section { background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 8px; padding: 24px; margin-bottom: 24px; }
+            .section-title { font-size: 18px; font-weight: bold; color: #111827; margin-bottom: 16px; display: flex; align-items: center; }
+            .section-title::before { content: '📋'; margin-right: 8px; }
+            .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+            .field { margin-bottom: 12px; }
+            .field-label { font-size: 12px; font-weight: 600; color: #6b7280; margin-bottom: 4px; }
+            .field-value { font-size: 16px; font-weight: 600; color: #111827; }
+            .field-value.alarm { color: #dc2626; }
+            .field-value.status { color: #16a34a; }
+            .timeline-item { display: flex; justify-content: space-between; align-items: center; padding-bottom: 12px; border-bottom: 1px solid #e5e7eb; margin-bottom: 12px; }
+            .timeline-label { font-weight: 600; color: #374151; }
+            .timeline-value { color: #111827; }
+            .alarm-history-item { display: flex; justify-content: space-between; align-items: center; padding-bottom: 8px; border-bottom: 1px solid #e5e7eb; margin-bottom: 8px; }
+            .alarm-level { font-weight: 600; color: #dc2626; }
+            .footer { margin-top: 32px; padding-top: 24px; border-top: 2px solid #d1d5db; text-align: center; }
+            .footer-text { font-size: 12px; color: #6b7280; }
+            .footer-date { font-size: 10px; color: #9ca3af; margin-top: 8px; }
+            .full-width { grid-column: 1 / -1; }
+          </style>
+        </head>
+        <body>
+          <div class="header">
+            <div class="logo">
+              <h1>PROJECT FIRA</h1>
+              <p>Fire Incident Response & Analysis</p>
+            </div>
+            <h2 class="title">FIRE INCIDENT SUMMARY REPORT</h2>
+            <p class="subtitle">Official Government Document</p>
+          </div>
+
+          <div class="section">
+            <h3 class="section-title">Incident Information</h3>
+            <div class="grid">
+              <div class="field">
+                <div class="field-label">Final Alarm Level</div>
+                <div class="field-value alarm">${alarm}</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="section">
+            <h3 class="section-title">Incident Timeline</h3>
+            <div class="timeline-item">
+              <span class="timeline-label">Report Submitted:</span>
+              <span class="timeline-value">${formatDateTime(submittedAt)}</span>
+            </div>
+            ${underControlTime ? `
+            <div class="timeline-item">
+              <span class="timeline-label">Response Time (Under Control):</span>
+              <span class="timeline-value">${formatDateTime(underControlTime)}</span>
+            </div>
+            ` : ''}
+            ${fireOutTime ? `
+            <div class="timeline-item">
+              <span class="timeline-label">Resolution Time (Fire Out):</span>
+              <span class="timeline-value">${formatDateTime(fireOutTime)}</span>
+            </div>
+            ` : ''}
+          </div>
+
+          ${stationName !== 'Unassigned' ? `
+          <div class="section">
+            <h3 class="section-title">Responding Station</h3>
+            <div class="grid">
+              <div class="field">
+                <div class="field-label">Station Name</div>
+                <div class="field-value">${stationName}</div>
+              </div>
+              ${stationAssignedAt ? `
+              <div class="field">
+                <div class="field-label">Assigned At</div>
+                <div class="field-value">${formatDateTime(stationAssignedAt)}</div>
+              </div>
+              ` : ''}
+            </div>
+          </div>
+          ` : ''}
+
+          <div class="section">
+            <h3 class="section-title">Reporter Information</h3>
+            <div class="grid">
+              <div class="field">
+                <div class="field-label">Reporter Name</div>
+                <div class="field-value">${reporter}</div>
+              </div>
+              <div class="field">
+                <div class="field-label">Cause of Fire</div>
+                <div class="field-value">${cause}</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="section">
+            <h3 class="section-title">Incident Location</h3>
+            <div class="field">
+              <div class="field-value">${location}</div>
+              ${coordinates ? `<div class="field-label" style="margin-top: 8px;">Coordinates: ${coordinates}</div>` : ''}
+            </div>
+          </div>
+
+          ${alarmLevelHistory.length > 0 ? `
+          <div class="section">
+            <h3 class="section-title">Alarm Level Changes</h3>
+            ${alarmLevelHistory.map(change => `
+              <div class="alarm-history-item">
+                <span class="alarm-level">${change.level || 'N/A'}</span>
+                <span class="timeline-value">${formatDateTime(change.timestamp)}</span>
+              </div>
+            `).join('')}
+          </div>
+          ` : ''}
+
+          <div class="section">
+            <h3 class="section-title">Additional Details</h3>
+            <div class="grid">
+              ${structures !== 'Not specified' ? `
+              <div class="field">
+                <div class="field-label">Structures Affected</div>
+                <div class="field-value">${structures}</div>
+              </div>
+              ` : ''}
+              ${structureType ? `
+              <div class="field">
+                <div class="field-label">Structure Type</div>
+                <div class="field-value">${structureType}</div>
+              </div>
+              ` : ''}
+              ${confidence ? `
+              <div class="field">
+                <div class="field-label">Detection Confidence</div>
+                <div class="field-value">${confidence}</div>
+              </div>
+              ` : ''}
+              <div class="field">
+                <div class="field-label">Prediction</div>
+                <div class="field-value">${prediction}${confidence ? ` (${confidence})` : ''}</div>
+              </div>
+              <div class="field">
+                <div class="field-label">Smoke Detection</div>
+                <div class="field-value">${smokeDetection}${smokeConfidence ? ` (${smokeConfidence})` : ''}</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="footer">
+            <p class="footer-text">This is an official government document generated by Project FIRA</p>
+            <p class="footer-date">Generated on ${new Date().toLocaleString('en-US', {
+              year: 'numeric',
+              month: 'long',
+              day: 'numeric',
+              hour: 'numeric',
+              minute: '2-digit'
+            })}</p>
+          </div>
+        </body>
+      </html>
+    `;
+  };
+
+  const loadSummaryData = async (reportId) => {
+    try {
+      setSummaryLoading(true);
+      setSummaryData(null);
+      const res = await fetch(`${API_URL}/get_reports`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const all = await res.json();
+      const report = Array.isArray(all) ? all.find(r => String(r.id) === String(reportId)) : null;
+      if (!report) throw new Error('Report not found');
+
+      // Fetch station assignment (latest accepted/pending)
+      let station = null;
+      const { data: assignment } = await supabase
+        .from('report_assignments')
+        .select('assignee_id, assigned_at, status')
+        .eq('report_id', String(reportId))
+        .eq('assignee_type', 'station')
+        .in('status', ['accepted', 'pending'])
+        .order('assigned_at', { ascending: false })
+        .limit(1)
+        .single();
+      if (assignment?.assignee_id) {
+        const { data: stationData } = await supabase
+          .from('station_users')
+          .select('station_name, address, email, phone')
+          .eq('id', assignment.assignee_id)
+          .single();
+        if (stationData) {
+          station = { ...stationData, assigned_at: assignment.assigned_at };
+        }
+      }
+
+      // Fetch status change notifications
+      const { data: statusNotifications } = await supabase
+        .from('notifications')
+        .select('created_at, message, title')
+        .or(`related_report_id.eq.${reportId},fire_report_id.eq.${reportId}`)
+        .or('type.eq.fire_alert,type.eq.assignment')
+        .order('created_at', { ascending: true });
+
+      const statusHistory = [];
+      if (statusNotifications) {
+        statusNotifications.forEach(notif => {
+          const message = notif.message || notif.title || '';
+          if (message.includes('Status Changed')) {
+            const statusMatch = message.match(/Status Changed.*?to\s+([^:]+)/i);
+            if (statusMatch) {
+              statusHistory.push({
+                status: statusMatch[1].trim(),
+                timestamp: notif.created_at
+              });
+            }
+          }
+        });
+      }
+
+      // Fetch alarm level change notifications
+      const { data: alarmNotifications } = await supabase
+        .from('notifications')
+        .select('created_at, message, title')
+        .or(`related_report_id.eq.${reportId},fire_report_id.eq.${reportId}`)
+        .or('type.eq.fire_alert,type.eq.alarm_level_change')
+        .order('created_at', { ascending: true });
+
+      let alarmLevelHistory = [];
+      if (alarmNotifications && alarmNotifications.length > 0) {
+        alarmLevelHistory = alarmNotifications
+          .map(notif => {
+            const message = notif.message || notif.title || '';
+            const alarmMatch = message.match(/(\d+(?:st|nd|rd|th)?\s*Alarm|General Alarm|TASK FORCE \w+)/i);
+            return {
+              level: alarmMatch ? alarmMatch[1] : null,
+              timestamp: notif.created_at
+            };
+          })
+          .filter(change => change.level !== null);
+      }
+
+      // If no alarm level history found, use report's final fire alarm level
+      if (alarmLevelHistory.length === 0) {
+        alarmLevelHistory = [{
+          level: report.final_fire_alarm_level || report.final_alarm_level || '1st Alarm',
+          timestamp: report.created_at || report.timestamp
+        }];
+      }
+
+      setSummaryData({ report, station, fireOutTime: report.updated_at, statusHistory, alarmLevelHistory });
+      setShowSummaryModal(true);
+    } catch (err) {
+      console.error('Summary load error:', err);
+      Alert.alert('Error', err.message || 'Failed to load summary.');
+    } finally {
+      setSummaryLoading(false);
+    }
+  };
+
+  const downloadSummaryPdf = async (action = 'share') => {
+    if (!summaryData) {
+      Alert.alert('Error', 'No summary data available.');
+      return;
+    }
+    
+    try {
+      setSummaryDownloading(true);
+      
+      // Build HTML content with error handling
+      let html;
+      try {
+        html = buildSummaryHtml(summaryData);
+        if (!html || html.trim().length === 0) {
+          throw new Error('HTML content is empty');
+        }
+        console.log('✅ HTML generated, length:', html.length);
+      } catch (htmlError) {
+        console.error('❌ HTML generation error:', htmlError);
+        throw new Error(`Failed to generate HTML: ${htmlError.message}`);
+      }
+      
+      console.log('📄 Generating PDF from HTML...');
+      
+      // Generate PDF - use minimal options for better compatibility
+      let result;
+      try {
+        result = await Print.printToFileAsync({ html });
+      } catch (printError) {
+        console.error('❌ Print error:', printError);
+        throw new Error(`PDF generation failed: ${printError.message || 'Unknown error'}`);
+      }
+      
+      if (!result || !result.uri) {
+        throw new Error('PDF generation returned no URI');
+      }
+      
+      const uri = result.uri;
+      console.log('✅ PDF generated successfully:', uri);
+      
+      // Check if sharing is available
+      const isAvailable = await Sharing.isAvailableAsync();
+      if (!isAvailable && Platform.OS !== 'web') {
+        Alert.alert('Error', 'Sharing is not available on this device.');
+        setSummaryDownloading(false);
+        return;
+      }
+      
+      // For both download and share, use the native share dialog
+      // This allows users to save to Downloads or share via other apps
+      if (Platform.OS === 'ios' || Platform.OS === 'android') {
+        try {
+          // Use simple share - Android will show "Save" option in share dialog
+          if (Platform.OS === 'android') {
+            await Sharing.shareAsync(uri, {
+              dialogTitle: action === 'download' ? 'Save PDF to Downloads' : 'Share PDF'
+            });
+          } else {
+            // iOS
+            await Sharing.shareAsync(uri);
+          }
+          console.log('✅ PDF shared successfully');
+        } catch (shareError) {
+          console.error('❌ Sharing error:', shareError);
+          // Try without options as fallback
+          await Sharing.shareAsync(uri);
+        }
+      } else {
+        Alert.alert('PDF Ready', `PDF saved to: ${uri}`);
+      }
+    } catch (err) {
+      console.error('❌ Summary PDF error:', err);
+      console.error('❌ Error details:', {
+        name: err.name,
+        message: err.message,
+        stack: err.stack
+      });
+      
+      // More user-friendly error message
+      let errorMessage = 'Failed to generate PDF. Please try again.';
+      if (err.message) {
+        errorMessage = err.message;
+      }
+      
+      Alert.alert('Error', errorMessage);
+    } finally {
+      setSummaryDownloading(false);
+    }
+  };
 
   // Load AI suggestions from messages table
   // Optimized: Only query messages that have a report_id (fire report context)
@@ -1253,6 +1664,21 @@ export default function AOverview() {
                 >
                   <Text style={{ color: 'white', fontWeight: '700', fontSize: 12 }}>Details</Text>
                 </TouchableOpacity>
+                {String(r.status || '').toLowerCase().includes('fire out') && (
+                  <TouchableOpacity
+                    onPress={() => loadSummaryData(r.id)}
+                    style={{
+                      flex: 1,
+                      paddingVertical: 10,
+                      borderRadius: 10,
+                      backgroundColor: '#10b981',
+                      alignItems: 'center',
+                      shadowColor: '#000', shadowOpacity: 0.06, shadowRadius: 6, shadowOffset: { width: 0, height: 2 }, elevation: 2
+                    }}
+                  >
+                    <Text style={{ color: 'white', fontWeight: '700', fontSize: 12 }}>PDF</Text>
+                  </TouchableOpacity>
+                )}
                 <TouchableOpacity
                   onPress={() => {
                     console.log('[Edit Button] Setting editReport to:', r);
@@ -2200,6 +2626,168 @@ export default function AOverview() {
             >
               <Text style={{ color: 'white', fontWeight: 'bold', fontSize: 16 }}>Okay</Text>
             </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Fire-Out Summary Modal */}
+      <Modal
+        visible={showSummaryModal}
+        transparent
+        animationType="fade"
+        onRequestClose={() => {
+          setShowSummaryModal(false);
+          setSummaryData(null);
+        }}
+      >
+        <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'center', alignItems: 'center', padding: 20 }}>
+          <View style={{ backgroundColor: 'white', borderRadius: 16, padding: 20, width: '100%', maxWidth: 420 }}>
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+              <Text style={{ fontSize: 18, fontWeight: '800', color: '#0f172a' }}>Fire Out Summary</Text>
+              <TouchableOpacity onPress={() => { setShowSummaryModal(false); setSummaryData(null); }}>
+                <Text style={{ fontSize: 18, fontWeight: '800', color: '#334155' }}>✕</Text>
+              </TouchableOpacity>
+            </View>
+
+            {summaryLoading ? (
+              <View style={{ paddingVertical: 24, alignItems: 'center' }}>
+                <ActivityIndicator size="small" color="#ef4444" />
+                <Text style={{ marginTop: 8, color: '#6b7280' }}>Loading summary…</Text>
+              </View>
+            ) : summaryData ? (
+              <ScrollView showsVerticalScrollIndicator={false} style={{ maxHeight: 500 }}>
+                <View style={{ backgroundColor: '#f9fafb', borderRadius: 8, padding: 16, marginBottom: 16, borderWidth: 1, borderColor: '#e5e7eb' }}>
+                  <Text style={{ fontSize: 16, fontWeight: '700', color: '#111827', marginBottom: 12 }}>📋 Incident Information</Text>
+                  <View style={{ marginBottom: 8 }}>
+                    <Text style={{ color: '#6b7280', fontSize: 12, fontWeight: '600', marginBottom: 4 }}>Final Alarm Level</Text>
+                    <Text style={{ color: '#dc2626', fontWeight: '700', fontSize: 16 }}>
+                      {summaryData.report?.final_fire_alarm_level || summaryData.report?.final_alarm_level || summaryData.report?.recommended_alarm_level || summaryData.report?.alarm_level || '1st Alarm'}
+                    </Text>
+                  </View>
+                </View>
+
+                <View style={{ backgroundColor: '#f9fafb', borderRadius: 8, padding: 16, marginBottom: 16, borderWidth: 1, borderColor: '#e5e7eb' }}>
+                  <Text style={{ fontSize: 16, fontWeight: '700', color: '#111827', marginBottom: 12 }}>⏰ Incident Timeline</Text>
+                  <View style={{ marginBottom: 8, paddingBottom: 8, borderBottomWidth: 1, borderBottomColor: '#e5e7eb' }}>
+                    <Text style={{ fontWeight: '600', color: '#374151', marginBottom: 4 }}>Report Submitted:</Text>
+                    <Text style={{ color: '#111827' }}>{formatDateTime(summaryData.report?.created_at || summaryData.report?.timestamp)}</Text>
+                  </View>
+                  {summaryData.statusHistory?.find(s => s.status === 'Under Control') && (
+                    <View style={{ marginBottom: 8, paddingBottom: 8, borderBottomWidth: 1, borderBottomColor: '#e5e7eb' }}>
+                      <Text style={{ fontWeight: '600', color: '#374151', marginBottom: 4 }}>Response Time (Under Control):</Text>
+                      <Text style={{ color: '#111827' }}>{formatDateTime(summaryData.statusHistory.find(s => s.status === 'Under Control').timestamp)}</Text>
+                    </View>
+                  )}
+                  {summaryData.fireOutTime && (
+                    <View style={{ marginBottom: 8 }}>
+                      <Text style={{ fontWeight: '600', color: '#374151', marginBottom: 4 }}>Resolution Time (Fire Out):</Text>
+                      <Text style={{ color: '#111827' }}>{formatDateTime(summaryData.fireOutTime)}</Text>
+                    </View>
+                  )}
+                </View>
+
+                {summaryData.station?.station_name && summaryData.station.station_name !== 'Unassigned' && (
+                  <View style={{ backgroundColor: '#f9fafb', borderRadius: 8, padding: 16, marginBottom: 16, borderWidth: 1, borderColor: '#e5e7eb' }}>
+                    <Text style={{ fontSize: 16, fontWeight: '700', color: '#111827', marginBottom: 12 }}>🏠 Responding Station</Text>
+                    <View style={{ marginBottom: 8 }}>
+                      <Text style={{ color: '#6b7280', fontSize: 12, fontWeight: '600', marginBottom: 4 }}>Station Name</Text>
+                      <Text style={{ color: '#111827', fontWeight: '700', fontSize: 16 }}>{summaryData.station.station_name}</Text>
+                    </View>
+                    {summaryData.station.assigned_at && (
+                      <View style={{ marginBottom: 8 }}>
+                        <Text style={{ color: '#6b7280', fontSize: 12, fontWeight: '600', marginBottom: 4 }}>Assigned At</Text>
+                        <Text style={{ color: '#111827' }}>{formatDateTime(summaryData.station.assigned_at)}</Text>
+                      </View>
+                    )}
+                  </View>
+                )}
+
+                <View style={{ backgroundColor: '#f9fafb', borderRadius: 8, padding: 16, marginBottom: 16, borderWidth: 1, borderColor: '#e5e7eb' }}>
+                  <Text style={{ fontSize: 16, fontWeight: '700', color: '#111827', marginBottom: 12 }}>👤 Reporter Information</Text>
+                  <View style={{ marginBottom: 8 }}>
+                    <Text style={{ color: '#6b7280', fontSize: 12, fontWeight: '600', marginBottom: 4 }}>Reporter Name</Text>
+                    <Text style={{ color: '#111827', fontWeight: '700', fontSize: 16 }}>
+                      {summaryData.report?.reporter || summaryData.report?.reporter_name || summaryData.report?.user_name || 'Anonymous'}
+                    </Text>
+                  </View>
+                  <View style={{ marginBottom: 8 }}>
+                    <Text style={{ color: '#6b7280', fontSize: 12, fontWeight: '600', marginBottom: 4 }}>Cause of Fire</Text>
+                    <Text style={{ color: '#111827' }}>{summaryData.report?.cause_of_fire || 'Not specified'}</Text>
+                  </View>
+                </View>
+
+                <View style={{ backgroundColor: '#f9fafb', borderRadius: 8, padding: 16, marginBottom: 16, borderWidth: 1, borderColor: '#e5e7eb' }}>
+                  <Text style={{ fontSize: 16, fontWeight: '700', color: '#111827', marginBottom: 12 }}>📍 Incident Location</Text>
+                  <Text style={{ color: '#111827', fontSize: 16 }}>
+                    {summaryData.report?.address || summaryData.report?.geotag_location || summaryData.report?.resolved_address || 'Location unavailable'}
+                  </Text>
+                  {(summaryData.report?.latitude && summaryData.report?.longitude) && (
+                    <Text style={{ color: '#6b7280', fontSize: 12, marginTop: 8 }}>
+                      Coordinates: {parseFloat(summaryData.report.latitude).toFixed(6)}, {parseFloat(summaryData.report.longitude).toFixed(6)}
+                    </Text>
+                  )}
+                </View>
+
+                {summaryData.alarmLevelHistory && summaryData.alarmLevelHistory.length > 0 && (
+                  <View style={{ backgroundColor: '#f9fafb', borderRadius: 8, padding: 16, marginBottom: 16, borderWidth: 1, borderColor: '#e5e7eb' }}>
+                    <Text style={{ fontSize: 16, fontWeight: '700', color: '#111827', marginBottom: 12 }}>🚨 Alarm Level Changes</Text>
+                    {summaryData.alarmLevelHistory.map((change, index) => (
+                      <View key={index} style={{ marginBottom: 8, paddingBottom: 8, borderBottomWidth: index < summaryData.alarmLevelHistory.length - 1 ? 1 : 0, borderBottomColor: '#e5e7eb' }}>
+                        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                          <Text style={{ fontWeight: '600', color: '#dc2626' }}>{change.level || 'N/A'}</Text>
+                          <Text style={{ color: '#111827' }}>{formatDateTime(change.timestamp)}</Text>
+                        </View>
+                      </View>
+                    ))}
+                  </View>
+                )}
+
+                <View style={{ flexDirection: 'row', gap: 12, marginTop: 8 }}>
+                  <TouchableOpacity
+                    onPress={() => downloadSummaryPdf('download')}
+                    disabled={summaryDownloading}
+                    style={{
+                      flex: 1,
+                      backgroundColor: summaryDownloading ? '#9ca3af' : '#10b981',
+                      paddingVertical: 12,
+                      borderRadius: 10,
+                      alignItems: 'center'
+                    }}
+                  >
+                    {summaryDownloading ? (
+                      <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                        <ActivityIndicator size="small" color="#fff" style={{ marginRight: 8 }} />
+                        <Text style={{ color: 'white', fontWeight: '700', fontSize: 14 }}>Generating…</Text>
+                      </View>
+                    ) : (
+                      <Text style={{ color: 'white', fontWeight: '700', fontSize: 14 }}>Download PDF</Text>
+                    )}
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    onPress={() => downloadSummaryPdf('share')}
+                    disabled={summaryDownloading}
+                    style={{
+                      flex: 1,
+                      backgroundColor: summaryDownloading ? '#9ca3af' : '#2563eb',
+                      paddingVertical: 12,
+                      borderRadius: 10,
+                      alignItems: 'center'
+                    }}
+                  >
+                    {summaryDownloading ? (
+                      <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                        <ActivityIndicator size="small" color="#fff" style={{ marginRight: 8 }} />
+                        <Text style={{ color: 'white', fontWeight: '700', fontSize: 14 }}>Generating…</Text>
+                      </View>
+                    ) : (
+                      <Text style={{ color: 'white', fontWeight: '700', fontSize: 14 }}>Share PDF</Text>
+                    )}
+                  </TouchableOpacity>
+                </View>
+              </ScrollView>
+            ) : (
+              <Text style={{ color: '#ef4444', textAlign: 'center', paddingVertical: 12 }}>No summary data.</Text>
+            )}
           </View>
         </View>
       </Modal>
