@@ -72,6 +72,13 @@ export default function RMap({ routingInfo }) {
     return String(val);
   };
 
+  // Helper to check if report is "No Fire" + "No Smoke"
+  const isNoFireNoSmoke = (report) => {
+    const pred = (report?.prediction || '').toLowerCase();
+    const smoke = (report?.smoke_detection || report?.smokeDetection || '').toLowerCase();
+    return pred.includes('no fire') && smoke.includes('no smoke');
+  };
+
   // Function to center map on user's location
   const centerOnUserLocation = async () => {
     if (!location) return;
@@ -870,7 +877,7 @@ export default function RMap({ routingInfo }) {
         });
       });
 
-      // Filter reports: must be assigned to station, have coordinates, and NOT be "Fire Out" or "Under Control"
+      // Filter reports: must be assigned to station, have coordinates, NOT be "Fire Out" or "Under Control", and NOT be "No Fire" + "No Smoke"
       const assignedFireReports = allReports.filter(report => {
         const isAssigned = reportIds.includes(String(report.id));
         const latNum = typeof report?.latitude === 'number' ? report.latitude : parseFloat(report?.latitude);
@@ -880,7 +887,7 @@ export default function RMap({ routingInfo }) {
         const isCancelled = status.includes('cancelled') || status.includes('canceled');
         const isFireOut = status.includes('fire out') || status.includes('under control');
         
-        return isAssigned && hasValidCoordinates && !isCancelled && !isFireOut;
+        return isAssigned && hasValidCoordinates && !isCancelled && !isFireOut && !isNoFireNoSmoke(report);
       }).map(report => {
         const assignmentInfo = assignmentMap.get(String(report.id));
         
