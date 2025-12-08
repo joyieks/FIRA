@@ -16,6 +16,8 @@ const LoginComponent = () => {
   const [showToast, setShowToast] = useState(false);
   const [toastMessage, setToastMessage] = useState('');
   const [toastType, setToastType] = useState('success'); // 'success' or 'error'
+  const [showBanModal, setShowBanModal] = useState(false);
+  const [banReason, setBanReason] = useState('');
   const router = useRouter();
   const { login: authLogin, loginAdmin, loginCitizen, loginStation, loginResponder, isLoading, resetLoading } = useAuth();
 
@@ -226,6 +228,17 @@ const LoginComponent = () => {
 
       if (citizenData) {
         console.log('✅ User found in citizen_users table:', citizenData);
+        
+        // Check if citizen is disabled/banned
+        if (citizenData.is_disabled === true) {
+          console.log('🚫 Citizen account is disabled');
+          // Store ban info for modal display
+          setBanReason(citizenData.disable_reason || 'No reason provided');
+          setShowBanModal(true);
+          setIsLoading(false);
+          return;
+        }
+        
         const userData = {
           uid: citizenData.id,
           firstName: citizenData.first_name,
@@ -392,6 +405,197 @@ const LoginComponent = () => {
           </View>
         </View>
       ) : null}
+
+      {/* Ban/Disabled Modal */}
+      {showBanModal && (
+        <View 
+          className="absolute inset-0 z-50"
+          style={{
+            backgroundColor: 'rgba(0, 0, 0, 0.75)',
+            justifyContent: 'center',
+            alignItems: 'center',
+          }}
+        >
+          <View 
+            className="bg-white mx-6 max-w-md w-full"
+            style={{
+              borderRadius: 28,
+              padding: 32,
+              shadowColor: '#000',
+              shadowOffset: { width: 0, height: 20 },
+              shadowOpacity: 0.3,
+              shadowRadius: 30,
+              elevation: 20,
+            }}
+          >
+            {/* Animated Icon Container */}
+            <View className="items-center mb-6">
+              <View 
+                className="rounded-full items-center justify-center mb-5"
+                style={{
+                  width: 100,
+                  height: 100,
+                  backgroundColor: '#fee2e2',
+                  borderWidth: 4,
+                  borderColor: '#fecaca',
+                  shadowColor: '#dc2626',
+                  shadowOffset: { width: 0, height: 8 },
+                  shadowOpacity: 0.3,
+                  shadowRadius: 12,
+                  elevation: 12,
+                }}
+              >
+                <MaterialIcons name="block" size={56} color="#dc2626" />
+              </View>
+              
+              {/* Title with gradient effect */}
+              <Text 
+                className="text-center mb-2"
+                style={{
+                  fontSize: 28,
+                  fontWeight: 'bold',
+                  color: '#1f2937',
+                  letterSpacing: 0.5,
+                }}
+              >
+                Account Disabled
+              </Text>
+              
+              {/* Subtitle with Command Center branding */}
+              <View className="items-center">
+                <Text 
+                  className="text-center"
+                  style={{
+                    fontSize: 16,
+                    color: '#6b7280',
+                    marginBottom: 4,
+                  }}
+                >
+                  You have been banned by the
+                </Text>
+                <Text 
+                  className="text-center"
+                  style={{
+                    fontSize: 18,
+                    fontWeight: '700',
+                    color: '#dc2626',
+                    letterSpacing: 0.3,
+                  }}
+                >
+                  Command Center Admin
+                </Text>
+              </View>
+            </View>
+
+            {/* Ban Reason - Enhanced styling */}
+            {banReason && (
+              <View 
+                className="mb-6"
+                style={{
+                  backgroundColor: '#fef2f2',
+                  borderLeftWidth: 5,
+                  borderLeftColor: '#dc2626',
+                  borderRadius: 16,
+                  padding: 18,
+                  borderWidth: 1,
+                  borderColor: '#fecaca',
+                  shadowColor: '#dc2626',
+                  shadowOffset: { width: 0, height: 2 },
+                  shadowOpacity: 0.1,
+                  shadowRadius: 4,
+                  elevation: 3,
+                }}
+              >
+                <View className="flex-row items-center mb-3">
+                  <MaterialIcons name="info" size={20} color="#dc2626" />
+                  <Text 
+                    className="ml-2"
+                    style={{
+                      fontSize: 14,
+                      fontWeight: '700',
+                      color: '#991b1b',
+                      textTransform: 'uppercase',
+                      letterSpacing: 0.5,
+                    }}
+                  >
+                    Reason for Ban
+                  </Text>
+                </View>
+                <Text 
+                  style={{
+                    fontSize: 16,
+                    color: '#1f2937',
+                    lineHeight: 24,
+                    fontWeight: '500',
+                  }}
+                >
+                  {banReason}
+                </Text>
+              </View>
+            )}
+
+            {/* Message - Enhanced styling */}
+            <View 
+              className="mb-6"
+              style={{
+                backgroundColor: '#f9fafb',
+                borderRadius: 16,
+                padding: 18,
+                borderWidth: 1,
+                borderColor: '#e5e7eb',
+              }}
+            >
+              <View className="flex-row items-start mb-2">
+                <MaterialIcons name="warning" size={20} color="#f59e0b" style={{ marginTop: 2 }} />
+                <Text 
+                  className="ml-2 flex-1"
+                  style={{
+                    fontSize: 14,
+                    color: '#374151',
+                    lineHeight: 20,
+                    fontWeight: '500',
+                  }}
+                >
+                  Your account has been disabled and you cannot access the application. If you believe this is an error, please contact the Command Center Administrator.
+                </Text>
+              </View>
+            </View>
+
+            {/* Continue Button - Enhanced with gradient effect */}
+            <TouchableOpacity
+              className="rounded-xl py-4 items-center"
+              onPress={() => {
+                setShowBanModal(false);
+                setBanReason('');
+                setEmail('');
+                setPassword('');
+              }}
+              activeOpacity={0.85}
+              style={{
+                backgroundColor: '#dc2626',
+                shadowColor: '#dc2626',
+                shadowOffset: { width: 0, height: 8 },
+                shadowOpacity: 0.4,
+                shadowRadius: 12,
+                elevation: 12,
+                borderWidth: 1,
+                borderColor: '#b91c1c',
+              }}
+            >
+              <Text 
+                style={{
+                  color: '#ffffff',
+                  fontSize: 18,
+                  fontWeight: '700',
+                  letterSpacing: 0.5,
+                }}
+              >
+                Continue
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      )}
     </KeyboardAvoidingView>
   );
 };

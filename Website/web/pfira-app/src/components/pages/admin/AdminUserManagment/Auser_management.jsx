@@ -49,6 +49,16 @@ const Auser_management = () => {
   const [placesService, setPlacesService] = useState(null);
   const [citizenReports, setCitizenReports] = useState([]);
   const [loadingReports, setLoadingReports] = useState(false);
+  const [showDisableModal, setShowDisableModal] = useState(false);
+  const [disableReason, setDisableReason] = useState('');
+  const [userToDisable, setUserToDisable] = useState(null);
+  const [showReEnableModal, setShowReEnableModal] = useState(false);
+  const [userToReEnable, setUserToReEnable] = useState(null);
+  const [showDisableStationModal, setShowDisableStationModal] = useState(false);
+  const [showReEnableStationModal, setShowReEnableStationModal] = useState(false);
+  const [stationToDisable, setStationToDisable] = useState(null);
+  const [stationToReEnable, setStationToReEnable] = useState(null);
+  const [toast, setToast] = useState({ show: false, message: '', type: 'success' }); // 'success' or 'error'
   const [newStation, setNewStation] = useState({
     name: '',
     stationId: '',
@@ -122,6 +132,8 @@ const Auser_management = () => {
   
   // Determine if user is active based on status field
   const isActive = (data.status || 'active').toLowerCase() === 'active';
+  // Check if user is disabled/banned
+  const isDisabled = data.is_disabled === true;
 
   return {
     id: data.id,
@@ -131,6 +143,8 @@ const Auser_management = () => {
     phoneNumber: data.phone, // Changed from phone_number to phone
     displayName: data.display_name,
     status: isActive ? 'active' : 'inactive',
+    isDisabled: isDisabled,
+    disableReason: data.disable_reason || null,
     reports: data.reports || 0,
     isVerified: data.is_verified || false,
     userType: data.user_type || 'citizen',
@@ -492,57 +506,217 @@ const Auser_management = () => {
     }
   };
 
-  const handleToggleStatus = async (type, id) => {
-    const user = users[type].find(user => user.id === id);
-    const action = user?.status === 'active' ? 'disable' : 'enable';
-    
-    if (window.confirm(`Are you sure you want to ${action} this ${type === 'citizens' ? 'citizen' : 'station'}?`)) {
-      try {
-        const newStatus = user?.status === 'active' ? 'inactive' : 'active';
-        
-        if (type === 'citizens') {
-          // Update citizen status in Supabase
-          const { error } = await supabase
-            .from('citizen_users')
-            .update({ 
-              status: newStatus,
-              updated_at: new Date().toISOString()
-            })
-            .eq('id', id);
+  // Handle disable/ban for citizens (shows modal with reason)
+  const handleDisableCitizen = (user) => {
+    setUserToDisable(user);
+    setDisableReason('');
+    setShowDisableModal(true);
+  };
 
-          if (error) {
-            console.error('Error updating citizen status:', error);
-            throw new Error(`Failed to update citizen status: ${error.message}`);
-          }
-        } else {
-          // Update station status in Supabase
-          const { error } = await supabase
-            .from('station_users')
-            .update({ 
-              status: newStatus,
-              updated_at: new Date().toISOString()
-            })
-            .eq('id', id);
+  // Handle re-enable for citizens (shows modal)
+  const handleReEnableCitizen = (user) => {
+    setUserToReEnable(user);
+    setShowReEnableModal(true);
+  };
 
-          if (error) {
-            console.error('Error updating station status:', error);
-            throw new Error(`Failed to update station status: ${error.message}`);
-          }
-        }
+  // Confirm re-enable action
+  const handleConfirmReEnable = async () => {
+    if (!userToReEnable) return;
 
-        // Update local state
-        setUsers(prev => ({
-          ...prev,
-          [type]: prev[type].map(user => 
-            user.id === id ? { ...user, status: newStatus } : user
-          )
-        }));
+    try {
+      const { error } = await supabase
+        .from('citizen_users')
+        .update({ 
+          is_disabled: false,
+          disable_reason: null,
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', userToReEnable.id);
 
-        alert(`${type === 'citizens' ? 'Citizen' : 'Station'} ${action}d successfully!`);
-      } catch (error) {
-        console.error('Error toggling status:', error);
-        alert(`Failed to ${action} ${type === 'citizens' ? 'citizen' : 'station'}: ${error.message}`);
+      if (error) {
+        console.error('Error re-enabling citizen:', error);
+        throw new Error(`Failed to re-enable citizen: ${error.message}`);
       }
+
+      // Update local state
+      setUsers(prev => ({
+        ...prev,
+        citizens: prev.citizens.map(user => 
+          user.id === userToReEnable.id 
+            ? { ...user, isDisabled: false, disableReason: null } 
+            : user
+        )
+      }));
+
+      setShowReEnableModal(false);
+      setUserToReEnable(null);
+      setToast({ show: true, message: 'Account re-enabled successfully!', type: 'success' });
+      setTimeout(() => setToast({ show: false, message: '', type: 'success' }), 3000);
+    } catch (error) {
+      console.error('Error re-enabling citizen:', error);
+      setToast({ show: true, message: `Failed to re-enable citizen: ${error.message}`, type: 'error' });
+      setTimeout(() => setToast({ show: false, message: '', type: 'success' }), 3000);
+    }
+  };
+
+  // Confirm disable action
+  const handleConfirmDisable = async () => {
+    if (!userToDisable) return;
+    
+    if (!disableReason.trim()) {
+      setToast({ show: true, message: 'Please provide a reason for disabling this citizen.', type: 'error' });
+      setTimeout(() => setToast({ show: false, message: '', type: 'success' }), 3000);
+      return;
+    }
+
+    try {
+      const { error } = await supabase
+        .from('citizen_users')
+        .update({ 
+          is_disabled: true,
+          disable_reason: disableReason.trim(),
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', userToDisable.id);
+
+      if (error) {
+        console.error('Error disabling citizen:', error);
+        throw new Error(`Failed to disable citizen: ${error.message}`);
+      }
+
+      // Update local state
+      setUsers(prev => ({
+        ...prev,
+        citizens: prev.citizens.map(user => 
+          user.id === userToDisable.id 
+            ? { ...user, isDisabled: true, disableReason: disableReason.trim() } 
+            : user
+        )
+      }));
+
+      setShowDisableModal(false);
+      setDisableReason('');
+      setUserToDisable(null);
+      setToast({ show: true, message: 'Account disabled successfully!', type: 'success' });
+      setTimeout(() => setToast({ show: false, message: '', type: 'success' }), 3000);
+    } catch (error) {
+      console.error('Error disabling citizen:', error);
+      setToast({ show: true, message: `Failed to disable citizen: ${error.message}`, type: 'error' });
+      setTimeout(() => setToast({ show: false, message: '', type: 'success' }), 3000);
+    }
+  };
+
+  // Handle disable for stations (shows modal)
+  const handleDisableStation = (station) => {
+    setStationToDisable(station);
+    setShowDisableStationModal(true);
+  };
+
+  // Handle re-enable for stations (shows modal)
+  const handleReEnableStation = (station) => {
+    setStationToReEnable(station);
+    setShowReEnableStationModal(true);
+  };
+
+  // Confirm disable station action
+  const handleConfirmDisableStation = async () => {
+    if (!stationToDisable) return;
+
+    try {
+      const { error } = await supabase
+        .from('station_users')
+        .update({ 
+          status: 'inactive',
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', stationToDisable.id);
+
+      if (error) {
+        console.error('Error disabling station:', error);
+        throw new Error(`Failed to disable station: ${error.message}`);
+      }
+
+      // Update local state
+      setUsers(prev => ({
+        ...prev,
+        stations: prev.stations.map(station => 
+          station.id === stationToDisable.id 
+            ? { ...station, status: 'inactive' } 
+            : station
+        )
+      }));
+
+      setShowDisableStationModal(false);
+      setStationToDisable(null);
+      setToast({ show: true, message: 'Station disabled successfully!', type: 'success' });
+      setTimeout(() => setToast({ show: false, message: '', type: 'success' }), 3000);
+    } catch (error) {
+      console.error('Error disabling station:', error);
+      setToast({ show: true, message: `Failed to disable station: ${error.message}`, type: 'error' });
+      setTimeout(() => setToast({ show: false, message: '', type: 'success' }), 3000);
+    }
+  };
+
+  // Confirm re-enable station action
+  const handleConfirmReEnableStation = async () => {
+    if (!stationToReEnable) return;
+
+    try {
+      const { error } = await supabase
+        .from('station_users')
+        .update({ 
+          status: 'active',
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', stationToReEnable.id);
+
+      if (error) {
+        console.error('Error re-enabling station:', error);
+        throw new Error(`Failed to re-enable station: ${error.message}`);
+      }
+
+      // Update local state
+      setUsers(prev => ({
+        ...prev,
+        stations: prev.stations.map(station => 
+          station.id === stationToReEnable.id 
+            ? { ...station, status: 'active' } 
+            : station
+        )
+      }));
+
+      setShowReEnableStationModal(false);
+      setStationToReEnable(null);
+      setToast({ show: true, message: 'Station re-enabled successfully!', type: 'success' });
+      setTimeout(() => setToast({ show: false, message: '', type: 'success' }), 3000);
+    } catch (error) {
+      console.error('Error re-enabling station:', error);
+      setToast({ show: true, message: `Failed to re-enable station: ${error.message}`, type: 'error' });
+      setTimeout(() => setToast({ show: false, message: '', type: 'success' }), 3000);
+    }
+  };
+
+  const handleToggleStatus = async (type, id) => {
+    // For citizens, use the disable/re-enable flow
+    if (type === 'citizens') {
+      const user = users[type].find(user => user.id === id);
+      if (user?.isDisabled) {
+        handleReEnableCitizen(user);
+      } else {
+        handleDisableCitizen(user);
+      }
+      return;
+    }
+
+    // For stations, use the disable/re-enable flow with modals
+    if (type === 'stations') {
+      const station = users[type].find(station => station.id === id);
+      if (station?.status === 'inactive') {
+        handleReEnableStation(station);
+      } else {
+        handleDisableStation(station);
+      }
+      return;
     }
   };
 
@@ -835,6 +1009,43 @@ const Auser_management = () => {
 
   return (
     <>
+      {/* Toast Notification */}
+      {toast.show && (
+        <div 
+          className={`fixed top-4 right-4 z-50 transition-all duration-300 transform ${
+            toast.show ? 'translate-y-0 opacity-100' : '-translate-y-2 opacity-0'
+          }`}
+          style={{
+            animation: toast.show ? 'slideInRight 0.3s ease-out' : 'none'
+          }}
+        >
+          <div className={`${
+            toast.type === 'success' 
+              ? 'bg-gradient-to-r from-green-500 to-emerald-600' 
+              : 'bg-gradient-to-r from-red-500 to-red-600'
+          } text-white shadow-2xl rounded-xl px-6 py-4 flex items-center space-x-4 min-w-[300px] max-w-md`}>
+            <div className={`flex-shrink-0 w-10 h-10 rounded-full flex items-center justify-center ${
+              toast.type === 'success' ? 'bg-white/20' : 'bg-white/20'
+            }`}>
+              {toast.type === 'success' ? (
+                <FiUserCheck className="w-5 h-5 text-white" />
+              ) : (
+                <FiUserX className="w-5 h-5 text-white" />
+              )}
+            </div>
+            <div className="flex-1">
+              <p className="font-semibold text-white text-sm">{toast.message}</p>
+            </div>
+            <button
+              onClick={() => setToast({ show: false, message: '', type: 'success' })}
+              className="flex-shrink-0 text-white/80 hover:text-white transition-colors"
+            >
+              <FiX className="w-5 h-5" />
+            </button>
+          </div>
+        </div>
+      )}
+
       <div className="min-h-screen bg-gray-50">
         <div className="w-full px-4 sm:px-6 lg:px-8 py-6">
           {/* Statistics Cards */}
@@ -1012,13 +1223,20 @@ const Auser_management = () => {
                         </div>
                       </div>
                       <div className="flex items-center space-x-4">
-                        <span className={`px-3 py-1 rounded-full text-xs font-medium ${
-                          user.status === 'active' 
-                            ? 'bg-green-100 text-green-800' 
-                            : 'bg-red-100 text-red-800'
-                        }`}>
-                          {user.status === 'active' ? 'Active' : 'Inactive'}
-                        </span>
+                        <div className="flex items-center space-x-2">
+                          <span className={`px-3 py-1 rounded-full text-xs font-medium ${
+                            user.status === 'active' 
+                              ? 'bg-green-100 text-green-800' 
+                              : 'bg-red-100 text-red-800'
+                          }`}>
+                            {user.status === 'active' ? 'Active' : 'Inactive'}
+                          </span>
+                          {activeTab === 'citizens' && user.isDisabled && (
+                            <span className="px-3 py-1 rounded-full text-xs font-medium bg-red-600 text-white">
+                              🚫 Disabled
+                            </span>
+                          )}
+                        </div>
                         <div className="flex items-center space-x-2">
                           <button 
                             onClick={() => activeTab === 'citizens' ? handleViewCitizenProfile(user) : handleViewStationProfile(user)}
@@ -1041,13 +1259,27 @@ const Auser_management = () => {
                           <button
                             onClick={() => handleToggleStatus(activeTab, user.id)}
                             className={`p-2 rounded-full ${
-                              user.status === 'active' 
+                              activeTab === 'citizens' && user.isDisabled
+                                ? 'text-green-600 hover:bg-green-50'
+                                : user.status === 'active' 
                                 ? 'text-red-600 hover:bg-red-50' 
                                 : 'text-green-600 hover:bg-green-50'
                             }`}
-                            title={user.status === 'active' ? 'Disable' : 'Enable'}
+                            title={
+                              activeTab === 'citizens' && user.isDisabled
+                                ? 'Re-enable Citizen'
+                                : user.status === 'active' 
+                                ? 'Disable' 
+                                : 'Enable'
+                            }
                           >
-                            {user.status === 'active' ? <FiUserX className="w-4 h-4" /> : <FiUserCheck className="w-4 h-4" />}
+                            {activeTab === 'citizens' && user.isDisabled ? (
+                              <FiUserCheck className="w-4 h-4" />
+                            ) : user.status === 'active' ? (
+                              <FiUserX className="w-4 h-4" />
+                            ) : (
+                              <FiUserCheck className="w-4 h-4" />
+                            )}
                           </button>
                         </div>
                       </div>
@@ -1143,9 +1375,31 @@ const Auser_management = () => {
                             }`}>
                               {selectedCitizen.status === 'active' ? 'Active' : 'Inactive'}
                             </span>
+                            {activeTab === 'citizens' && selectedCitizen.isDisabled && (
+                              <span className="inline-flex items-center px-3 py-1 rounded-full text-xs font-medium bg-red-600 text-white border border-red-700 ml-2">
+                                🚫 Disabled
+                              </span>
+                            )}
                           </div>
                         </div>
                       </div>
+                      
+                      {/* Disable Reason Alert */}
+                      {activeTab === 'citizens' && selectedCitizen.isDisabled && selectedCitizen.disableReason && (
+                        <div className="bg-red-50 border-2 border-red-200 rounded-xl p-4 mb-6">
+                          <div className="flex items-start">
+                            <FiUserX className="w-5 h-5 text-red-600 mr-3 mt-0.5 flex-shrink-0" />
+                            <div className="flex-1">
+                              <h4 className="text-red-900 font-semibold mb-1">Account Disabled</h4>
+                              <p className="text-red-700 text-sm mb-2">This citizen account has been disabled by an administrator.</p>
+                              <div className="bg-white rounded-lg p-3 border border-red-200">
+                                <p className="text-xs font-medium text-red-600 mb-1">Reason:</p>
+                                <p className="text-gray-800 text-sm">{selectedCitizen.disableReason}</p>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      )}
                       
                       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                         <div className="bg-white border border-gray-200 rounded-xl p-6 shadow-sm">
@@ -2239,6 +2493,434 @@ const Auser_management = () => {
               </div>
             </div>
           )}
+
+      {/* Disable Citizen Modal */}
+      {showDisableModal && userToDisable && (
+        <div 
+          className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 backdrop-blur-md"
+          onClick={() => {
+            setShowDisableModal(false);
+            setDisableReason('');
+            setUserToDisable(null);
+          }}
+        >
+          <div 
+            className="bg-white rounded-2xl shadow-2xl p-8 max-w-lg w-full mx-4 border border-gray-100"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between mb-6">
+              <div className="flex items-center space-x-3">
+                <div className="w-12 h-12 bg-red-100 rounded-full flex items-center justify-center">
+                  <FiUserX className="w-6 h-6 text-red-600" />
+                </div>
+                <div>
+                  <h2 className="text-2xl font-bold text-gray-900">Disable Citizen</h2>
+                  <p className="text-gray-600 text-sm">Confirm action and provide reason</p>
+                </div>
+              </div>
+              <button
+                onClick={() => {
+                  setShowDisableModal(false);
+                  setDisableReason('');
+                  setUserToDisable(null);
+                }}
+                className="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-full transition-all duration-200"
+              >
+                <FiX className="w-6 h-6" />
+              </button>
+            </div>
+
+            <div className="mb-6">
+              <div className="bg-red-50 border border-red-200 rounded-xl p-4 mb-4">
+                <p className="text-sm text-gray-700 mb-2">
+                  <span className="font-semibold">Citizen:</span> {userToDisable.name}
+                </p>
+                <p className="text-sm text-gray-600">
+                  <span className="font-semibold">Email:</span> {userToDisable.email}
+                </p>
+              </div>
+              
+              <div className="bg-yellow-50 border-l-4 border-yellow-400 p-4 mb-4">
+                <div className="flex">
+                  <div className="flex-shrink-0">
+                    <svg className="h-5 w-5 text-yellow-400" viewBox="0 0 20 20" fill="currentColor">
+                      <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+                    </svg>
+                  </div>
+                  <div className="ml-3">
+                    <p className="text-sm text-yellow-700">
+                      <strong>Warning:</strong> Disabling this citizen will prevent them from logging in. They will see a ban message when attempting to access their account.
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Reason for Disabling <span className="text-red-500">*</span>
+                </label>
+                <textarea
+                  value={disableReason}
+                  onChange={(e) => setDisableReason(e.target.value)}
+                  className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-red-500 focus:border-red-500 transition-all duration-200 bg-gray-50 focus:bg-white resize-none"
+                  placeholder="Enter the reason for disabling this citizen (e.g., Violation of terms, Inappropriate behavior, etc.)"
+                  rows={4}
+                  required
+                />
+                <p className="text-xs text-gray-500 mt-1">
+                  This reason will be shown to the citizen when they attempt to log in.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end space-x-4 pt-6 border-t border-gray-200">
+              <button
+                onClick={() => {
+                  setShowDisableModal(false);
+                  setDisableReason('');
+                  setUserToDisable(null);
+                }}
+                className="px-6 py-3 text-gray-700 border border-gray-300 rounded-xl hover:bg-gray-50 transition-all duration-200 font-medium"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleConfirmDisable}
+                disabled={!disableReason.trim()}
+                className={`px-6 py-3 rounded-xl font-medium transition-all duration-200 ${
+                  disableReason.trim()
+                    ? 'bg-gradient-to-r from-red-600 to-red-700 text-white hover:from-red-700 hover:to-red-800 shadow-lg hover:shadow-xl'
+                    : 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                }`}
+              >
+                Confirm Disable
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Re-enable Citizen Modal */}
+      {showReEnableModal && userToReEnable && (
+        <div 
+          className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 backdrop-blur-md"
+          onClick={() => {
+            setShowReEnableModal(false);
+            setUserToReEnable(null);
+          }}
+        >
+          <div 
+            className="bg-white rounded-2xl shadow-2xl p-8 max-w-lg w-full mx-4 border border-gray-100"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between mb-6">
+              <div className="flex items-center space-x-3">
+                <div className="w-12 h-12 bg-green-100 rounded-full flex items-center justify-center">
+                  <FiUserCheck className="w-6 h-6 text-green-600" />
+                </div>
+                <div>
+                  <h2 className="text-2xl font-bold text-gray-900">Re-enable Citizen</h2>
+                  <p className="text-gray-600 text-sm">Confirm action to restore access</p>
+                </div>
+              </div>
+              <button
+                onClick={() => {
+                  setShowReEnableModal(false);
+                  setUserToReEnable(null);
+                }}
+                className="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-full transition-all duration-200"
+              >
+                <FiX className="w-6 h-6" />
+              </button>
+            </div>
+
+            <div className="mb-6">
+              <div className="bg-green-50 border border-green-200 rounded-xl p-4 mb-4">
+                <p className="text-sm text-gray-700 mb-2">
+                  <span className="font-semibold">Citizen:</span> {userToReEnable.name}
+                </p>
+                <p className="text-sm text-gray-600">
+                  <span className="font-semibold">Email:</span> {userToReEnable.email}
+                </p>
+                {userToReEnable.disableReason && (
+                  <div className="mt-3 pt-3 border-t border-green-200">
+                    <p className="text-xs font-medium text-green-800 mb-1">Previous Ban Reason:</p>
+                    <p className="text-sm text-gray-700 italic">{userToReEnable.disableReason}</p>
+                  </div>
+                )}
+              </div>
+              
+              <div className="bg-blue-50 border-l-4 border-blue-400 p-4 mb-4">
+                <div className="flex">
+                  <div className="flex-shrink-0">
+                    <svg className="h-5 w-5 text-blue-400" viewBox="0 0 20 20" fill="currentColor">
+                      <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd" />
+                    </svg>
+                  </div>
+                  <div className="ml-3">
+                    <p className="text-sm text-blue-700">
+                      <strong>Note:</strong> Re-enabling this citizen will restore their login access. They will be able to use the application again immediately.
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              <div className="bg-gradient-to-r from-green-50 to-emerald-50 border-2 border-green-200 rounded-xl p-5">
+                <div className="flex items-start">
+                  <div className="flex-shrink-0">
+                    <svg className="h-6 w-6 text-green-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                  </div>
+                  <div className="ml-3">
+                    <h3 className="text-sm font-semibold text-green-900 mb-1">
+                      What will happen:
+                    </h3>
+                    <ul className="text-sm text-green-800 space-y-1 list-disc list-inside">
+                      <li>Account ban will be removed</li>
+                      <li>Login access will be restored</li>
+                      <li>Previous ban reason will be cleared</li>
+                      <li>Citizen can immediately access the application</li>
+                    </ul>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end space-x-4 pt-6 border-t border-gray-200">
+              <button
+                onClick={() => {
+                  setShowReEnableModal(false);
+                  setUserToReEnable(null);
+                }}
+                className="px-6 py-3 text-gray-700 border border-gray-300 rounded-xl hover:bg-gray-50 transition-all duration-200 font-medium"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleConfirmReEnable}
+                className="px-6 py-3 bg-gradient-to-r from-green-600 to-emerald-600 text-white rounded-xl hover:from-green-700 hover:to-emerald-700 transition-all duration-200 font-medium shadow-lg hover:shadow-xl"
+              >
+                Confirm Re-enable
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Disable Station Modal */}
+      {showDisableStationModal && stationToDisable && (
+        <div 
+          className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 backdrop-blur-md"
+          onClick={() => {
+            setShowDisableStationModal(false);
+            setStationToDisable(null);
+          }}
+        >
+          <div 
+            className="bg-white rounded-2xl shadow-2xl p-8 max-w-lg w-full mx-4 border border-gray-100"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between mb-6">
+              <div className="flex items-center space-x-3">
+                <div className="w-12 h-12 bg-red-100 rounded-full flex items-center justify-center">
+                  <FiUserX className="w-6 h-6 text-red-600" />
+                </div>
+                <div>
+                  <h2 className="text-2xl font-bold text-gray-900">Disable Station</h2>
+                  <p className="text-gray-600 text-sm">Confirm action to disable station</p>
+                </div>
+              </div>
+              <button
+                onClick={() => {
+                  setShowDisableStationModal(false);
+                  setStationToDisable(null);
+                }}
+                className="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-full transition-all duration-200"
+              >
+                <FiX className="w-6 h-6" />
+              </button>
+            </div>
+
+            <div className="mb-6">
+              <div className="bg-red-50 border border-red-200 rounded-xl p-4 mb-4">
+                <p className="text-sm text-gray-700 mb-2">
+                  <span className="font-semibold">Station:</span> {stationToDisable.stationName || stationToDisable.name}
+                </p>
+                <p className="text-sm text-gray-600">
+                  <span className="font-semibold">Email:</span> {stationToDisable.email}
+                </p>
+                {stationToDisable.address && (
+                  <p className="text-sm text-gray-600 mt-1">
+                    <span className="font-semibold">Address:</span> {stationToDisable.address}
+                  </p>
+                )}
+              </div>
+              
+              <div className="bg-yellow-50 border-l-4 border-yellow-400 p-4 mb-4">
+                <div className="flex">
+                  <div className="flex-shrink-0">
+                    <svg className="h-5 w-5 text-yellow-400" viewBox="0 0 20 20" fill="currentColor">
+                      <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+                    </svg>
+                  </div>
+                  <div className="ml-3">
+                    <p className="text-sm text-yellow-700">
+                      <strong>Warning:</strong> Disabling this station will prevent them from accessing the system. They will not be able to log in or perform any operations.
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              <div className="bg-gradient-to-r from-red-50 to-orange-50 border-2 border-red-200 rounded-xl p-5">
+                <div className="flex items-start">
+                  <div className="flex-shrink-0">
+                    <svg className="h-6 w-6 text-red-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                    </svg>
+                  </div>
+                  <div className="ml-3">
+                    <h3 className="text-sm font-semibold text-red-900 mb-1">
+                      What will happen:
+                    </h3>
+                    <ul className="text-sm text-red-800 space-y-1 list-disc list-inside">
+                      <li>Station will be marked as inactive</li>
+                      <li>Login access will be revoked</li>
+                      <li>Station cannot perform any operations</li>
+                      <li>All station responders will be affected</li>
+                    </ul>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end space-x-4 pt-6 border-t border-gray-200">
+              <button
+                onClick={() => {
+                  setShowDisableStationModal(false);
+                  setStationToDisable(null);
+                }}
+                className="px-6 py-3 text-gray-700 border border-gray-300 rounded-xl hover:bg-gray-50 transition-all duration-200 font-medium"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleConfirmDisableStation}
+                className="px-6 py-3 bg-gradient-to-r from-red-600 to-red-700 text-white rounded-xl hover:from-red-700 hover:to-red-800 transition-all duration-200 font-medium shadow-lg hover:shadow-xl"
+              >
+                Confirm Disable
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Re-enable Station Modal */}
+      {showReEnableStationModal && stationToReEnable && (
+        <div 
+          className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 backdrop-blur-md"
+          onClick={() => {
+            setShowReEnableStationModal(false);
+            setStationToReEnable(null);
+          }}
+        >
+          <div 
+            className="bg-white rounded-2xl shadow-2xl p-8 max-w-lg w-full mx-4 border border-gray-100"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between mb-6">
+              <div className="flex items-center space-x-3">
+                <div className="w-12 h-12 bg-green-100 rounded-full flex items-center justify-center">
+                  <FiUserCheck className="w-6 h-6 text-green-600" />
+                </div>
+                <div>
+                  <h2 className="text-2xl font-bold text-gray-900">Re-enable Station</h2>
+                  <p className="text-gray-600 text-sm">Confirm action to restore access</p>
+                </div>
+              </div>
+              <button
+                onClick={() => {
+                  setShowReEnableStationModal(false);
+                  setStationToReEnable(null);
+                }}
+                className="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-full transition-all duration-200"
+              >
+                <FiX className="w-6 h-6" />
+              </button>
+            </div>
+
+            <div className="mb-6">
+              <div className="bg-green-50 border border-green-200 rounded-xl p-4 mb-4">
+                <p className="text-sm text-gray-700 mb-2">
+                  <span className="font-semibold">Station:</span> {stationToReEnable.stationName || stationToReEnable.name}
+                </p>
+                <p className="text-sm text-gray-600">
+                  <span className="font-semibold">Email:</span> {stationToReEnable.email}
+                </p>
+                {stationToReEnable.address && (
+                  <p className="text-sm text-gray-600 mt-1">
+                    <span className="font-semibold">Address:</span> {stationToReEnable.address}
+                  </p>
+                )}
+              </div>
+              
+              <div className="bg-blue-50 border-l-4 border-blue-400 p-4 mb-4">
+                <div className="flex">
+                  <div className="flex-shrink-0">
+                    <svg className="h-5 w-5 text-blue-400" viewBox="0 0 20 20" fill="currentColor">
+                      <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd" />
+                    </svg>
+                  </div>
+                  <div className="ml-3">
+                    <p className="text-sm text-blue-700">
+                      <strong>Note:</strong> Re-enabling this station will restore their login access. They will be able to use the system again immediately.
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              <div className="bg-gradient-to-r from-green-50 to-emerald-50 border-2 border-green-200 rounded-xl p-5">
+                <div className="flex items-start">
+                  <div className="flex-shrink-0">
+                    <svg className="h-6 w-6 text-green-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                  </div>
+                  <div className="ml-3">
+                    <h3 className="text-sm font-semibold text-green-900 mb-1">
+                      What will happen:
+                    </h3>
+                    <ul className="text-sm text-green-800 space-y-1 list-disc list-inside">
+                      <li>Station will be marked as active</li>
+                      <li>Login access will be restored</li>
+                      <li>Station can perform all operations</li>
+                      <li>Station can immediately access the system</li>
+                    </ul>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end space-x-4 pt-6 border-t border-gray-200">
+              <button
+                onClick={() => {
+                  setShowReEnableStationModal(false);
+                  setStationToReEnable(null);
+                }}
+                className="px-6 py-3 text-gray-700 border border-gray-300 rounded-xl hover:bg-gray-50 transition-all duration-200 font-medium"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleConfirmReEnableStation}
+                className="px-6 py-3 bg-gradient-to-r from-green-600 to-emerald-600 text-white rounded-xl hover:from-green-700 hover:to-emerald-700 transition-all duration-200 font-medium shadow-lg hover:shadow-xl"
+              >
+                Confirm Re-enable
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </>
   );
 };

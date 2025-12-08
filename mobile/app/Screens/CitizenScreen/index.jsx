@@ -7,6 +7,7 @@ import CMap from '../../Citizens/CitizenMenu/CitizenMap/CMap';
 import CSettings from '../../Citizens/CitizenMenu/CitizenSettings/CSettings';
 import CProfile from '../../Citizens/CitizenMenu/CitizenProfile/CProfile';
 import CNavbarMenu from '../../Citizens/CNavBarMenu/CNavbarMenu';
+import CitizenBanChecker from '../../components/CitizenBanChecker';
 
 const TAB_COMPONENTS = [
   CNotifications,
@@ -54,6 +55,9 @@ const CitizenScreen = () => {
         backgroundColor: '#ffffff',
       }}
     >
+      {/* Ban checker - monitors if citizen gets banned while logged in */}
+      <CitizenBanChecker />
+      
       <View style={{ flex: 1, paddingBottom: 60 }}>
         {renderActiveComponent()}
       </View>
