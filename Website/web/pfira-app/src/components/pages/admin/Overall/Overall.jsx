@@ -1,7 +1,8 @@
-                                          import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 import { supabase } from '../../../../config/supabase';
-import { FiSearch, FiFilter, FiClock, FiMapPin, FiUser, FiAlertTriangle, FiBell, FiTrendingUp, FiX } from 'react-icons/fi';
+import { FiSearch, FiFilter, FiClock, FiMapPin, FiUser, FiAlertTriangle, FiBell, FiTrendingUp, FiX, FiFileText } from 'react-icons/fi';
 import { useNavigate } from 'react-router-dom';
+import SummaryReport from '../SummaryReport/SummaryReport';
 
 const Overview = () => {
   const navigate = useNavigate();
@@ -29,6 +30,10 @@ const Overview = () => {
   // Alarm level change confirmation states
   const [showAlarmConfirm, setShowAlarmConfirm] = useState(false);
   const [alarmChangeData, setAlarmChangeData] = useState(null);
+  
+  // Summary report states
+  const [showSummaryReport, setShowSummaryReport] = useState(false);
+  const [summaryReportId, setSummaryReportId] = useState(null);
 
   // Filter states
   const [statusFilter, setStatusFilter] = useState('all');
@@ -222,6 +227,36 @@ const Overview = () => {
     
     return () => clearInterval(interval);
   }, []);
+
+  // Listen for Fire Out notifications and show summary report
+  useEffect(() => {
+    const channel = supabase
+      .channel('fire-out-notifications')
+      .on('postgres_changes', {
+        event: 'INSERT',
+        schema: 'public',
+        table: 'notifications',
+        filter: 'user_type=eq.admin'
+      }, async (payload) => {
+        const notification = payload.new;
+        const message = (notification.message || notification.title || '').toString().toLowerCase();
+        
+        // Check if this is a Fire Out notification
+        if (message.includes('fire out') || message.includes('fire is out')) {
+          const reportId = notification.related_report_id || notification.fire_report_id;
+          if (reportId && !showSummaryReport) {
+            console.log('🔥 Fire Out notification received, opening summary report for report:', reportId);
+            setSummaryReportId(reportId);
+            setShowSummaryReport(true);
+          }
+        }
+      })
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [showSummaryReport]);
 
   // Fetch station assignments for all reports
   useEffect(() => {
@@ -1295,19 +1330,35 @@ const Overview = () => {
                           </span>
                         </td>
                         <td className="px-4 py-4 whitespace-nowrap">
-                          <button
-                            className="px-3 py-1 bg-gray-600 text-white rounded-md hover:bg-gray-700 transition-colors text-xs font-medium flex items-center space-x-1"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              handleReportClick(report);
-                            }}
-                            title="View Details"
-                          >
-                            <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
-                              <path d="M10 6a2 2 0 110-4 2 2 0 010 4zM10 12a2 2 0 110-4 2 2 0 010 4zM10 18a2 2 0 110-4 2 2 0 010 4z" />
-                            </svg>
-                            <span>Details</span>
-                          </button>
+                          <div className="flex items-center space-x-2">
+                            <button
+                              className="px-3 py-1 bg-gray-600 text-white rounded-md hover:bg-gray-700 transition-colors text-xs font-medium flex items-center space-x-1"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleReportClick(report);
+                              }}
+                              title="View Details"
+                            >
+                              <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
+                                <path d="M10 6a2 2 0 110-4 2 2 0 010 4zM10 12a2 2 0 110-4 2 2 0 010 4zM10 18a2 2 0 110-4 2 2 0 010 4z" />
+                              </svg>
+                              <span>Details</span>
+                            </button>
+                            {(report.status === 'Fire Out' || (report.status || '').toString().toLowerCase().includes('fire out')) && (
+                              <button
+                                className="px-3 py-1 bg-green-600 text-white rounded-md hover:bg-green-700 transition-colors text-xs font-medium flex items-center space-x-1"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setSummaryReportId(report.id);
+                                  setShowSummaryReport(true);
+                                }}
+                                title="View Summary Report"
+                              >
+                                <FiFileText className="w-3 h-3" />
+                                <span>Summary</span>
+                              </button>
+                            )}
+                          </div>
                         </td>
                       </tr>
                       );
@@ -1653,6 +1704,16 @@ const Overview = () => {
             </div>
           </div>
         )}
+
+        {/* Summary Report Modal */}
+        <SummaryReport
+          reportId={summaryReportId}
+          isOpen={showSummaryReport}
+          onClose={() => {
+            setShowSummaryReport(false);
+            setSummaryReportId(null);
+          }}
+        />
       </div>
     </div>
   );

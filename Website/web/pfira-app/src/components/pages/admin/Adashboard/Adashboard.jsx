@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { GoogleMap, Marker, InfoWindow, Circle, useJsApiLoader } from '@react-google-maps/api';
 import { supabase } from '../../../../config/supabase';
 import { useNotifications } from '../../../../contexts/NotificationContext';
+import { checkStationIsBusy, findNearestStations, findNearestStationsToStation, handleAssignmentResponse, calculateDistance } from '../../../../utils/assignmentHelpers';
 
 const Adashboard = () => {
   const { unreadCount, stopAlert, audioBlocked, playAlert } = useNotifications();
@@ -30,6 +31,18 @@ const Adashboard = () => {
   const [assignmentNote, setAssignmentNote] = useState('');
   const [currentAssignment, setCurrentAssignment] = useState(null); // Current assignment info
   const [forwardedTo, setForwardedTo] = useState([]); // List of stations this was forwarded to
+  const [showWaitingApprovalModal, setShowWaitingApprovalModal] = useState(false);
+  const [showRerouteModal, setShowRerouteModal] = useState(false);
+  const [nearestStations, setNearestStations] = useState([]);
+  const [pendingAssignment, setPendingAssignment] = useState(null); // {reportId, stationId, stationName}
+  const [selectedRerouteStation, setSelectedRerouteStation] = useState('');
+  const [rerouteNote, setRerouteNote] = useState(''); // Optional message for reroute/forward
+  const [isRerouteForForwarding, setIsRerouteForForwarding] = useState(false); // Track if reroute modal is for forwarding (not declined)
+  const [isIncidentsModalMinimized, setIsIncidentsModalMinimized] = useState(false);
+  const [selectedStation, setSelectedStation] = useState(null); // Selected station for details modal
+  const [stationResponders, setStationResponders] = useState([]); // Responders for selected station
+  const [loadingResponders, setLoadingResponders] = useState(false); // Loading state for responders
+  const [stationActiveCounts, setStationActiveCounts] = useState({}); // {stationId: busyCount} for reroute modal
   // Load Google Maps API once globally to avoid duplicate script loads
   const { isLoaded: isMapsLoaded, loadError: mapsLoadError } = useJsApiLoader({
     id: 'google-map-script',
@@ -126,12 +139,18 @@ const Adashboard = () => {
         return;
       }
 
+      // Check if station is busy
+      const busyCheck = await checkStationIsBusy(station.id);
+      const assignmentStatus = busyCheck.isBusy ? 'pending' : 'accepted';
+
       // Create assignment
       const assignmentPayload = {
         report_id: reportId,
         assignee_type: 'station',
         assignee_id: station.id,
         assigned_at: new Date().toISOString(),
+        status: assignmentStatus,
+        assignment_source: 'automatic',
         note: `Auto-assigned: Report is within ${station.name}'s jurisdiction (${Math.round(station.distance)}m away)`
       };
 
@@ -144,13 +163,20 @@ const Adashboard = () => {
         return;
       }
 
-      console.log(`✅ Auto-assigned report ${reportId} to ${station.name} (${Math.round(station.distance)}m away)`);
+      console.log(`✅ Auto-assigned report ${reportId} to ${station.name} (${Math.round(station.distance)}m away) - Status: ${assignmentStatus}`);
 
       // Create notification for the assigned station
       const locationInfo = report.address || report.geotag_location || 'Location unavailable';
       const reporterName = report.reporter_name || report.reporter || 'Unknown Reporter';
-      const title = `🚨 New Fire Report - Auto-Assigned to Your Station`;
-      const message = `A fire report has been automatically assigned to your station because it is within your jurisdiction.\n\nDistance: ${Math.round(station.distance)}m\nLocation: ${locationInfo}\nReporter: ${reporterName}\n\nPlease review the incident details and take appropriate action.`;
+      
+      let title, message;
+      if (busyCheck.isBusy) {
+        title = `🚨 New Fire Report - Auto-Assigned (Action Required)`;
+        message = `A fire report has been automatically assigned to your station.\n\nDistance: ${Math.round(station.distance)}m\nLocation: ${locationInfo}\nReporter: ${reporterName}\n\nYou are currently handling ${busyCheck.busyCount} other incident(s). Would you like to request forwarding to another station?`;
+      } else {
+        title = `🚨 New Fire Report - Auto-Assigned to Your Station`;
+        message = `A fire report has been automatically assigned to your station because it is within your jurisdiction.\n\nDistance: ${Math.round(station.distance)}m\nLocation: ${locationInfo}\nReporter: ${reporterName}\n\nPlease review the incident details and take appropriate action.`;
+      }
 
       const { error: notifError } = await supabase
         .from('notifications')
@@ -325,12 +351,30 @@ const Adashboard = () => {
           return hasCoords && !isCancelled && !isFireOut;
         });
         
-        // Reports with valid coordinates
+        // Sort reports by newest first (most recent created_at or updated_at at the top)
+        const sortedReports = reportsWithCoords.sort((a, b) => {
+          // Get the most recent timestamp for each report (prefer updated_at if available, else created_at)
+          const getTimestamp = (report) => {
+            if (report.updated_at) {
+              return new Date(report.updated_at).getTime();
+            }
+            if (report.created_at) {
+              return new Date(report.created_at).getTime();
+            }
+            if (report.timestamp) {
+              return new Date(report.timestamp).getTime();
+            }
+            return 0;
+          };
+          
+          const timeA = getTimestamp(a);
+          const timeB = getTimestamp(b);
+          
+          // Sort descending (newest first)
+          return timeB - timeA;
+        });
         
-        // Log each report's location for debugging
-        // Reports loaded
-        
-        setFireReports(reportsWithCoords);
+        setFireReports(sortedReports);
         
         // Check if there's a selected report ID from navigation
         const selectedReportId = localStorage.getItem('selectedReportId');
@@ -380,11 +424,11 @@ const Adashboard = () => {
       console.log('❌ No selectedReportId found in localStorage');
     }
     
-    // Set up periodic refresh to get new reports
+    // Set up periodic refresh to get new reports (re-sorts by newest first)
     const refreshInterval = setInterval(() => {
-      // Refreshing fire reports
+      // Refreshing fire reports (will re-sort by newest first)
       fetchFireReports();
-    }, 30000); // Refresh every 30 seconds
+    }, 15000); // Refresh every 15 seconds to catch status updates faster
     
     // Set up map load timeout
     const mapTimeout = setTimeout(() => {
@@ -507,10 +551,10 @@ const Adashboard = () => {
     if (!reportId) return;
 
     try {
-      // 1. Fetch current assignment
+      // 1. Fetch current assignment (try to include status if column exists)
       const { data: assignment, error: assignError } = await supabase
         .from('report_assignments')
-        .select('assignee_type, assignee_id, assigned_at, note')
+        .select('assignee_type, assignee_id, assigned_at, note, status')
         .eq('report_id', reportId)
         .single();
 
@@ -531,7 +575,8 @@ const Adashboard = () => {
           id: assignment.assignee_id,
           name: stationData?.station_name || 'Unknown Station',
           assigned_at: assignment.assigned_at,
-          note: assignment.note || ''
+          note: assignment.note || '',
+          status: assignment.status || 'accepted' // Default to accepted if status column doesn't exist
         });
       } else if (assignment && assignment.assignee_type === 'responder') {
         setCurrentAssignment({
@@ -539,7 +584,8 @@ const Adashboard = () => {
           id: assignment.assignee_id,
           name: 'Responder',
           assigned_at: assignment.assigned_at,
-          note: assignment.note || ''
+          note: assignment.note || '',
+          status: assignment.status || 'accepted'
         });
       } else {
         setCurrentAssignment(null);
@@ -606,6 +652,522 @@ const Adashboard = () => {
     }
   }, [selectedReport, loadAssignmentInfo]);
 
+  // Real-time listener for assignment responses (when pendingAssignment is set)
+  useEffect(() => {
+    if (!pendingAssignment) return;
+
+    const channel = supabase
+      .channel(`assignment-responses-${pendingAssignment.reportId}`)
+      .on('postgres_changes', {
+        event: 'UPDATE',
+        schema: 'public',
+        table: 'report_assignments',
+        filter: `report_id=eq.${pendingAssignment.reportId}`
+      }, async (payload) => {
+        const assignment = payload.new;
+        if (assignment.assignee_type === 'station' && 
+            String(assignment.assignee_id) === String(pendingAssignment.stationId)) {
+          
+          if (assignment.status === 'accepted') {
+            // Station accepted - close waiting modal and show success
+            setShowWaitingApprovalModal(false);
+            alert(`✅ ${pendingAssignment.stationName} has accepted the assignment.`);
+            setPendingAssignment(null);
+            if (selectedReport) {
+              loadAssignmentInfo(selectedReport.id);
+            }
+          } else if (assignment.status === 'declined') {
+            // Station declined - show reroute modal with nearest stations
+            setShowWaitingApprovalModal(false);
+            
+            // Get report location for finding nearest stations
+            const reportLat = parseFloat(selectedReport?.latitude);
+            const reportLng = parseFloat(selectedReport?.longitude);
+            
+            const incidentLocation = (!isNaN(reportLat) && !isNaN(reportLng)) 
+              ? { lat: reportLat, lng: reportLng } 
+              : null;
+            
+            let nearest = [];
+            
+            // First, try to find stations near the report location
+            if (!isNaN(reportLat) && !isNaN(reportLng)) {
+              nearest = await findNearestStations(
+                reportLat, 
+                reportLng, 
+                pendingAssignment.stationId, 
+                5,
+                incidentLocation
+              );
+            }
+            
+            // If no stations found near report, find stations near the declined station
+            if (nearest.length === 0) {
+              console.log('📍 No stations found near report location, finding stations near declined station...');
+              nearest = await findNearestStationsToStation(
+                pendingAssignment.stationId,
+                pendingAssignment.stationId,
+                5,
+                incidentLocation
+              );
+            }
+            
+            // If still no stations, fallback to ALL stations sorted by distance to incident
+            if (nearest.length === 0) {
+              console.log('📍 Fallback: Fetching all stations...');
+              const { data: stations, error: stationsError } = await supabase
+                .from('station_users')
+                .select('id, station_name, lat, lng')
+                .neq('id', pendingAssignment.stationId);
+              
+              if (stationsError) {
+                console.error('❌ Error fetching stations:', stationsError);
+              }
+              
+              console.log(`📍 Found ${stations?.length || 0} stations in database`);
+              
+              // Calculate distances to incident for all stations and sort
+              if (stations && stations.length > 0) {
+                const stationsWithDistance = stations
+                  .map(station => {
+                    const stationLat = parseFloat(station.lat);
+                    const stationLng = parseFloat(station.lng);
+                    if (!isNaN(stationLat) && !isNaN(stationLng) && incidentLocation) {
+                      const distanceToIncident = calculateDistance(
+                        stationLat,
+                        stationLng,
+                        incidentLocation.lat,
+                        incidentLocation.lng
+                      );
+                      return {
+                        ...station,
+                        distance: 0, // No reference distance
+                        distanceKm: '0',
+                        distanceToIncident: distanceToIncident,
+                        distanceToIncidentKm: (distanceToIncident / 1000).toFixed(2)
+                      };
+                    }
+                    // If no coordinates or incident location, put at end but still include
+                    return {
+                      ...station,
+                      distance: 0,
+                      distanceKm: '0',
+                      distanceToIncident: incidentLocation ? Infinity : null,
+                      distanceToIncidentKm: null
+                    };
+                  })
+                  .sort((a, b) => {
+                    // Sort by distance to incident (stations with null/Infinity distance go to end)
+                    if (a.distanceToIncident === null || a.distanceToIncident === Infinity) return 1;
+                    if (b.distanceToIncident === null || b.distanceToIncident === Infinity) return -1;
+                    return a.distanceToIncident - b.distanceToIncident;
+                  });
+                
+                console.log(`📍 Prepared ${stationsWithDistance.length} stations with distances`);
+                nearest = stationsWithDistance;
+              } else {
+                console.warn('⚠️ No stations found in database');
+                nearest = stations || [];
+              }
+            }
+            
+            setNearestStations(nearest);
+            setIsRerouteForForwarding(false); // This is for declined assignment, not forwarding
+            setRerouteNote('');
+            setShowRerouteModal(true);
+          }
+        }
+      })
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [pendingAssignment, selectedReport, loadAssignmentInfo]);
+
+  // Global listener for declined assignments (works even if admin closed waiting modal)
+  useEffect(() => {
+    const channel = supabase
+      .channel('global-declined-assignments')
+      .on('postgres_changes', {
+        event: 'UPDATE',
+        schema: 'public',
+        table: 'report_assignments',
+        filter: 'status=eq.declined'
+      }, async (payload) => {
+        const assignment = payload.new;
+        
+        // Only handle station declines
+        if (assignment.assignee_type !== 'station') return;
+        
+        // Check if status is actually 'declined' (not just any update)
+        if (assignment.status !== 'declined') return;
+        
+        // Check if this is already being handled by the pendingAssignment listener
+        // Only skip if we have an exact match AND the waiting modal is still open
+        if (pendingAssignment && 
+            String(assignment.report_id) === String(pendingAssignment.reportId) &&
+            String(assignment.assignee_id) === String(pendingAssignment.stationId) &&
+            showWaitingApprovalModal) {
+          // This is already handled by the pendingAssignment listener
+          return;
+        }
+        
+        console.log('🚨 Station declined assignment detected (global listener):', assignment);
+        
+        // Get station name
+        const { data: stationData } = await supabase
+          .from('station_users')
+          .select('station_name')
+          .eq('id', assignment.assignee_id)
+          .single();
+        
+        const stationName = stationData?.station_name || 'Unknown Station';
+        
+        // Get report details
+        const API_URL = 'https://fire-detection-api-production-f55b.up.railway.app';
+        let reportData = null;
+        try {
+          const reportRes = await fetch(`${API_URL}/get_reports`);
+          if (reportRes.ok) {
+            const allReports = await reportRes.json();
+            reportData = allReports.find(r => String(r.id) === String(assignment.report_id));
+          }
+        } catch (err) {
+          console.error('Error fetching report data:', err);
+        }
+        
+        // Set pending assignment info for reroute modal
+        setPendingAssignment({
+          reportId: assignment.report_id,
+          stationId: assignment.assignee_id,
+          stationName: stationName
+        });
+        
+        // Close waiting modal if open
+        setShowWaitingApprovalModal(false);
+        
+        // Get report location for finding nearest stations
+        const reportLat = reportData ? parseFloat(reportData.latitude) : NaN;
+        const reportLng = reportData ? parseFloat(reportData.longitude) : NaN;
+        
+        const incidentLocation = (!isNaN(reportLat) && !isNaN(reportLng)) 
+          ? { lat: reportLat, lng: reportLng } 
+          : null;
+        
+        let nearest = [];
+        
+        // First, try to find stations near the report location
+        if (!isNaN(reportLat) && !isNaN(reportLng)) {
+          nearest = await findNearestStations(
+            reportLat, 
+            reportLng, 
+            assignment.assignee_id, 
+            5,
+            incidentLocation
+          );
+        }
+        
+        // If no stations found near report, find stations near the declined station
+        if (nearest.length === 0) {
+          console.log('📍 No stations found near report location, finding stations near declined station...');
+          nearest = await findNearestStationsToStation(
+            assignment.assignee_id,
+            assignment.assignee_id,
+            5,
+            incidentLocation
+          );
+        }
+        
+        // If still no stations, fallback to ALL stations sorted by distance to incident
+        if (nearest.length === 0) {
+          console.log('📍 Fallback: Fetching all stations...');
+          const { data: stations, error: stationsError } = await supabase
+            .from('station_users')
+            .select('id, station_name, lat, lng')
+            .neq('id', assignment.assignee_id);
+          
+          if (stationsError) {
+            console.error('❌ Error fetching stations:', stationsError);
+          }
+          
+          console.log(`📍 Found ${stations?.length || 0} stations in database`);
+          
+          // Calculate distances to incident for all stations and sort
+          if (stations && stations.length > 0) {
+            const stationsWithDistance = stations
+              .map(station => {
+                const stationLat = parseFloat(station.lat);
+                const stationLng = parseFloat(station.lng);
+                if (!isNaN(stationLat) && !isNaN(stationLng) && incidentLocation) {
+                  const distanceToIncident = calculateDistance(
+                    stationLat,
+                    stationLng,
+                    incidentLocation.lat,
+                    incidentLocation.lng
+                  );
+                  return {
+                    ...station,
+                    distance: 0, // No reference distance
+                    distanceKm: '0',
+                    distanceToIncident: distanceToIncident,
+                    distanceToIncidentKm: (distanceToIncident / 1000).toFixed(2)
+                  };
+                }
+                // If no coordinates or incident location, put at end but still include
+                return {
+                  ...station,
+                  distance: 0,
+                  distanceKm: '0',
+                  distanceToIncident: incidentLocation ? Infinity : null,
+                  distanceToIncidentKm: null
+                };
+              })
+              .sort((a, b) => {
+                // Sort by distance to incident (stations with null/Infinity distance go to end)
+                if (a.distanceToIncident === null || a.distanceToIncident === Infinity) return 1;
+                if (b.distanceToIncident === null || b.distanceToIncident === Infinity) return -1;
+                return a.distanceToIncident - b.distanceToIncident;
+              });
+            
+            console.log(`📍 Prepared ${stationsWithDistance.length} stations with distances`);
+            nearest = stationsWithDistance;
+          } else {
+            console.warn('⚠️ No stations found in database');
+            nearest = stations || [];
+          }
+        }
+        
+        setNearestStations(nearest);
+        
+        // Show reroute modal
+        setIsRerouteForForwarding(false); // This is for declined assignment, not forwarding
+        setRerouteNote('');
+        setShowRerouteModal(true);
+        
+        // If report is not selected, select it for context
+        if (!selectedReport || String(selectedReport.id) !== String(assignment.report_id)) {
+          if (reportData) {
+            setSelectedReport({
+              id: reportData.id,
+              address: reportData.address,
+              geotag_location: reportData.geotag_location,
+              latitude: reportData.latitude,
+              longitude: reportData.longitude,
+              ...reportData // Include all report data for context
+            });
+          }
+        }
+      })
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [pendingAssignment, selectedReport]);
+
+  // Fetch active incident counts for stations in reroute modal
+  useEffect(() => {
+    if (nearestStations.length > 0 && showRerouteModal) {
+      const fetchActiveCounts = async () => {
+        const counts = {};
+        await Promise.all(
+          nearestStations.map(async (station) => {
+            try {
+              const busyCheck = await checkStationIsBusy(station.id);
+              counts[station.id] = busyCheck.busyCount || 0;
+            } catch (error) {
+              console.error(`Error fetching active count for station ${station.id}:`, error);
+              counts[station.id] = 0;
+            }
+          })
+        );
+        setStationActiveCounts(counts);
+      };
+      fetchActiveCounts();
+    } else {
+      setStationActiveCounts({});
+    }
+  }, [nearestStations, showRerouteModal]);
+
+  // Real-time listener for report status updates - re-sort list when status changes
+  // Note: Since reports come from external API, we'll handle updates via periodic refresh
+  // But we can also track local updates to move reports to top immediately
+  useEffect(() => {
+    // This will be handled by the periodic refresh in fetchFireReports
+    // When reports are refreshed, they'll be re-sorted by newest first
+  }, []);
+
+  // Helper function to update a report's timestamp when status changes
+  const updateReportTimestamp = useCallback((reportId) => {
+    setFireReports(prev => {
+      const updated = prev.map(r => 
+        String(r.id) === String(reportId) 
+          ? { ...r, updated_at: new Date().toISOString() }
+          : r
+      );
+
+      // Re-sort by newest first
+      return updated.sort((a, b) => {
+        const getTimestamp = (report) => {
+          if (report.updated_at) {
+            return new Date(report.updated_at).getTime();
+          }
+          if (report.created_at) {
+            return new Date(report.created_at).getTime();
+          }
+          if (report.timestamp) {
+            return new Date(report.timestamp).getTime();
+          }
+          return 0;
+        };
+        
+        const timeA = getTimestamp(a);
+        const timeB = getTimestamp(b);
+        
+        return timeB - timeA;
+      });
+    });
+  }, []);
+
+  // Handle reroute to selected station
+  const handleReroute = useCallback(async () => {
+    if (!selectedRerouteStation || !pendingAssignment) {
+      alert('Please select a station to reroute to.');
+      return;
+    }
+
+    try {
+      // Remove the declined assignment
+      await supabase
+        .from('report_assignments')
+        .delete()
+        .eq('report_id', pendingAssignment.reportId)
+        .eq('assignee_type', 'station')
+        .eq('assignee_id', pendingAssignment.stationId);
+
+      // Get new station name
+      const { data: newStationData } = await supabase
+        .from('station_users')
+        .select('station_name')
+        .eq('id', selectedRerouteStation)
+        .single();
+
+      const newStationName = newStationData?.station_name || 'Station';
+
+      // Check if new station is busy - always require approval for rerouted assignments
+      const busyCheck = await checkStationIsBusy(selectedRerouteStation);
+      
+      // Also delete any existing assignment for this report to ensure clean state
+      // (in case there's a leftover assignment from a previous reroute attempt)
+      await supabase
+        .from('report_assignments')
+        .delete()
+        .eq('report_id', pendingAssignment.reportId)
+        .eq('assignee_type', 'station');
+      
+      // Create new assignment to the selected station (always pending for reroutes)
+      // Use insert instead of upsert to ensure it triggers INSERT listener on station side
+      const noteText = isRerouteForForwarding 
+        ? (rerouteNote && rerouteNote.trim() 
+          ? `Forwarded from ${pendingAssignment.stationName}: ${rerouteNote.trim()}` 
+          : `Forwarded from ${pendingAssignment.stationName}`)
+        : `Rerouted from ${pendingAssignment.stationName}`;
+      
+      const payload = {
+        report_id: pendingAssignment.reportId,
+        assignee_type: 'station',
+        assignee_id: selectedRerouteStation,
+        assigned_at: new Date().toISOString(),
+        status: 'pending', // Always require approval for rerouted/forwarded assignments
+        assignment_source: 'manual',
+        note: noteText
+      };
+
+      const { error } = await supabase
+        .from('report_assignments')
+        .insert(payload);
+
+      if (error) {
+        // Check if error is due to missing columns (migration not run)
+        if (error.message && (error.message.includes('column') && error.message.includes('does not exist'))) {
+          alert('Database migration required! Please run the migration SQL file (assignment-status-migration.sql) in your Supabase SQL Editor first.');
+          return;
+        }
+        throw error;
+      }
+
+      // Update pendingAssignment to track the new station
+      setPendingAssignment({
+        reportId: pendingAssignment.reportId,
+        stationId: selectedRerouteStation,
+        stationName: newStationName
+      });
+
+      // Show waiting modal
+      setShowRerouteModal(false);
+      setShowWaitingApprovalModal(true);
+      setSelectedRerouteStation('');
+      setRerouteNote('');
+      setIsRerouteForForwarding(false);
+
+      // Create notification for new station
+      if (selectedReport) {
+        const locationInfo = selectedReport.address || selectedReport.geotag_location || 'Location unavailable';
+        const reporterName = selectedReport.reporter_name || selectedReport.reporter || 'Unknown Reporter';
+        const actionText = isRerouteForForwarding ? 'forwarding' : 'rerouting';
+        const noteText = rerouteNote && rerouteNote.trim() ? `\n\nNote: ${rerouteNote.trim()}` : '';
+        const title = isRerouteForForwarding 
+          ? `🚨 Fire Report Forwarded to Your Station - Action Required`
+          : `🚨 Fire Report Rerouted to Your Station - Action Required`;
+        const message = `Command Center is ${actionText} a fire report to your station.\n\nLocation: ${locationInfo}\nReporter: ${reporterName}\nPrevious station: ${pendingAssignment.stationName}${noteText}\n\nWill you accept this assignment?`;
+        
+        const { error: notifError } = await supabase
+          .from('notifications')
+          .insert({
+            user_id: selectedRerouteStation,
+            user_type: 'station',
+            type: 'assignment',
+            related_report_id: String(pendingAssignment.reportId),
+            title: title,
+            message: message,
+            priority: 'urgent',
+            is_read: false
+          });
+
+        if (notifError) {
+          console.error('❌ Error creating reroute notification:', notifError);
+        }
+      }
+
+      // Snapshot report coordinates
+      try {
+        if (selectedReport) {
+          const lat = parseFloat(selectedReport.latitude);
+          const lng = parseFloat(selectedReport.longitude);
+          await supabase
+            .from('assigned_report_snapshots')
+            .upsert({
+              report_id: String(pendingAssignment.reportId),
+              lat: isNaN(lat) ? null : lat,
+              lng: isNaN(lng) ? null : lng,
+              address: selectedReport.address || selectedReport.geotag_location || null,
+              snapshot_json: selectedReport
+            }, { onConflict: 'report_id' });
+        }
+      } catch (snapErr) {
+        console.warn('Snapshot upsert failed:', snapErr?.message || snapErr);
+      }
+      
+      if (selectedReport) {
+        loadAssignmentInfo(selectedReport.id);
+      }
+    } catch (e) {
+      console.error('❌ Reroute failed:', e);
+      alert('Failed to reroute report. Check console.');
+    }
+  }, [selectedRerouteStation, pendingAssignment, nearestStations, selectedReport, loadAssignmentInfo, isRerouteForForwarding, rerouteNote]);
+
   const handleAssign = useCallback(async () => {
     try {
       if (!selectedReport) {
@@ -616,17 +1178,196 @@ const Adashboard = () => {
         alert('Choose an assignee.');
         return;
       }
+
+      // If assigning to a station, check if station is busy
+      if (assigneeType === 'station') {
+        const busyCheck = await checkStationIsBusy(assigneeId);
+        
+        if (busyCheck.isBusy) {
+          // Station is busy - set assignment to pending and show waiting modal
+          const payload = {
+            report_id: selectedReport.id,
+            assignee_type: assigneeType,
+            assignee_id: assigneeId,
+            assigned_at: new Date().toISOString(),
+            status: 'pending', // Set to pending for approval
+            assignment_source: 'manual' // Admin manually assigned
+          };
+          
+          const { error } = await supabase
+            .from('report_assignments')
+            .upsert({ ...payload, note: assignmentNote && assignmentNote.trim() ? assignmentNote.trim() : null }, { onConflict: 'report_id,assignee_id' });
+          
+          if (error) {
+            // Check if error is due to missing columns (migration not run)
+            if (error.message && (error.message.includes('column') && error.message.includes('does not exist'))) {
+              console.error('❌ Database migration not run. Please run assignment-status-migration.sql in Supabase SQL Editor.');
+              alert('Database migration required! Please run the migration SQL file (assignment-status-migration.sql) in your Supabase SQL Editor first.');
+              return;
+            }
+            throw error;
+          }
+
+          // Get station name for modal
+          const { data: stationData } = await supabase
+            .from('station_users')
+            .select('station_name')
+            .eq('id', assigneeId)
+            .single();
+
+          setPendingAssignment({
+            reportId: selectedReport.id,
+            stationId: assigneeId,
+            stationName: stationData?.station_name || 'Station'
+          });
+          setShowWaitingApprovalModal(true);
+
+          // Create notification for the assigned station
+          try {
+            const locationInfo = selectedReport.address || selectedReport.geotag_location || 'Location unavailable';
+            const reporterName = selectedReport.reporter_name || selectedReport.reporter || 'Unknown Reporter';
+            const title = `🚨 New Fire Report Assignment - Action Required`;
+            const message = `Command Center is assigning you a report.\n\nLocation: ${locationInfo}\nReporter: ${reporterName}\n\nWill you accept this assignment?`;
+            
+            const { error: notifError } = await supabase
+              .from('notifications')
+              .insert({
+                user_id: assigneeId,
+                user_type: 'station',
+                type: 'assignment',
+                related_report_id: String(selectedReport.id),
+                title: title,
+                message: message,
+                priority: 'urgent',
+                is_read: false
+              });
+            
+            if (notifError) {
+              console.error('❌ Error creating station notification:', notifError);
+            }
+          } catch (notifErr) {
+            console.error('❌ Failed to create notification:', notifErr);
+          }
+
+          // Snapshot report coordinates
+          try {
+            const lat = parseFloat(selectedReport.latitude);
+            const lng = parseFloat(selectedReport.longitude);
+            await supabase
+              .from('assigned_report_snapshots')
+              .upsert({
+                report_id: String(selectedReport.id),
+                lat: isNaN(lat) ? null : lat,
+                lng: isNaN(lng) ? null : lng,
+                address: selectedReport.address || selectedReport.geotag_location || null,
+                snapshot_json: selectedReport
+              }, { onConflict: 'report_id' });
+          } catch (snapErr) {
+            console.warn('Snapshot upsert failed:', snapErr?.message || snapErr);
+          }
+
+          setAssignmentNote('');
+          loadAssignmentInfo(selectedReport.id);
+          return; // Don't show success alert, modal will handle it
+        } else {
+          // Station is NOT busy - auto-accept assignment
+          // First, delete any existing assignment for this report
+          await supabase
+            .from('report_assignments')
+            .delete()
+            .eq('report_id', selectedReport.id)
+            .eq('assignee_type', 'station');
+          
+          const payload = {
+            report_id: selectedReport.id,
+            assignee_type: assigneeType,
+            assignee_id: assigneeId,
+            assigned_at: new Date().toISOString(),
+            status: 'accepted', // Auto-accept for free stations
+            assignment_source: 'manual',
+            note: assignmentNote && assignmentNote.trim() ? assignmentNote.trim() : null
+          };
+          
+          const { error } = await supabase
+            .from('report_assignments')
+            .insert(payload);
+          
+          if (error) {
+            // Check if error is due to missing columns (migration not run)
+            if (error.message && (error.message.includes('column') && error.message.includes('does not exist'))) {
+              console.error('❌ Database migration not run. Please run assignment-status-migration.sql in Supabase SQL Editor.');
+              alert('Database migration required! Please run the migration SQL file (assignment-status-migration.sql) in your Supabase SQL Editor first.');
+              return;
+            }
+            throw error;
+          }
+
+          // Get station name for success message
+          const { data: stationData } = await supabase
+            .from('station_users')
+            .select('station_name')
+            .eq('id', assigneeId)
+            .single();
+
+          const stationName = stationData?.station_name || 'Station';
+          
+          // Create notification for the assigned station (even though auto-accepted, still notify)
+          try {
+            const locationInfo = selectedReport.address || selectedReport.geotag_location || 'Location unavailable';
+            const reporterName = selectedReport.reporter_name || selectedReport.reporter || 'Unknown Reporter';
+            const title = `🚨 New Fire Report Assignment`;
+            const message = `You have been assigned a new fire report.\n\nLocation: ${locationInfo}\nReporter: ${reporterName}`;
+            
+            const { error: notifError } = await supabase
+              .from('notifications')
+              .insert({
+                user_id: assigneeId,
+                user_type: 'station',
+                type: 'assignment',
+                related_report_id: String(selectedReport.id),
+                title: title,
+                message: message,
+                priority: 'urgent',
+                is_read: false
+              });
+            
+            if (notifError) {
+              console.error('❌ Error creating station notification:', notifError);
+            }
+          } catch (notifErr) {
+            console.error('❌ Failed to create notification:', notifErr);
+          }
+
+          setAssignmentNote('');
+          loadAssignmentInfo(selectedReport.id);
+          alert(`✅ Assignment successfully assigned to ${stationName}.`);
+          return; // Don't proceed to responder assignment logic
+        }
+      }
+
+      // Assigning to responder - proceed normally
       const payload = {
         report_id: selectedReport.id,
         assignee_type: assigneeType,
         assignee_id: assigneeId,
-        assigned_at: new Date().toISOString()
+        assigned_at: new Date().toISOString(),
+        status: 'accepted',
+        assignment_source: 'manual'
       };
-      // Assignment note processing
+      
       const { error } = await supabase
         .from('report_assignments')
         .upsert({ ...payload, note: assignmentNote && assignmentNote.trim() ? assignmentNote.trim() : null }, { onConflict: 'report_id,assignee_id' });
-      if (error) throw error;
+      
+      if (error) {
+        // Check if error is due to missing columns (migration not run)
+        if (error.message && (error.message.includes('column') && error.message.includes('does not exist'))) {
+          console.error('❌ Database migration not run. Please run assignment-status-migration.sql in Supabase SQL Editor.');
+          alert('Database migration required! Please run the migration SQL file (assignment-status-migration.sql) in your Supabase SQL Editor first.');
+          return;
+        }
+        throw error;
+      }
       
       // Create notification for the assigned station
       if (assigneeType === 'station') {
@@ -1062,6 +1803,107 @@ const Adashboard = () => {
                   anchor: new window.google.maps.Point(24, 24)
                 }}
                 zIndex={1200}
+                onClick={async () => {
+                  // Fetch full station details from database
+                  try {
+                    setLoadingResponders(true);
+                    const { data: stationData, error } = await supabase
+                      .from('station_users')
+                      .select('id, station_name, address, lat, lng, email, phone, account_status, num_firetrucks, firetruck_size')
+                      .eq('id', s.id)
+                      .single();
+                    
+                    if (!error && stationData) {
+                      setSelectedStation({
+                        ...stationData,
+                        lat: stationData.lat ? parseFloat(stationData.lat) : s.lat,
+                        lng: stationData.lng ? parseFloat(stationData.lng) : s.lng
+                      });
+                      
+                      // Fetch responders for this station
+                      const stationId = stationData.id || s.id;
+                      console.log('🔍 Fetching responders for station ID:', stationId);
+                      
+                      const { data: respondersData, error: respondersError } = await supabase
+                        .from('responders')
+                        .select('id, first_name, last_name')
+                        .eq('station_id', stationId);
+                      
+                      if (!respondersError && respondersData) {
+                        console.log('✅ Found responders:', respondersData);
+                        setStationResponders(respondersData || []);
+                      } else {
+                        console.error('❌ Error fetching responders:', respondersError);
+                        setStationResponders([]);
+                      }
+                    } else {
+                      // Fallback to geocoded data
+                      const fullStation = allStations.find(st => String(st.id) === String(s.id));
+                      setSelectedStation({
+                        id: s.id,
+                        station_name: fullStation?.station_name || s.name,
+                        address: fullStation?.address || s.address,
+                        lat: s.lat,
+                        lng: s.lng,
+                        email: fullStation?.email,
+                        phone: fullStation?.phone,
+                        num_firetrucks: fullStation?.num_firetrucks,
+                        firetruck_size: fullStation?.firetruck_size
+                      });
+                      
+                      // Still try to fetch responders even in fallback
+                      console.log('🔍 Fetching responders for station ID (fallback):', s.id);
+                      const { data: respondersData, error: respondersError } = await supabase
+                        .from('responders')
+                        .select('id, first_name, last_name')
+                        .eq('station_id', s.id);
+                      
+                      if (!respondersError && respondersData) {
+                        console.log('✅ Found responders (fallback):', respondersData);
+                        setStationResponders(respondersData || []);
+                      } else {
+                        console.error('❌ Error fetching responders (fallback):', respondersError);
+                        setStationResponders([]);
+                      }
+                    }
+                  } catch (err) {
+                    console.error('Error fetching station details:', err);
+                    // Fallback to geocoded data - still try to fetch responders
+                    const fullStation = allStations.find(st => String(st.id) === String(s.id));
+                    setSelectedStation({
+                      id: s.id,
+                      station_name: fullStation?.station_name || s.name,
+                      address: fullStation?.address || s.address,
+                      lat: s.lat,
+                      lng: s.lng,
+                      num_firetrucks: fullStation?.num_firetrucks,
+                      firetruck_size: fullStation?.firetruck_size
+                    });
+                    
+                    // Still try to fetch responders even in error case
+                    try {
+                      console.log('🔍 Fetching responders for station ID (error fallback):', s.id);
+                      const { data: respondersData, error: respondersError } = await supabase
+                        .from('responders')
+                        .select('id, first_name, last_name')
+                        .eq('station_id', s.id);
+                      
+                      if (!respondersError && respondersData) {
+                        console.log('✅ Found responders (error fallback):', respondersData);
+                        setStationResponders(respondersData || []);
+                      } else {
+                        console.error('❌ Error fetching responders (error fallback):', respondersError);
+                        setStationResponders([]);
+                      }
+                    } catch (responderErr) {
+                      console.error('❌ Error in responder fetch:', responderErr);
+                      setStationResponders([]);
+                    }
+                  } finally {
+                    setLoadingResponders(false);
+                  }
+                }}
+                cursor="pointer"
               />
               <Circle
                 center={{ lat: s.lat, lng: s.lng }}
@@ -1196,17 +2038,45 @@ const Adashboard = () => {
                   )}
                   {/* Current Assignment Display */}
                   {currentAssignment && (
-                    <div className="mt-4 bg-blue-50 border-l-4 border-blue-500 p-3 rounded">
+                    <div className={`mt-4 border-l-4 p-3 rounded ${
+                      currentAssignment.status === 'pending' 
+                        ? 'bg-amber-50 border-amber-500' 
+                        : 'bg-blue-50 border-blue-500'
+                    }`}>
                       <div className="flex items-start space-x-2">
-                        <span className="text-lg">📍</span>
+                        <span className="text-lg">{currentAssignment.status === 'pending' ? '⏳' : '📍'}</span>
                         <div className="flex-1">
-                          <p className="font-bold text-blue-900 text-sm mb-1">Currently Assigned To:</p>
-                          <p className="text-blue-800 font-semibold">{currentAssignment.name}</p>
-                          <p className="text-blue-600 text-xs mt-1">
-                            Assigned: {new Date(currentAssignment.assigned_at).toLocaleString()}
+                          <p className={`font-bold text-sm mb-1 ${
+                            currentAssignment.status === 'pending' 
+                              ? 'text-amber-900' 
+                              : 'text-blue-900'
+                          }`}>
+                            {currentAssignment.status === 'pending' 
+                              ? 'Awaiting Station Confirmation' 
+                              : 'Currently Assigned To:'}
+                          </p>
+                          <p className={`font-semibold ${
+                            currentAssignment.status === 'pending' 
+                              ? 'text-amber-800' 
+                              : 'text-blue-800'
+                          }`}>
+                            {currentAssignment.name}
+                          </p>
+                          <p className={`text-xs mt-1 ${
+                            currentAssignment.status === 'pending' 
+                              ? 'text-amber-600' 
+                              : 'text-blue-600'
+                          }`}>
+                            {currentAssignment.status === 'pending' 
+                              ? 'Waiting for station to accept or decline...' 
+                              : `Assigned: ${new Date(currentAssignment.assigned_at).toLocaleString()}`}
                           </p>
                           {currentAssignment.note && (
-                            <p className="text-blue-700 text-xs mt-1 italic">
+                            <p className={`text-xs mt-1 italic ${
+                              currentAssignment.status === 'pending' 
+                                ? 'text-amber-700' 
+                                : 'text-blue-700'
+                            }`}>
                               Note: {currentAssignment.note}
                             </p>
                           )}
@@ -1240,67 +2110,163 @@ const Adashboard = () => {
                     </div>
                   )}
 
-                  {/* Assignment Section */}
-                  <div className="mt-4 pt-4 border-t border-gray-200">
-                    <p className="font-bold text-gray-900 mb-3">Assignment</p>
-                    <div className="space-y-2">
-                      <select 
-                        className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" 
-                        value={assigneeId} 
-                        onChange={(e) => setAssigneeId(e.target.value)}
-                      >
-                        <option value="">Select station…</option>
-                        {allStations.map(s => (
-                          <option key={s.id} value={s.id}>{s.station_name || 'Station'}</option>
-                        ))}
-                      </select>
-                      <textarea
-                        className="w-full border border-gray-300 rounded-lg p-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                        rows="3"
-                        placeholder="Assignment note (optional)"
-                        value={assignmentNote || ''}
-                        onChange={(e) => setAssignmentNote((e.target.value || '').toString())}
-                      ></textarea>
-                      <button 
-                        className="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium px-4 py-2 rounded-lg transition-colors" 
-                        onClick={handleAssign}
-                      >
-                        Assign
-                      </button>
-                      <p className="text-xs text-gray-500 mt-1">You can reassign anytime — the latest assignment is active.</p>
+                  {/* Assignment Section - Only show if no station is assigned */}
+                  {!currentAssignment && (
+                    <div className="mt-4 pt-4 border-t border-gray-200">
+                      <p className="font-bold text-gray-900 mb-3">Assign to Station</p>
+                      <div className="space-y-2">
+                        <select 
+                          className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" 
+                          value={assigneeId} 
+                          onChange={(e) => setAssigneeId(e.target.value)}
+                        >
+                          <option value="">Select station…</option>
+                          {allStations.map(s => (
+                            <option key={s.id} value={s.id}>{s.station_name || 'Station'}</option>
+                          ))}
+                        </select>
+                        <textarea
+                          className="w-full border border-gray-300 rounded-lg p-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                          rows="3"
+                          placeholder="Assignment note (optional)"
+                          value={assignmentNote || ''}
+                          onChange={(e) => setAssignmentNote((e.target.value || '').toString())}
+                        ></textarea>
+                        <button 
+                          className="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium px-4 py-2 rounded-lg transition-colors" 
+                          onClick={handleAssign}
+                        >
+                          Assign Station
+                        </button>
+                        <p className="text-xs text-gray-500 mt-1">Select a station to assign this report to.</p>
+                      </div>
                     </div>
-                  </div>
+                  )}
 
-                  {/* Redirect/Forward Section */}
-                  <div className="mt-4 pt-4 border-t border-gray-200">
-                    <p className="font-bold text-gray-900 mb-3">Redirect/Forward</p>
-                    <div className="space-y-2">
-                      <select 
-                        className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500" 
-                        value={redirectTarget} 
-                        onChange={(e) => setRedirectTarget(e.target.value)}
-                      >
-                        <option value="">Choose station…</option>
-                        {allStations.map(s => (
-                          <option key={`st-${s.id}`} value={`station:${s.id}`}>{s.station_name || 'Station'}</option>
-                        ))}
-                      </select>
-                      <textarea 
-                        className="w-full border border-gray-300 rounded-lg p-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500" 
-                        rows="3" 
-                        placeholder="Note (optional)" 
-                        value={redirectNote} 
-                        onChange={(e) => setRedirectNote(e.target.value)}
-                      ></textarea>
-                      <button 
-                        className="w-full bg-orange-500 hover:bg-orange-600 text-white font-medium px-4 py-2 rounded-lg transition-colors" 
-                        onClick={handleRedirect}
-                      >
-                        Forward
-                      </button>
-                      <p className="text-xs text-gray-500 mt-1">Forwarding keeps the original assignment and records provenance.</p>
+                  {/* Redirect/Forward Section - Only show if a station is already assigned */}
+                  {currentAssignment && (
+                    <div className="mt-4 pt-4 border-t border-gray-200">
+                      <p className="font-bold text-gray-900 mb-3">Forward to Station</p>
+                      <div className="space-y-2">
+                        <button 
+                          className="w-full bg-orange-500 hover:bg-orange-600 text-white font-medium px-4 py-2 rounded-lg transition-colors" 
+                          onClick={async () => {
+                            // Open reroute modal for forwarding
+                            if (!selectedReport) return;
+                            
+                            setIsRerouteForForwarding(true);
+                            setSelectedRerouteStation('');
+                            setRerouteNote('');
+                            
+                            // Set pendingAssignment for forwarding context
+                            setPendingAssignment({
+                              reportId: selectedReport.id,
+                              stationId: currentAssignment.id,
+                              stationName: currentAssignment.name
+                            });
+                            
+                            // Fetch nearest stations to the current assignment's station
+                            try {
+                              const lat = parseFloat(selectedReport.latitude);
+                              const lng = parseFloat(selectedReport.longitude);
+                              
+                              console.log('🔍 Forwarding: Fetching stations for report at:', lat, lng);
+                              console.log('🔍 Forwarding: Excluding station:', currentAssignment.id);
+                              
+                              if (!isNaN(lat) && !isNaN(lng)) {
+                                // Find nearest stations to the incident location
+                                const stations = await findNearestStations(
+                                  lat,
+                                  lng,
+                                  currentAssignment.id, // Exclude current station
+                                  10, // Get more stations
+                                  { lat, lng } // Incident location for distance calculation
+                                );
+                                
+                                console.log('🔍 Forwarding: findNearestStations returned:', stations?.length || 0, 'stations');
+                                
+                                if (stations && stations.length > 0) {
+                                  setNearestStations(stations);
+                                } else {
+                                  console.log('⚠️ Forwarding: findNearestStations returned empty, trying fallback...');
+                                  // Fallback: directly query all stations (less restrictive)
+                                  const { data: allStationsData, error: allStationsError } = await supabase
+                                    .from('station_users')
+                                    .select('id, station_name, lat, lng')
+                                    .neq('id', currentAssignment.id);
+                                  
+                                  if (allStationsError) {
+                                    console.error('❌ Error fetching all stations:', allStationsError);
+                                    setNearestStations([]);
+                                  } else if (allStationsData && allStationsData.length > 0) {
+                                    console.log('✅ Forwarding: Found', allStationsData.length, 'stations in fallback');
+                                    const stationsWithDistance = allStationsData
+                                      .filter(station => {
+                                        const stationLat = parseFloat(station.lat);
+                                        const stationLng = parseFloat(station.lng);
+                                        return !isNaN(stationLat) && !isNaN(stationLng);
+                                      })
+                                      .map(station => {
+                                        const stationLat = parseFloat(station.lat);
+                                        const stationLng = parseFloat(station.lng);
+                                        let distanceToIncident = null;
+                                        
+                                        if (!isNaN(lat) && !isNaN(lng)) {
+                                          distanceToIncident = calculateDistance(lat, lng, stationLat, stationLng);
+                                        }
+                                        
+                                        return {
+                                          ...station,
+                                          distanceToIncident: distanceToIncident,
+                                          distanceToIncidentKm: distanceToIncident ? (distanceToIncident / 1000).toFixed(2) : null
+                                        };
+                                      })
+                                      .sort((a, b) => {
+                                        if (a.distanceToIncident === null || a.distanceToIncident === Infinity) return 1;
+                                        if (b.distanceToIncident === null || b.distanceToIncident === Infinity) return -1;
+                                        return a.distanceToIncident - b.distanceToIncident;
+                                      });
+                                    
+                                    setNearestStations(stationsWithDistance);
+                                  } else {
+                                    console.warn('⚠️ Forwarding: No stations found in fallback');
+                                    setNearestStations([]);
+                                  }
+                                }
+                              } else {
+                                // No coordinates, get all stations
+                                const { data: allStationsData, error: allStationsError } = await supabase
+                                  .from('station_users')
+                                  .select('id, station_name, lat, lng')
+                                  .neq('id', currentAssignment.id);
+                                
+                                if (allStationsError) {
+                                  console.error('❌ Error fetching all stations (no coords):', allStationsError);
+                                }
+                                
+                                if (allStationsData && allStationsData.length > 0) {
+                                  setNearestStations(allStationsData.map(s => ({
+                                    ...s,
+                                    distanceToIncidentKm: null
+                                  })));
+                                } else {
+                                  setNearestStations([]);
+                                }
+                              }
+                            } catch (error) {
+                              console.error('Error fetching stations for forwarding:', error);
+                              setNearestStations([]);
+                            }
+                            
+                            setShowRerouteModal(true);
+                          }}
+                        >
+                          Forward Station
+                        </button>
+                        <p className="text-xs text-gray-500 mt-1">Forward this report to another station.</p>
+                      </div>
                     </div>
-                  </div>
+                  )}
                 </div>
               </div>
             </InfoWindow>
@@ -1383,23 +2349,33 @@ const Adashboard = () => {
       </div>
 
       {/* Mini Modal - Active Fire Incidents List (Lower Left) */}
-      <div className="absolute bottom-4 left-4 z-30 w-80 bg-white backdrop-blur-sm bg-opacity-98 rounded-lg shadow-2xl border border-gray-200 h-[320px] flex flex-col">
+      <div className={`absolute bottom-4 left-4 z-30 w-80 bg-white backdrop-blur-sm bg-opacity-98 rounded-lg shadow-2xl border border-gray-200 flex flex-col transition-all duration-300 ${
+        isIncidentsModalMinimized ? 'h-auto' : 'h-[320px]'
+      }`}>
         {/* Header */}
         <div className="bg-gradient-to-r from-red-600 to-red-700 p-2.5 rounded-t-lg flex items-center justify-between sticky top-0 z-10 flex-shrink-0">
-          <div className="flex items-center space-x-2">
-            <div className="bg-white/20 p-1.5 rounded-md">
+          <div className="flex items-center space-x-2 flex-1">
+            <button
+              onClick={() => setIsIncidentsModalMinimized(!isIncidentsModalMinimized)}
+              className="bg-white/20 p-1.5 rounded-md hover:bg-white/30 transition-colors cursor-pointer"
+              title={isIncidentsModalMinimized ? "Expand" : "Minimize"}
+            >
               <svg className="w-4 h-4 text-white" fill="currentColor" viewBox="0 0 20 20">
                 <path fillRule="evenodd" d="M5 2a1 1 0 011 1v1h1a1 1 0 010 2H6v1a1 1 0 01-2 0V6H3a1 1 0 010-2h1V3a1 1 0 011-1zm0 10a1 1 0 011 1v1h1a1 1 0 110 2H6v1a1 1 0 11-2 0v-1H3a1 1 0 110-2h1v-1a1 1 0 011-1zM12 2a1 1 0 01.967.744L14.146 7.2 17.5 9.134a1 1 0 01.5.866 1 1 0 01-1 1h-4v1a1 1 0 01-1 1h-1a1 1 0 01-1-1v-1H6a1 1 0 01-1-1 1 1 0 01.5-.866l3.354-1.934L9.033 2.744A1 1 0 0112 2z" clipRule="evenodd" />
               </svg>
-            </div>
-            <div>
+            </button>
+            <div className="flex-1">
               <h3 className="font-bold text-white text-sm tracking-wide">Active Incidents</h3>
-              <p className="text-red-100 text-xs">{fireReports.length} active</p>
+            </div>
+            <div className="text-right">
+              <div className="text-3xl font-extrabold text-white drop-shadow-lg">{fireReports.length}</div>
+              <p className="text-red-100 text-xs font-medium mt-0.5">active</p>
             </div>
           </div>
         </div>
 
         {/* Scrollable List */}
+        {!isIncidentsModalMinimized && (
         <div className="overflow-y-auto flex-1" style={{ maxHeight: '280px' }}>
           {reportsLoading ? (
             <div className="flex items-center justify-center py-8">
@@ -1411,7 +2387,30 @@ const Adashboard = () => {
             </div>
           ) : (
             <div className="p-2 space-y-2">
-              {fireReports.map((report) => {
+              {[...fireReports]
+                .sort((a, b) => {
+                  // Sort by newest first (most recent timestamp at top)
+                  const getTimestamp = (report) => {
+                    // Prefer updated_at if available (status was updated), else use created_at
+                    if (report.updated_at) {
+                      return new Date(report.updated_at).getTime();
+                    }
+                    if (report.created_at) {
+                      return new Date(report.created_at).getTime();
+                    }
+                    if (report.timestamp) {
+                      return new Date(report.timestamp).getTime();
+                    }
+                    return 0;
+                  };
+                  
+                  const timeA = getTimestamp(a);
+                  const timeB = getTimestamp(b);
+                  
+                  // Sort descending (newest first)
+                  return timeB - timeA;
+                })
+                .map((report) => {
                 const alarmLevel = resolveAlarmLevel(report);
                 const alarmColor = getAlarmLevelColor(alarmLevel);
                 const status = report.status || 'Unknown';
@@ -1490,6 +2489,7 @@ const Adashboard = () => {
             </div>
           )}
         </div>
+        )}
       </div>
 
       {/* Professional Admin Dashboard Panel - Compact & Toggleable */}
@@ -1514,46 +2514,7 @@ const Adashboard = () => {
             </div>
           </div>
 
-          <div className="p-3 space-y-3">
-            {/* Active Reports Section - Compact */}
-            <div className="bg-gray-50 rounded-lg p-3">
-              <div className="flex items-center justify-between mb-2">
-                <div className="flex items-center space-x-2">
-                  <div className="bg-red-100 p-1.5 rounded-md">
-                    <svg className="w-3 h-3 text-red-600" fill="currentColor" viewBox="0 0 20 20">
-                      <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd" />
-                    </svg>
-                  </div>
-                  <div>
-                    <p className="font-semibold text-gray-900 text-sm">Active Reports</p>
-                    <p className="text-xs text-gray-500">Real-time incidents</p>
-                  </div>
-                </div>
-                <div className="text-right">
-                  <div className="text-xl font-bold text-red-600">{fireReports.length}</div>
-                  <div className="text-xs text-gray-500">incidents</div>
-                </div>
-              </div>
-            
-            {reportsLoading && (
-              <div className="flex items-center justify-center space-x-2 py-2">
-                <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-red-600"></div>
-                <span className="text-gray-600 text-sm">Updating reports...</span>
-              </div>
-            )}
-            
-              <button 
-                onClick={fetchFireReports}
-                className="w-full bg-red-600 hover:bg-red-700 text-white px-3 py-2 rounded-md transition-all duration-200 text-xs font-medium shadow-md hover:shadow-lg disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center space-x-1"
-                disabled={reportsLoading}
-              >
-                <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
-                  <path fillRule="evenodd" d="M4 2a1 1 0 011 1v2.101a7.002 7.002 0 0111.601 2.566 1 1 0 11-1.885.666A5.002 5.002 0 005.999 7H9a1 1 0 010 2H4a1 1 0 01-1-1V3a1 1 0 011-1zm.008 9.057a1 1 0 011.276.61A5.002 5.002 0 0014.001 13H11a1 1 0 110-2h5a1 1 0 011 1v5a1 1 0 11-2 0v-2.101a7.002 7.002 0 01-11.601-2.566 1 1 0 01.61-1.276z" clipRule="evenodd" />
-                </svg>
-                <span>Refresh</span>
-              </button>
-          </div>
-          
+          <div className="p-3">
             {/* Fire Alarm Levels Legend - Compact & Toggleable */}
             <div className="bg-gray-50 rounded-lg">
               {/* Legend Header with Toggle Button */}
@@ -1585,10 +2546,6 @@ const Adashboard = () => {
                 <div className="px-3 pb-3">
                   <div className="grid grid-cols-2 gap-1.5 text-xs">
                     <div className="flex items-center space-x-1.5 p-1.5 bg-white rounded">
-                      <div className="w-2.5 h-2.5 rounded-full border border-gray-200" style={{ backgroundColor: '#93c5fd' }}></div>
-                      <span className="text-gray-700 font-medium">Fire Out</span>
-                    </div>
-                    <div className="flex items-center space-x-1.5 p-1.5 bg-white rounded">
                       <div className="w-2.5 h-2.5 rounded-full border border-gray-200" style={{ backgroundColor: '#fef3c7' }}></div>
                       <span className="text-gray-700 font-medium">First Alarm</span>
                     </div>
@@ -1601,8 +2558,12 @@ const Adashboard = () => {
                       <span className="text-gray-700 font-medium">Third Alarm</span>
                     </div>
                     <div className="flex items-center space-x-1.5 p-1.5 bg-white rounded">
+                      <div className="w-2.5 h-2.5 rounded-full border border-gray-200" style={{ backgroundColor: '#f87171' }}></div>
+                      <span className="text-gray-700 font-medium">Fourth Alarm</span>
+                    </div>
+                    <div className="flex items-center space-x-1.5 p-1.5 bg-white rounded">
                       <div className="w-2.5 h-2.5 rounded-full border border-gray-200" style={{ backgroundColor: '#ef4444' }}></div>
-                      <span className="text-gray-700 font-medium">Fourth+ Alarm</span>
+                      <span className="text-gray-700 font-medium">Fifth Alarm</span>
                     </div>
                     <div className="flex items-center space-x-1.5 p-1.5 bg-white rounded">
                       <div className="w-2.5 h-2.5 rounded-full border border-gray-200" style={{ backgroundColor: '#450a0a' }}></div>
@@ -1611,6 +2572,369 @@ const Adashboard = () => {
                   </div>
                 </div>
               )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Waiting for Station Approval Modal */}
+      {showWaitingApprovalModal && pendingAssignment && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 animate-in fade-in duration-200">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full mx-4 p-8 transform transition-all animate-in zoom-in-95 duration-200">
+            <div className="flex items-center justify-center mb-6">
+              <div className="bg-gradient-to-br from-blue-500 to-blue-600 rounded-full p-4 shadow-lg animate-pulse">
+                <svg className="w-10 h-10 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+              </div>
+            </div>
+            <h3 className="text-2xl font-bold text-gray-900 text-center mb-3">Waiting for Station Approval</h3>
+            <p className="text-gray-600 text-center mb-8 leading-relaxed">
+              The assignment has been sent to <span className="font-semibold text-gray-900">{pendingAssignment.stationName}</span>. 
+              Please wait for their response.
+            </p>
+            <button
+              onClick={() => {
+                setShowWaitingApprovalModal(false);
+                setPendingAssignment(null);
+              }}
+              className="w-full bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-700 hover:to-blue-800 text-white font-semibold px-6 py-3 rounded-xl transition-all shadow-lg hover:shadow-xl transform hover:scale-105"
+            >
+              Okay
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Reroute Modal - Station Too Busy */}
+      {showRerouteModal && pendingAssignment && (
+        <div 
+          className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 animate-in fade-in duration-200"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) {
+              setShowRerouteModal(false);
+              setSelectedRerouteStation('');
+              setRerouteNote('');
+              setIsRerouteForForwarding(false);
+            }
+          }}
+        >
+          <div className="bg-white rounded-2xl shadow-2xl max-w-lg w-full mx-4 p-8 max-h-[80vh] overflow-y-auto transform transition-all animate-in zoom-in-95 duration-200 relative">
+            {/* Close Button */}
+            <button
+              onClick={() => {
+                setShowRerouteModal(false);
+                setSelectedRerouteStation('');
+                setRerouteNote('');
+                setIsRerouteForForwarding(false);
+              }}
+              className="absolute top-4 right-4 text-gray-400 hover:text-gray-600 transition-colors"
+            >
+              <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+            <div className="flex items-center justify-center mb-6">
+              <div className="bg-gradient-to-br from-orange-500 to-orange-600 rounded-full p-4 shadow-lg">
+                <svg className="w-10 h-10 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                </svg>
+              </div>
+            </div>
+            <h3 className="text-2xl font-bold text-gray-900 text-center mb-3">
+              {isRerouteForForwarding ? 'Forward to Station' : 'Station Declined Assignment'}
+            </h3>
+            <p className="text-gray-600 text-center mb-4 leading-relaxed">
+              {isRerouteForForwarding ? (
+                <>
+                  Forward this report from <span className="font-semibold text-gray-900">{pendingAssignment.stationName}</span> to one of the nearest stations:
+                </>
+              ) : (
+                <>
+                  <span className="font-semibold text-gray-900">{pendingAssignment.stationName}</span> has declined this assignment and is unable to handle this report. 
+                  Please reroute the incident to one of the nearest stations:
+                </>
+              )}
+            </p>
+            {selectedReport && (
+              <div className="bg-blue-50 border-l-4 border-blue-500 p-3 rounded mb-4">
+                <p className="text-sm text-gray-700">
+                  <span className="font-semibold">Report Location:</span> {selectedReport.address || selectedReport.geotag_location || 'Location unavailable'}
+                </p>
+              </div>
+            )}
+            
+            <div className="space-y-3 mb-6">
+              {nearestStations.length > 0 ? (
+                nearestStations.map((station) => (
+                  <label
+                    key={station.id}
+                    className={`flex items-center p-4 border-2 rounded-xl cursor-pointer transition-all ${
+                      selectedRerouteStation === station.id
+                        ? 'border-blue-500 bg-blue-50 shadow-md'
+                        : 'border-gray-200 hover:border-gray-300 hover:shadow-sm'
+                    }`}
+                  >
+                    <input
+                      type="radio"
+                      name="rerouteStation"
+                      value={station.id}
+                      checked={selectedRerouteStation === station.id}
+                      onChange={(e) => setSelectedRerouteStation(e.target.value)}
+                      className="mr-4 w-5 h-5 text-blue-600"
+                    />
+                    <div className="flex-1">
+                      <div className="flex items-center space-x-2 mb-1">
+                        <p className="font-semibold text-gray-900">{station.station_name || 'Station'}</p>
+                        {stationActiveCounts[station.id] !== undefined && stationActiveCounts[station.id] > 0 && (
+                          <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-amber-100 text-amber-800 border border-amber-200">
+                            Dealing with {stationActiveCounts[station.id]} Active {stationActiveCounts[station.id] === 1 ? 'Report' : 'Reports'}
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-sm text-gray-500">
+                        {station.distanceToIncidentKm 
+                          ? `${station.distanceToIncidentKm} km from incident` 
+                          : station.distanceKm 
+                            ? `${station.distanceKm} km away` 
+                            : 'Distance unavailable (no coordinates)'}
+                      </p>
+                    </div>
+                  </label>
+                ))
+              ) : (
+                <p className="text-gray-500 text-center py-4">No stations available.</p>
+              )}
+            </div>
+
+            {/* Optional Message Field */}
+            <div className="mb-6">
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Message (optional)
+              </label>
+              <textarea
+                className="w-full border border-gray-300 rounded-lg p-3 text-sm focus:outline-none focus:ring-2 focus:ring-orange-500"
+                rows="3"
+                placeholder="Add a note for the receiving station (optional)"
+                value={rerouteNote}
+                onChange={(e) => setRerouteNote(e.target.value)}
+              ></textarea>
+            </div>
+
+            <button
+              onClick={handleReroute}
+              disabled={!selectedRerouteStation}
+              className="w-full bg-gradient-to-r from-orange-500 to-orange-600 hover:from-orange-600 hover:to-orange-700 disabled:from-gray-300 disabled:to-gray-400 disabled:cursor-not-allowed text-white font-semibold px-6 py-3 rounded-xl transition-all shadow-lg hover:shadow-xl transform hover:scale-105 disabled:transform-none"
+            >
+              {isRerouteForForwarding ? 'Forward' : 'Reroute'}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Station Details Modal */}
+      {selectedStation && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 animate-in fade-in duration-200">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-4xl w-full mx-4 p-6 transform transition-all animate-in zoom-in-95 duration-200">
+            {/* Header */}
+            <div className="flex items-center justify-between mb-4">
+              <div className="flex items-center space-x-3">
+                <div className="bg-gradient-to-br from-red-500 to-red-600 rounded-full p-3 shadow-lg">
+                  <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" />
+                  </svg>
+                </div>
+                <div>
+                  <h3 className="text-xl font-bold text-gray-900">Station Details</h3>
+                  <p className="text-sm text-gray-500">Fire Station Information</p>
+                </div>
+              </div>
+              <button
+                onClick={() => {
+                  setSelectedStation(null);
+                  setStationResponders([]);
+                }}
+                className="text-gray-400 hover:text-gray-600 transition-colors p-1"
+                title="Close"
+              >
+                <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
+                  <path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clipRule="evenodd" />
+                </svg>
+              </button>
+            </div>
+
+            {/* Two Card Layout */}
+            <div className="grid grid-cols-2 gap-4">
+              {/* Left Card: Basic Station Information */}
+              <div className="bg-gray-50 rounded-xl p-4 border border-gray-200 space-y-3">
+                <h4 className="text-sm font-bold text-gray-700 uppercase tracking-wide mb-3">Basic Information</h4>
+                
+                {/* Station Name */}
+                <div className="bg-gradient-to-r from-red-50 to-orange-50 border-l-4 border-red-500 p-3 rounded-lg">
+                  <div className="flex items-center space-x-2 mb-1">
+                    <svg className="w-4 h-4 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" />
+                    </svg>
+                    <p className="text-xs font-semibold text-red-600 uppercase tracking-wide">Station Name</p>
+                  </div>
+                  <p className="text-base font-bold text-gray-900">{selectedStation.station_name || 'Unknown Station'}</p>
+                </div>
+
+                {/* Address */}
+                {selectedStation.address && (
+                  <div className="bg-blue-50 border-l-4 border-blue-500 p-3 rounded-lg">
+                    <div className="flex items-center space-x-2 mb-1">
+                      <svg className="w-4 h-4 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
+                      </svg>
+                      <p className="text-xs font-semibold text-blue-600 uppercase tracking-wide">Address</p>
+                    </div>
+                    <p className="text-xs text-gray-800">{selectedStation.address}</p>
+                  </div>
+                )}
+
+                {/* Coordinates */}
+                {(selectedStation.lat && selectedStation.lng) && (
+                  <div className="bg-green-50 border-l-4 border-green-500 p-3 rounded-lg">
+                    <div className="flex items-center space-x-2 mb-2">
+                      <svg className="w-4 h-4 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7" />
+                      </svg>
+                      <p className="text-xs font-semibold text-green-600 uppercase tracking-wide">Coordinates</p>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2 text-xs">
+                      <div>
+                        <p className="text-gray-600 text-xs">Latitude</p>
+                        <p className="font-mono font-semibold text-gray-900 text-xs">{selectedStation.lat?.toFixed(6) || 'N/A'}</p>
+                      </div>
+                      <div>
+                        <p className="text-gray-600 text-xs">Longitude</p>
+                        <p className="font-mono font-semibold text-gray-900 text-xs">{selectedStation.lng?.toFixed(6) || 'N/A'}</p>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* Status */}
+                <div className="bg-purple-50 border-l-4 border-purple-500 p-3 rounded-lg">
+                  <div className="flex items-center space-x-2 mb-1">
+                    <svg className="w-4 h-4 text-purple-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                    <p className="text-xs font-semibold text-purple-600 uppercase tracking-wide">Status</p>
+                  </div>
+                  <p className="text-sm font-semibold text-gray-900">
+                    <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
+                      Active
+                    </span>
+                  </p>
+                </div>
+
+                {/* Contact Information */}
+                <div className="space-y-2">
+                  {/* Email */}
+                  {selectedStation.email && (
+                    <div className="bg-gray-50 border-l-4 border-gray-400 p-2.5 rounded-lg">
+                      <div className="flex items-center space-x-2 mb-1">
+                        <svg className="w-3.5 h-3.5 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+                        </svg>
+                        <p className="text-xs font-semibold text-gray-600 uppercase tracking-wide">Email</p>
+                      </div>
+                      <p className="text-xs text-gray-800 break-words">{selectedStation.email}</p>
+                    </div>
+                  )}
+                  
+                  {/* Phone */}
+                  {selectedStation.phone && (
+                    <div className="bg-gray-50 border-l-4 border-gray-400 p-2.5 rounded-lg">
+                      <div className="flex items-center space-x-2 mb-1">
+                        <svg className="w-3.5 h-3.5 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z" />
+                        </svg>
+                        <p className="text-xs font-semibold text-gray-600 uppercase tracking-wide">Phone</p>
+                      </div>
+                      <p className="text-xs text-gray-800">{selectedStation.phone}</p>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Right Card: Resources (Fire Trucks & Responders) */}
+              <div className="bg-gray-50 rounded-xl p-4 border border-gray-200 space-y-3">
+                <h4 className="text-sm font-bold text-gray-700 uppercase tracking-wide mb-3">Resources</h4>
+                
+                {/* Fire Trucks */}
+                <div className="bg-orange-50 border-l-4 border-orange-500 p-3 rounded-lg">
+                  <div className="flex items-center space-x-2 mb-2">
+                    <svg className="w-4 h-4 text-orange-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" />
+                    </svg>
+                    <p className="text-xs font-semibold text-orange-600 uppercase tracking-wide">Fire Trucks</p>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <p className="text-gray-600 text-xs mb-0.5">Number of Trucks</p>
+                      <p className="text-base font-bold text-gray-900">
+                        {selectedStation.num_firetrucks != null ? selectedStation.num_firetrucks : 'Not specified'}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-gray-600 text-xs mb-0.5">Truck Size</p>
+                      <p className="text-xs font-semibold text-gray-900">
+                        {selectedStation.firetruck_size || 'Not specified'}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Responders */}
+                <div className="bg-indigo-50 border-l-4 border-indigo-500 p-3 rounded-lg flex-1">
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="flex items-center space-x-2">
+                      <svg className="w-4 h-4 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
+                      </svg>
+                      <p className="text-xs font-semibold text-indigo-600 uppercase tracking-wide">Responders</p>
+                    </div>
+                    <span className="text-xs font-semibold text-indigo-700 bg-indigo-100 px-2 py-0.5 rounded-full">
+                      {loadingResponders ? '...' : stationResponders.length}
+                    </span>
+                  </div>
+                  
+                  {loadingResponders ? (
+                    <div className="flex items-center justify-center py-4">
+                      <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-indigo-600"></div>
+                    </div>
+                  ) : stationResponders.length > 0 ? (
+                    <div className="space-y-1.5 max-h-64 overflow-y-auto">
+                      {stationResponders.map((responder) => (
+                        <div key={responder.id} className="bg-white p-2.5 rounded-lg border border-indigo-200 hover:border-indigo-300 transition-colors">
+                          <p className="text-xs font-semibold text-gray-900">
+                            {responder.first_name} {responder.last_name}
+                          </p>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="text-xs text-gray-500 text-center py-3">No responders assigned</p>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* Close Button */}
+            <div className="mt-6">
+              <button
+                onClick={() => {
+                  setSelectedStation(null);
+                  setStationResponders([]);
+                }}
+                className="w-full bg-gradient-to-r from-gray-600 to-gray-700 hover:from-gray-700 hover:to-gray-800 text-white font-semibold px-6 py-3 rounded-xl transition-all shadow-lg hover:shadow-xl transform hover:scale-105"
+              >
+                Close
+              </button>
             </div>
           </div>
         </div>

@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { GoogleMap, Marker, InfoWindow, Circle, useJsApiLoader } from '@react-google-maps/api';
 import { useOutletContext } from 'react-router-dom';
 import { supabase } from '../../../../config/supabase';
+import { checkStationIsBusy, handleAssignmentResponse, requestForwarding } from '../../../../utils/assignmentHelpers';
 
 const Sdashboard = () => {
   // Helper function to generate human-readable report ID
@@ -116,6 +117,12 @@ const Sdashboard = () => {
   const interactionHandlerRegisteredRef = useRef(false);
   const [showSoundPrompt, setShowSoundPrompt] = useState(false);
   const [unreadCount, setUnreadCount] = useState(0);
+  const [showAcceptanceModal, setShowAcceptanceModal] = useState(false);
+  const [showForwardingRequestModal, setShowForwardingRequestModal] = useState(false);
+  const [pendingAssignmentData, setPendingAssignmentData] = useState(null); // {reportId, assignmentSource, reportData}
+  const [selectedStation, setSelectedStation] = useState(null); // Selected station for details modal
+  const [stationResponders, setStationResponders] = useState([]); // Responders for selected station
+  const [loadingResponders, setLoadingResponders] = useState(false); // Loading state for responders
   // Load Google Maps API once to avoid duplicate script injection when navigating
   const { isLoaded: isMapsLoaded, loadError: mapsLoadError } = useJsApiLoader({
     id: 'google-map-script',
@@ -543,10 +550,10 @@ const Sdashboard = () => {
         if (!stationId) return;
         if (!mapLoaded) return;
 
-        // 1) Fetch assignments for this station
+        // 1) Fetch assignments for this station (exclude declined)
         const { data: assignments, error } = await supabase
           .from('report_assignments')
-          .select('report_id, note, assigned_at')
+          .select('report_id, note, assigned_at, status')
           .eq('assignee_type', 'station')
           .eq('assignee_id', stationId);
 
@@ -554,6 +561,11 @@ const Sdashboard = () => {
           console.error('❌ Error fetching report assignments for station:', error);
           return;
         }
+
+        // Filter out declined assignments
+        const activeAssignments = (assignments || []).filter(
+          a => !a.status || a.status !== 'declined'
+        );
 
         // 2) Fetch forwarded reports for this station with notes
         const { data: forwarded, error: forwardError } = await supabase
@@ -616,8 +628,8 @@ const Sdashboard = () => {
           });
         });
 
-        // Combine both assigned and forwarded report IDs
-        const assignedIds = new Set((assignments || []).map(a => String(a.report_id)));
+        // Combine both assigned and forwarded report IDs (use filtered activeAssignments)
+        const assignedIds = new Set((activeAssignments || []).map(a => String(a.report_id)));
         const forwardedIds = new Set((forwarded || []).map(f => String(f.report_id)));
         const allReportIds = new Set([...assignedIds, ...forwardedIds]);
 
@@ -628,9 +640,9 @@ const Sdashboard = () => {
           return;
         }
 
-        // Create a map of directly assigned report notes
+        // Create a map of directly assigned report notes (use filtered activeAssignments)
         const assignmentMeta = new Map();
-        (assignments || []).forEach(a => {
+        (activeAssignments || []).forEach(a => {
           assignmentMeta.set(String(a.report_id), { note: a.note || '', assigned_at: a.assigned_at });
         });
 
@@ -749,12 +761,48 @@ const Sdashboard = () => {
               const row = payload?.new;
               if (!row) return;
               if (row.assignee_type === 'station' && String(row.assignee_id) === String(stationId)) {
-                // Immediate alert and persist notification
-                const title = 'New Report Assigned to Your Station';
-                const readableId = generateReadableReportId(row.report_id);
-                const message = `Report ${readableId}${row.note ? ` • Note: ${row.note}` : ''}`;
-                startAlarmLoop();
-                await supabase.from('notifications').insert({ user_id: stationId, user_type: 'station', type: 'assignment', title, message, is_read: false, related_report_id: String(row.report_id) });
+                // Fetch report data
+                const response = await fetch('https://fire-detection-api-production-f55b.up.railway.app/get_reports');
+                const reports = response.ok ? await response.json() : [];
+                const reportData = reports.find(r => String(r.id) === String(row.report_id));
+
+                // Check if assignment is pending (needs approval)
+                if (row.status === 'pending') {
+                  // Check if station is busy
+                  const busyCheck = await checkStationIsBusy(stationId);
+                  
+                  if (!busyCheck.isBusy) {
+                    // Station is free - auto-accept regardless of assignment source
+                    await handleAssignmentResponse(row.report_id, stationId, 'accepted');
+                  } else if (row.assignment_source === 'manual') {
+                    // Admin assigned and station is busy - show acceptance modal
+                    setPendingAssignmentData({
+                      reportId: row.report_id,
+                      assignmentSource: 'manual',
+                      reportData: reportData,
+                      assignmentId: row.id
+                    });
+                    setShowAcceptanceModal(true);
+                  } else if (row.assignment_source === 'automatic') {
+                    // Auto-assigned and station is busy - show forwarding request modal
+                    setPendingAssignmentData({
+                      reportId: row.report_id,
+                      assignmentSource: 'automatic',
+                      reportData: reportData,
+                      assignmentId: row.id,
+                      busyCount: busyCheck.busyCount
+                    });
+                    setShowForwardingRequestModal(true);
+                  }
+                } else {
+                  // Already accepted - just show notification
+                  const title = 'New Report Assigned to Your Station';
+                  const readableId = generateReadableReportId(row.report_id);
+                  const message = `Report ${readableId}${row.note ? ` • Note: ${row.note}` : ''}`;
+                  startAlarmLoop();
+                  await supabase.from('notifications').insert({ user_id: stationId, user_type: 'station', type: 'assignment', title, message, is_read: false, related_report_id: String(row.report_id) });
+                }
+                
                 // Refresh lists
                 setTimeout(() => {
                   // trigger reload via polling function by toggling mapLoaded or directly call load (not in scope here)
@@ -762,6 +810,60 @@ const Sdashboard = () => {
               }
             } catch (e) {
               console.error('❌ Station: RT assignment handler error:', e);
+            }
+          })
+          .on('postgres_changes', { 
+            event: 'UPDATE', 
+            schema: 'public', 
+            table: 'report_assignments',
+            filter: `assignee_type=eq.station&assignee_id=eq.${stationId}`
+          }, async (payload) => {
+            try {
+              const row = payload?.new;
+              const oldRow = payload?.old;
+              if (!row) return;
+              if (row.assignee_type === 'station' && String(row.assignee_id) === String(stationId)) {
+                // Handle assignments that become pending (e.g., rerouted assignments)
+                // Check if status changed to pending (was not pending before, or is a new assignment to this station)
+                const wasPending = oldRow?.status === 'pending';
+                const isNowPending = row.status === 'pending';
+                
+                if (isNowPending && !wasPending) {
+                  // Fetch report data
+                  const response = await fetch('https://fire-detection-api-production-f55b.up.railway.app/get_reports');
+                  const reports = response.ok ? await response.json() : [];
+                  const reportData = reports.find(r => String(r.id) === String(row.report_id));
+
+                  // Check if station is busy
+                  const busyCheck = await checkStationIsBusy(stationId);
+                  
+                  if (!busyCheck.isBusy) {
+                    // Station is free - auto-accept regardless of assignment source
+                    await handleAssignmentResponse(row.report_id, stationId, 'accepted');
+                  } else if (row.assignment_source === 'manual') {
+                    // Admin assigned (including rerouted) and station is busy - show acceptance modal
+                    setPendingAssignmentData({
+                      reportId: row.report_id,
+                      assignmentSource: 'manual',
+                      reportData: reportData,
+                      assignmentId: row.id
+                    });
+                    setShowAcceptanceModal(true);
+                  } else if (row.assignment_source === 'automatic') {
+                    // Auto-assigned and station is busy - show forwarding request modal
+                    setPendingAssignmentData({
+                      reportId: row.report_id,
+                      assignmentSource: 'automatic',
+                      reportData: reportData,
+                      assignmentId: row.id,
+                      busyCount: busyCheck.busyCount
+                    });
+                    setShowForwardingRequestModal(true);
+                  }
+                }
+              }
+            } catch (e) {
+              console.error('❌ Station: RT assignment update handler error:', e);
             }
           })
           .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'report_routes' }, async (payload) => {
@@ -778,6 +880,52 @@ const Sdashboard = () => {
               }
             } catch (e) {
               console.error('❌ Station: RT forward handler error:', e);
+            }
+          })
+          .on('postgres_changes', { 
+            event: 'UPDATE', 
+            schema: 'public', 
+            table: 'report_assignments',
+            filter: `assignee_type=eq.station&assignee_id=eq.${stationId}`
+          }, async (payload) => {
+            try {
+              const row = payload?.new;
+              if (!row) return;
+              
+              // If assignment was declined, remove it from the map immediately
+              if (row.status === 'declined' && 
+                  row.assignee_type === 'station' && 
+                  String(row.assignee_id) === String(stationId)) {
+                console.log('🗑️ Assignment declined, removing report from map:', row.report_id);
+                setAssignedReports(prev => prev.filter(r => String(r.id) !== String(row.report_id)));
+                
+                // Stop the alarm when assignment is declined
+                stopAlarmLoop();
+                
+                // Mark the related notification as read to stop global alarm
+                try {
+                  await supabase
+                    .from('notifications')
+                    .update({ is_read: true })
+                    .eq('user_id', stationId)
+                    .eq('user_type', 'station')
+                    .eq('type', 'assignment')
+                    .eq('related_report_id', String(row.report_id))
+                    .eq('is_read', false);
+                } catch (notifError) {
+                  console.error('Error marking notification as read:', notifError);
+                }
+                
+                // Close info window if this report is currently selected
+                setSelectedAssignedReport(prev => {
+                  if (prev && String(prev.id) === String(row.report_id)) {
+                    return null;
+                  }
+                  return prev;
+                });
+              }
+            } catch (e) {
+              console.error('❌ Station: RT assignment update handler error:', e);
             }
           })
           .subscribe((status) => {
@@ -968,11 +1116,11 @@ const Sdashboard = () => {
   const getAlarmLevelColor = (alarmLevel) => {
     if (!alarmLevel) return '#6b7280';
     const level = String(alarmLevel).toLowerCase();
-    if (level.includes('first alarm')) return '#fef3c7';
-    if (level.includes('second alarm')) return '#fed7aa';
-    if (level.includes('third alarm')) return '#fecaca';
-    if (level.includes('fourth alarm')) return '#f87171';
-    if (level.includes('fifth alarm')) return '#ef4444';
+    if (level.includes('1st') || level.includes('first')) return '#fef3c7';
+    if (level.includes('2nd') || level.includes('second')) return '#fed7aa';
+    if (level.includes('3rd') || level.includes('third')) return '#fecaca';
+    if (level.includes('4th') || level.includes('fourth')) return '#f87171';
+    if (level.includes('5th') || level.includes('fifth')) return '#ef4444';
     if (level.includes('task force alpha')) return '#dc2626';
     if (level.includes('task force bravo')) return '#b91c1c';
     if (level.includes('task force charlie')) return '#991b1b';
@@ -1193,6 +1341,107 @@ const Sdashboard = () => {
                   anchor: new window.google.maps.Point(24, 24)
                 }}
                 zIndex={2}
+                onClick={async () => {
+                  // Fetch full station details from database
+                  try {
+                    setLoadingResponders(true);
+                    const { data: stationData, error } = await supabase
+                      .from('station_users')
+                      .select('id, station_name, address, lat, lng, email, phone, account_status, num_firetrucks, firetruck_size')
+                      .eq('id', s.id)
+                      .single();
+                    
+                    if (!error && stationData) {
+                      setSelectedStation({
+                        ...stationData,
+                        lat: stationData.lat ? parseFloat(stationData.lat) : s.lat,
+                        lng: stationData.lng ? parseFloat(stationData.lng) : s.lng
+                      });
+                      
+                      // Fetch responders for this station
+                      const stationId = stationData.id || s.id;
+                      console.log('🔍 Fetching responders for station ID:', stationId);
+                      
+                      const { data: respondersData, error: respondersError } = await supabase
+                        .from('responders')
+                        .select('id, first_name, last_name')
+                        .eq('station_id', stationId);
+                      
+                      if (!respondersError && respondersData) {
+                        console.log('✅ Found responders:', respondersData);
+                        setStationResponders(respondersData || []);
+                      } else {
+                        console.error('❌ Error fetching responders:', respondersError);
+                        setStationResponders([]);
+                      }
+                    } else {
+                      // Fallback to geocoded data
+                      const fullStation = allStations.find(st => String(st.id) === String(s.id));
+                      setSelectedStation({
+                        id: s.id,
+                        station_name: fullStation?.station_name || s.name,
+                        address: fullStation?.address || s.address,
+                        lat: s.lat,
+                        lng: s.lng,
+                        email: fullStation?.email,
+                        phone: fullStation?.phone,
+                        num_firetrucks: fullStation?.num_firetrucks,
+                        firetruck_size: fullStation?.firetruck_size
+                      });
+                      
+                      // Still try to fetch responders even in fallback
+                      console.log('🔍 Fetching responders for station ID (fallback):', s.id);
+                      const { data: respondersData, error: respondersError } = await supabase
+                        .from('responders')
+                        .select('id, first_name, last_name')
+                        .eq('station_id', s.id);
+                      
+                      if (!respondersError && respondersData) {
+                        console.log('✅ Found responders (fallback):', respondersData);
+                        setStationResponders(respondersData || []);
+                      } else {
+                        console.error('❌ Error fetching responders (fallback):', respondersError);
+                        setStationResponders([]);
+                      }
+                    }
+                  } catch (err) {
+                    console.error('Error fetching station details:', err);
+                    // Fallback to geocoded data - still try to fetch responders
+                    const fullStation = allStations.find(st => String(st.id) === String(s.id));
+                    setSelectedStation({
+                      id: s.id,
+                      station_name: fullStation?.station_name || s.name,
+                      address: fullStation?.address || s.address,
+                      lat: s.lat,
+                      lng: s.lng,
+                      num_firetrucks: fullStation?.num_firetrucks,
+                      firetruck_size: fullStation?.firetruck_size
+                    });
+                    
+                    // Still try to fetch responders even in error case
+                    try {
+                      console.log('🔍 Fetching responders for station ID (error fallback):', s.id);
+                      const { data: respondersData, error: respondersError } = await supabase
+                        .from('responders')
+                        .select('id, first_name, last_name')
+                        .eq('station_id', s.id);
+                      
+                      if (!respondersError && respondersData) {
+                        console.log('✅ Found responders (error fallback):', respondersData);
+                        setStationResponders(respondersData || []);
+                      } else {
+                        console.error('❌ Error fetching responders (error fallback):', respondersError);
+                        setStationResponders([]);
+                      }
+                    } catch (responderErr) {
+                      console.error('❌ Error in responder fetch:', responderErr);
+                      setStationResponders([]);
+                    }
+                  } finally {
+                    setLoadingResponders(false);
+                  }
+                }}
+                cursor="pointer"
               />
             );
           })}
@@ -1572,6 +1821,421 @@ const Sdashboard = () => {
           </div>
         )}
       </div>
+
+      {/* Assignment Acceptance Modal */}
+      {showAcceptanceModal && pendingAssignmentData && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 animate-in fade-in duration-200">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full mx-4 p-8 transform transition-all animate-in zoom-in-95 duration-200">
+            <div className="flex items-center justify-center mb-6">
+              <div className="bg-gradient-to-br from-blue-500 to-blue-600 rounded-full p-4 shadow-lg">
+                <svg className="w-10 h-10 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                </svg>
+              </div>
+            </div>
+            <h3 className="text-2xl font-bold text-gray-900 text-center mb-3">Assignment Request</h3>
+            <p className="text-gray-600 text-center mb-8 leading-relaxed">
+              Command Center is assigning you a report <span className="font-semibold text-gray-900">{pendingAssignmentData.reportData?.address || pendingAssignmentData.reportData?.geotag_location || 'at a location'}</span>. 
+              Will you accept this assignment?
+            </p>
+            <div className="flex space-x-4">
+              <button
+                onClick={async () => {
+                  try {
+                    const userData = JSON.parse(sessionStorage.getItem('userData') || localStorage.getItem('userData') || '{}');
+                    const stationId = userData?.id;
+                    if (!stationId) {
+                      alert('Station ID not found. Please refresh and try again.');
+                      return;
+                    }
+
+                    const result = await handleAssignmentResponse(
+                      pendingAssignmentData.reportId,
+                      stationId,
+                      'declined'
+                    );
+
+                    if (result.success) {
+                      // Stop the alarm when declining
+                      stopAlarmLoop();
+                      
+                      // Mark the related notification as read to stop global alarm
+                      try {
+                        await supabase
+                          .from('notifications')
+                          .update({ is_read: true })
+                          .eq('user_id', stationId)
+                          .eq('user_type', 'station')
+                          .eq('type', 'assignment')
+                          .eq('related_report_id', String(pendingAssignmentData.reportId))
+                          .eq('is_read', false);
+                      } catch (notifError) {
+                        console.error('Error marking notification as read:', notifError);
+                      }
+                      
+                      setShowAcceptanceModal(false);
+                      setPendingAssignmentData(null);
+                      // Admin will be notified via real-time listener
+                    } else {
+                      alert(result.error || 'Failed to decline assignment. Please try again.');
+                    }
+                  } catch (error) {
+                    console.error('Error declining assignment:', error);
+                    alert('An error occurred. Please try again.');
+                  }
+                }}
+                className="flex-1 bg-gradient-to-r from-red-500 to-red-600 hover:from-red-600 hover:to-red-700 text-white font-semibold px-6 py-3 rounded-xl transition-colors shadow-md hover:shadow-lg"
+              >
+                No
+              </button>
+              <button
+                onClick={async () => {
+                  try {
+                    const userData = JSON.parse(sessionStorage.getItem('userData') || localStorage.getItem('userData') || '{}');
+                    const stationId = userData?.id;
+                    if (!stationId) {
+                      alert('Station ID not found. Please refresh and try again.');
+                      return;
+                    }
+
+                    const result = await handleAssignmentResponse(
+                      pendingAssignmentData.reportId,
+                      stationId,
+                      'accepted'
+                    );
+
+                    if (result.success) {
+                      setShowAcceptanceModal(false);
+                      setPendingAssignmentData(null);
+                      alert('✅ Assignment accepted successfully!');
+                    } else {
+                      alert(result.error || 'Failed to accept assignment. Please try again.');
+                    }
+                  } catch (error) {
+                    console.error('Error accepting assignment:', error);
+                    alert('An error occurred. Please try again.');
+                  }
+                }}
+                className="flex-1 bg-gradient-to-r from-blue-500 to-blue-600 hover:from-blue-600 hover:to-blue-700 text-white font-semibold px-6 py-3 rounded-xl transition-colors shadow-md hover:shadow-lg"
+              >
+                Yes
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Forwarding Request Modal */}
+      {showForwardingRequestModal && pendingAssignmentData && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 animate-in fade-in duration-200">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full mx-4 p-8 transform transition-all animate-in zoom-in-95 duration-200">
+            <div className="flex items-center justify-center mb-6">
+              <div className="bg-gradient-to-br from-orange-500 to-orange-600 rounded-full p-4 shadow-lg">
+                <svg className="w-10 h-10 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                </svg>
+              </div>
+            </div>
+            <h3 className="text-2xl font-bold text-gray-900 text-center mb-3">Request Forwarding?</h3>
+            <p className="text-gray-600 text-center mb-8 leading-relaxed">
+              You are currently handling <span className="font-semibold text-gray-900">{pendingAssignmentData.busyCount || 0} other incident(s)</span>. 
+              Would you like to request admin for forwarding of this report to another station?
+            </p>
+            <div className="flex space-x-4">
+              <button
+                onClick={() => {
+                  // Auto-accept if they don't want forwarding
+                  (async () => {
+                    try {
+                      const userData = JSON.parse(sessionStorage.getItem('userData') || localStorage.getItem('userData') || '{}');
+                      const stationId = userData?.id;
+                      if (!stationId) return;
+
+                      await handleAssignmentResponse(
+                        pendingAssignmentData.reportId,
+                        stationId,
+                        'accepted'
+                      );
+                    } catch (error) {
+                      console.error('Error accepting assignment:', error);
+                    }
+                  })();
+                  setShowForwardingRequestModal(false);
+                  setPendingAssignmentData(null);
+                }}
+                className="flex-1 bg-gradient-to-r from-gray-200 to-gray-300 hover:from-gray-300 hover:to-gray-400 text-gray-800 font-semibold px-6 py-3 rounded-xl transition-all shadow-lg hover:shadow-xl transform hover:scale-105"
+              >
+                No
+              </button>
+              <button
+                onClick={async () => {
+                  try {
+                    const userData = JSON.parse(sessionStorage.getItem('userData') || localStorage.getItem('userData') || '{}');
+                    const stationId = userData?.id;
+                    if (!stationId) {
+                      alert('Station ID not found. Please refresh and try again.');
+                      return;
+                    }
+
+                    // Request forwarding
+                    const result = await requestForwarding(pendingAssignmentData.reportId, stationId);
+                    
+                    if (result.success) {
+                      // Decline the assignment
+                      const declineResult = await handleAssignmentResponse(
+                        pendingAssignmentData.reportId,
+                        stationId,
+                        'declined'
+                      );
+                      
+                      if (declineResult.success) {
+                        // Stop the alarm when declining (via forwarding request)
+                        stopAlarmLoop();
+                        
+                        // Mark the related notification as read to stop global alarm
+                        try {
+                          await supabase
+                            .from('notifications')
+                            .update({ is_read: true })
+                            .eq('user_id', stationId)
+                            .eq('user_type', 'station')
+                            .eq('type', 'assignment')
+                            .eq('related_report_id', String(pendingAssignmentData.reportId))
+                            .eq('is_read', false);
+                        } catch (notifError) {
+                          console.error('Error marking notification as read:', notifError);
+                        }
+                        
+                        setShowForwardingRequestModal(false);
+                        setPendingAssignmentData(null);
+                        alert('✅ Forwarding request sent to admin. They will reroute the incident to another station.');
+                      } else {
+                        alert(declineResult.error || 'Failed to decline assignment. Please try again.');
+                      }
+                    } else {
+                      alert(result.error || 'Failed to send forwarding request. Please try again.');
+                    }
+                  } catch (error) {
+                    console.error('Error requesting forwarding:', error);
+                    alert('An error occurred. Please try again.');
+                  }
+                }}
+                className="flex-1 bg-gradient-to-r from-orange-500 to-orange-600 hover:from-orange-600 hover:to-orange-700 text-white font-semibold px-6 py-3 rounded-xl transition-all shadow-lg hover:shadow-xl transform hover:scale-105"
+              >
+                Yes
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Station Details Modal */}
+      {selectedStation && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 animate-in fade-in duration-200">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-4xl w-full mx-4 p-6 transform transition-all animate-in zoom-in-95 duration-200">
+            {/* Header */}
+            <div className="flex items-center justify-between mb-4">
+              <div className="flex items-center space-x-3">
+                <div className="bg-gradient-to-br from-red-500 to-red-600 rounded-full p-3 shadow-lg">
+                  <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" />
+                  </svg>
+                </div>
+                <div>
+                  <h3 className="text-xl font-bold text-gray-900">Station Details</h3>
+                  <p className="text-sm text-gray-500">Fire Station Information</p>
+                </div>
+              </div>
+              <button
+                onClick={() => {
+                  setSelectedStation(null);
+                  setStationResponders([]);
+                }}
+                className="text-gray-400 hover:text-gray-600 transition-colors p-1"
+                title="Close"
+              >
+                <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
+                  <path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clipRule="evenodd" />
+                </svg>
+              </button>
+            </div>
+
+            {/* Two Card Layout */}
+            <div className="grid grid-cols-2 gap-4">
+              {/* Left Card: Basic Station Information */}
+              <div className="bg-gray-50 rounded-xl p-4 border border-gray-200 space-y-3">
+                <h4 className="text-sm font-bold text-gray-700 uppercase tracking-wide mb-3">Basic Information</h4>
+                
+                {/* Station Name */}
+                <div className="bg-gradient-to-r from-red-50 to-orange-50 border-l-4 border-red-500 p-3 rounded-lg">
+                  <div className="flex items-center space-x-2 mb-1">
+                    <svg className="w-4 h-4 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" />
+                    </svg>
+                    <p className="text-xs font-semibold text-red-600 uppercase tracking-wide">Station Name</p>
+                  </div>
+                  <p className="text-base font-bold text-gray-900">{selectedStation.station_name || 'Unknown Station'}</p>
+                </div>
+
+                {/* Address */}
+                {selectedStation.address && (
+                  <div className="bg-blue-50 border-l-4 border-blue-500 p-3 rounded-lg">
+                    <div className="flex items-center space-x-2 mb-1">
+                      <svg className="w-4 h-4 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
+                      </svg>
+                      <p className="text-xs font-semibold text-blue-600 uppercase tracking-wide">Address</p>
+                    </div>
+                    <p className="text-xs text-gray-800">{selectedStation.address}</p>
+                  </div>
+                )}
+
+                {/* Coordinates */}
+                {(selectedStation.lat && selectedStation.lng) && (
+                  <div className="bg-green-50 border-l-4 border-green-500 p-3 rounded-lg">
+                    <div className="flex items-center space-x-2 mb-2">
+                      <svg className="w-4 h-4 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7" />
+                      </svg>
+                      <p className="text-xs font-semibold text-green-600 uppercase tracking-wide">Coordinates</p>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2 text-xs">
+                      <div>
+                        <p className="text-gray-600 text-xs">Latitude</p>
+                        <p className="font-mono font-semibold text-gray-900 text-xs">{selectedStation.lat?.toFixed(6) || 'N/A'}</p>
+                      </div>
+                      <div>
+                        <p className="text-gray-600 text-xs">Longitude</p>
+                        <p className="font-mono font-semibold text-gray-900 text-xs">{selectedStation.lng?.toFixed(6) || 'N/A'}</p>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* Status */}
+                <div className="bg-purple-50 border-l-4 border-purple-500 p-3 rounded-lg">
+                  <div className="flex items-center space-x-2 mb-1">
+                    <svg className="w-4 h-4 text-purple-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                    <p className="text-xs font-semibold text-purple-600 uppercase tracking-wide">Status</p>
+                  </div>
+                  <p className="text-sm font-semibold text-gray-900">
+                    <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
+                      Active
+                    </span>
+                  </p>
+                </div>
+
+                {/* Contact Information */}
+                <div className="space-y-2">
+                  {/* Email */}
+                  {selectedStation.email && (
+                    <div className="bg-gray-50 border-l-4 border-gray-400 p-2.5 rounded-lg">
+                      <div className="flex items-center space-x-2 mb-1">
+                        <svg className="w-3.5 h-3.5 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+                        </svg>
+                        <p className="text-xs font-semibold text-gray-600 uppercase tracking-wide">Email</p>
+                      </div>
+                      <p className="text-xs text-gray-800 break-words">{selectedStation.email}</p>
+                    </div>
+                  )}
+                  
+                  {/* Phone */}
+                  {selectedStation.phone && (
+                    <div className="bg-gray-50 border-l-4 border-gray-400 p-2.5 rounded-lg">
+                      <div className="flex items-center space-x-2 mb-1">
+                        <svg className="w-3.5 h-3.5 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z" />
+                        </svg>
+                        <p className="text-xs font-semibold text-gray-600 uppercase tracking-wide">Phone</p>
+                      </div>
+                      <p className="text-xs text-gray-800">{selectedStation.phone}</p>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Right Card: Resources (Fire Trucks & Responders) */}
+              <div className="bg-gray-50 rounded-xl p-4 border border-gray-200 space-y-3">
+                <h4 className="text-sm font-bold text-gray-700 uppercase tracking-wide mb-3">Resources</h4>
+                
+                {/* Fire Trucks */}
+                <div className="bg-orange-50 border-l-4 border-orange-500 p-3 rounded-lg">
+                  <div className="flex items-center space-x-2 mb-2">
+                    <svg className="w-4 h-4 text-orange-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" />
+                    </svg>
+                    <p className="text-xs font-semibold text-orange-600 uppercase tracking-wide">Fire Trucks</p>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <p className="text-gray-600 text-xs mb-0.5">Number of Trucks</p>
+                      <p className="text-base font-bold text-gray-900">
+                        {selectedStation.num_firetrucks != null ? selectedStation.num_firetrucks : 'Not specified'}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-gray-600 text-xs mb-0.5">Truck Size</p>
+                      <p className="text-xs font-semibold text-gray-900">
+                        {selectedStation.firetruck_size || 'Not specified'}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Responders */}
+                <div className="bg-indigo-50 border-l-4 border-indigo-500 p-3 rounded-lg flex-1">
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="flex items-center space-x-2">
+                      <svg className="w-4 h-4 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
+                      </svg>
+                      <p className="text-xs font-semibold text-indigo-600 uppercase tracking-wide">Responders</p>
+                    </div>
+                    <span className="text-xs font-semibold text-indigo-700 bg-indigo-100 px-2 py-0.5 rounded-full">
+                      {loadingResponders ? '...' : stationResponders.length}
+                    </span>
+                  </div>
+                  
+                  {loadingResponders ? (
+                    <div className="flex items-center justify-center py-4">
+                      <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-indigo-600"></div>
+                    </div>
+                  ) : stationResponders.length > 0 ? (
+                    <div className="space-y-1.5 max-h-64 overflow-y-auto">
+                      {stationResponders.map((responder) => (
+                        <div key={responder.id} className="bg-white p-2.5 rounded-lg border border-indigo-200 hover:border-indigo-300 transition-colors">
+                          <p className="text-xs font-semibold text-gray-900">
+                            {responder.first_name} {responder.last_name}
+                          </p>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="text-xs text-gray-500 text-center py-3">No responders assigned</p>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* Close Button */}
+            <div className="mt-6">
+              <button
+                onClick={() => {
+                  setSelectedStation(null);
+                  setStationResponders([]);
+                }}
+                className="w-full bg-gradient-to-r from-gray-600 to-gray-700 hover:from-gray-700 hover:to-gray-800 text-white font-semibold px-6 py-3 rounded-xl transition-all shadow-lg hover:shadow-xl transform hover:scale-105"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
     </div>
   );
