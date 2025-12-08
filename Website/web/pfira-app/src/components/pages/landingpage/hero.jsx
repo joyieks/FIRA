@@ -40,7 +40,7 @@ const hero = () => {
     <main className="bg-neutral-900 text-gray-100">
       <Section id="home">
         <div className="relative min-h-screen flex items-center justify-center overflow-hidden bg-gradient-to-b from-neutral-800 to-neutral-900">
-          <img src="/fire1.png" alt="Fire response" className="absolute inset-0 w-full h-full object-cover opacity-25 mix-blend-overlay will-change-transform" id="hero-bg" />
+          <img src="/fire1.jpg" alt="Fire response" className="absolute inset-0 w-full h-full object-cover opacity-25 mix-blend-overlay will-change-transform" id="hero-bg" />
           <div className="pointer-events-none absolute -top-20 -left-20 w-80 h-80 rounded-full bg-red-600/20 blur-3xl animate-pulse-slow" />
           <div className="pointer-events-none absolute -bottom-24 -right-24 w-96 h-96 rounded-full bg-amber-500/10 blur-3xl animate-pulse-slower" />
           <div className="relative max-w-5xl mx-auto px-6 py-24 text-center">
@@ -63,7 +63,7 @@ const hero = () => {
       <Section id="about">
         <div className="max-w-6xl mx-auto px-6 py-24 md:py-28">
           <div className="grid md:grid-cols-2 gap-8 items-center">
-            <img src="/fire2.png" alt="About FIRA" className="reveal opacity-0 translate-y-6 rounded-xl shadow-md opacity-90" />
+            <img src="/fire2.jpg" alt="About FIRA" className="reveal opacity-0 translate-y-6 rounded-xl shadow-md opacity-90" />
             <div className="reveal opacity-0 translate-y-6">
               <h2 className="text-3xl md:text-4xl font-bold text-white">About Project FIRA</h2>
               <p className="mt-4 text-gray-300 leading-relaxed">
