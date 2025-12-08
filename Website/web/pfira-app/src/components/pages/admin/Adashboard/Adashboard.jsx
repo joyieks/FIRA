@@ -1695,16 +1695,33 @@ const Adashboard = () => {
           <div className="absolute inset-0 rounded-full border-4 border-red-400 animate-ping opacity-75"></div>
         </div>
       )}
-      {mapsLoadError && (
-        <div className="absolute inset-0 bg-white bg-opacity-90 flex items-center justify-center z-10">
-          <div className="text-center">
-            <div className="text-red-600 text-6xl mb-4">🗺️</div>
-            <p className="text-red-600 font-semibold mb-2">Failed to load Google Maps API</p>
-            <p className="text-gray-600">Please refresh the page.</p>
+      {/* Map Container - Always render to prevent white screen */}
+      <div style={mapContainerStyle} className="relative bg-gray-100">
+        {/* Loading Overlay - Show while map is loading */}
+        {!isMapsLoaded && !mapsLoadError && (
+          <div className="absolute inset-0 bg-white bg-opacity-95 flex items-center justify-center z-10">
+            <div className="text-center">
+              <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-red-600 mx-auto mb-4"></div>
+              <p className="text-gray-600 font-medium">Loading map...</p>
+            </div>
           </div>
-        </div>
-      )}
-      {isMapsLoaded && (
+        )}
+        {mapsLoadError && (
+          <div className="absolute inset-0 bg-white bg-opacity-95 flex items-center justify-center z-10">
+            <div className="text-center">
+              <div className="text-red-600 text-6xl mb-4">🗺️</div>
+              <p className="text-red-600 font-semibold mb-2">Failed to load Google Maps API</p>
+              <p className="text-gray-600 mb-4">{mapsLoadError.message || 'Please refresh the page.'}</p>
+              <button 
+                onClick={() => window.location.reload()} 
+                className="bg-red-600 text-white px-4 py-2 rounded-lg hover:bg-red-700 transition-colors"
+              >
+                Refresh Page
+              </button>
+            </div>
+          </div>
+        )}
+        {isMapsLoaded && (
         <GoogleMap
           mapContainerStyle={mapContainerStyle}
           center={mapCenter}
@@ -2272,14 +2289,15 @@ const Adashboard = () => {
             </InfoWindow>
           )}
         </GoogleMap>
-      )}
+        )}
+      </div>
       
-      {/* Loading Overlay */}
-      {!mapLoaded && !mapError && (
-        <div className="absolute inset-0 bg-white bg-opacity-90 flex items-center justify-center z-10">
+      {/* Legacy Loading Overlay - Keep for mapLoaded state (internal map state) */}
+      {!mapLoaded && !mapError && isMapsLoaded && (
+        <div className="absolute inset-0 bg-white bg-opacity-90 flex items-center justify-center z-10 pointer-events-none">
           <div className="text-center">
             <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-red-600 mx-auto mb-4"></div>
-            <p className="text-gray-600 mb-4">Loading map...</p>
+            <p className="text-gray-600 mb-4">Initializing map...</p>
             {mapLoadTimeout && (
               <div>
                 <p className="text-gray-500 text-sm mb-3">Map is taking longer than expected to load.</p>
