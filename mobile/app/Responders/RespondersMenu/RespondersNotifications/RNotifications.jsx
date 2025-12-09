@@ -3,8 +3,10 @@ import React, { useState, useEffect, useRef } from 'react';
 import { MaterialIcons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { supabase } from '../../../config/supabase';
+import * as Location from 'expo-location';
+import { scheduleLocalNotification } from '../../../services/pushNotificationService';
 
-export default function RNotifications({ onUnreadCountChange }) {
+export default function RNotifications({ onUnreadCountChange, onNavigateToMap }) {
 
  
   const [loading, setLoading] = useState(true);
@@ -13,6 +15,8 @@ export default function RNotifications({ onUnreadCountChange }) {
 
   const [refreshing, setRefreshing] = useState(false);
   const [notifications, setNotifications] = useState([]);
+  const [userLocation, setUserLocation] = useState(null);
+  const notifiedNearbyIdsRef = useRef(new Set());
 
   // NOTE: Sound/alarm management is handled by RAlertsWorker component
   // which is mounted at the app level for consistent playback across all screens
@@ -106,6 +110,7 @@ export default function RNotifications({ onUnreadCountChange }) {
     if (currentResponderId) {
       console.log('📱 Responder ID available, loading notifications');
       loadNotifications();
+      startNearbyWatcher();
       
       // Poll notifications every 2 seconds
       const notificationInterval = setInterval(() => {
@@ -114,9 +119,10 @@ export default function RNotifications({ onUnreadCountChange }) {
       
       return () => {
         clearInterval(notificationInterval);
+        stopNearbyWatcher();
       };
     }
-  }, [currentResponderId]);
+  }, [currentResponderId, userLocation]);
 
   const loadNotifications = async () => {
     if (!currentResponderId) {
@@ -202,6 +208,138 @@ export default function RNotifications({ onUnreadCountChange }) {
       console.error('📱 Responder: Error stack:', err.stack);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleNotificationPress = async (notification) => {
+    await markAsRead(notification.id);
+    if (onNavigateToMap && notification.fire_report_id) {
+      onNavigateToMap({
+        fireReportId: notification.fire_report_id,
+        focusOnly: true
+      });
+    }
+  };
+
+  // Nearby reports polling
+  const nearbyIntervalRef = useRef(null);
+
+  const stopNearbyWatcher = () => {
+    if (nearbyIntervalRef.current) {
+      clearInterval(nearbyIntervalRef.current);
+      nearbyIntervalRef.current = null;
+    }
+  };
+
+  const startNearbyWatcher = () => {
+    stopNearbyWatcher();
+    // Require both responder and location
+    if (!currentResponderId || !userLocation) return;
+    fetchNearbyReports(); // initial
+    nearbyIntervalRef.current = setInterval(fetchNearbyReports, 30000); // every 30s
+  };
+
+  // Get location once
+  useEffect(() => {
+    (async () => {
+      try {
+        const { status } = await Location.requestForegroundPermissionsAsync();
+        if (status !== 'granted') {
+          console.log('⚠️ Location permission not granted for nearby notifications');
+          return;
+        }
+        const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced, maximumAge: 10000 });
+        setUserLocation(loc);
+      } catch (err) {
+        console.error('❌ Error getting location for nearby notifications:', err);
+      }
+    })();
+  }, []);
+
+  // Fetch nearby reports and create notifications
+  const fetchNearbyReports = async () => {
+    if (!userLocation || !currentResponderId) return;
+    try {
+      const response = await fetch('https://fire-detection-api-production-f55b.up.railway.app/get_reports');
+      if (!response.ok) return;
+      const allReports = await response.json();
+
+      const isNoFireNoSmoke = (report) => {
+        const pred = (report?.prediction || '').toLowerCase();
+        const smoke = (report?.smoke_detection || report?.smokeDetection || '').toLowerCase();
+        return pred.includes('no fire') && smoke.includes('no smoke');
+      };
+
+      const toKm = (lat1, lon1, lat2, lon2) => {
+        const R = 6371;
+        const dLat = (lat2 - lat1) * Math.PI / 180;
+        const dLon = (lon2 - lon1) * Math.PI / 180;
+        const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+                  Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+                  Math.sin(dLon / 2) * Math.sin(dLon / 2);
+        const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+        return R * c;
+      };
+
+      const nearby = (allReports || []).filter(report => {
+        if (isNoFireNoSmoke(report)) return false;
+        const latNum = parseFloat(report.latitude);
+        const lngNum = parseFloat(report.longitude);
+        if (isNaN(latNum) || isNaN(lngNum)) return false;
+        const distKm = toKm(
+          userLocation.coords.latitude,
+          userLocation.coords.longitude,
+          latNum,
+          lngNum
+        );
+        return distKm <= 10; // within 10km
+      });
+
+      for (const report of nearby) {
+        const key = String(report.id);
+        if (notifiedNearbyIdsRef.current.has(key)) continue;
+
+        // Insert responder notification
+        const readableId = `FR-${key.substring(0, 8).toUpperCase()}`;
+        const title = `📍 Nearby Fire Report (${readableId})`;
+        const message = `${report.address || report.geotag_location || 'Unknown location'} is within 10km. Tap to view on map.`;
+
+        const { error } = await supabase
+          .from('responder_notifications')
+          .insert({
+            responder_id: currentResponderId,
+            fire_report_id: key,
+            title,
+            message,
+            priority: 'high',
+            status: 'nearby',
+            is_read: false
+          });
+        if (error) {
+          console.error('❌ Error inserting nearby notification:', error);
+          continue;
+        }
+
+        // Push notification
+        try {
+          await scheduleLocalNotification(
+            title,
+            message,
+            {
+              type: 'nearby_report',
+              notificationId: `nearby-${key}`,
+              fireReportId: key,
+              priority: 'high'
+            }
+          );
+        } catch (pushErr) {
+          console.error('❌ Error scheduling nearby push notification:', pushErr);
+        }
+
+        notifiedNearbyIdsRef.current.add(key);
+      }
+    } catch (err) {
+      console.error('❌ Error fetching nearby reports for notifications:', err);
     }
   };
 
@@ -444,7 +582,7 @@ export default function RNotifications({ onUnreadCountChange }) {
                 notification.is_read ? 'opacity-75' : ''
               }`}
               style={{ borderLeftColor: priorityColor }}
-              onPress={() => markAsRead(notification.id)}
+              onPress={() => handleNotificationPress(notification)}
             >
               <View className="flex-row items-start">
                 {/* Icon */}
@@ -505,7 +643,7 @@ export default function RNotifications({ onUnreadCountChange }) {
                     <View className="flex-row items-center">
                       {!notification.is_read && (
                         <TouchableOpacity
-                          onPress={() => markAsRead(notification.id)}
+                          onPress={() => handleNotificationPress(notification)}
                           className="mr-2"
                         >
                           <MaterialIcons name="check-circle" size={20} color="#10b981" />

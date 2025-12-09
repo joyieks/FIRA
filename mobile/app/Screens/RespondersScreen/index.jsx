@@ -27,7 +27,7 @@ export default function RespondersScreen() {
   };
 
   const TABS = [
-    { component: <RNotifications onUnreadCountChange={setUnreadCount} /> },
+    { component: <RNotifications onUnreadCountChange={setUnreadCount} onNavigateToMap={handleNavigateToMap} /> },
     { component: <RMap routingInfo={routingInfo} /> },
     { component: <RStatus onNavigateToMap={handleNavigateToMap} /> },
     { component: <RFiraChat onContactSelect={setSelectedContact} /> },
