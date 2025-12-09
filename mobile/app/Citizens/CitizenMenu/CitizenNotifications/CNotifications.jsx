@@ -607,10 +607,11 @@ const CNotifications = ({ onUnreadCountChange, setActiveTab, setReportIdToFocus 
                 onPress={() => {
                   markAsRead(notification.id);
                   
-                  // If notification has a related report ID, navigate to map and focus on it
+                  // If notification has a related report ID, navigate to MAP tab and focus on it
+                  // Map tab index is 1 in CitizenScreen (Notifications, Map, Status, Chat, Profile)
                   if (notification.related_report_id && setActiveTab && setReportIdToFocus) {
                     setReportIdToFocus(notification.related_report_id);
-                    setActiveTab(2); // Switch to Map tab (index 2)
+                    setActiveTab(1); // Jump to Map
                   }
                 }}
                 activeOpacity={0.7}

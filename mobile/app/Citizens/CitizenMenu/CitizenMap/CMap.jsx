@@ -427,8 +427,8 @@ export default function CMap({ reportIdToFocus, setReportIdToFocus }) {
           const focusRegion = {
             latitude: reportLat,
             longitude: reportLon,
-            latitudeDelta: 0.005, // Zoom in closer
-            longitudeDelta: 0.005,
+            latitudeDelta: 0.002, // Zoom in tighter on the marker
+            longitudeDelta: 0.002,
           };
           setRegion(focusRegion);
           
@@ -1386,17 +1386,19 @@ export default function CMap({ reportIdToFocus, setReportIdToFocus }) {
                                 </Text>
                               </View>
                             </View>
-                            {(selectedReport.smoke_intensity || selectedReport.alarm_level) && <View className="h-px mb-3" style={{ backgroundColor: 'rgba(59, 130, 246, 0.2)' }} />}
+                            {(selectedReport.smoke_intensity || selectedReport.smoke_detection || selectedReport.smoke_confidence || selectedReport.alarm_level) && (
+                              <View className="h-px mb-3" style={{ backgroundColor: 'rgba(59, 130, 246, 0.2)' }} />
+                            )}
                           </>
                         )}
-                        {selectedReport.smoke_intensity && (
+                        {(selectedReport.smoke_detection || selectedReport.smoke_confidence || selectedReport.smoke_intensity) && (
                           <>
                             <View className="flex-row items-start mb-3">
                               <MaterialIcons name="cloud" size={18} color="#3b82f6" />
                               <View className="flex-1 ml-3">
-                                <Text className="text-gray-500 text-xs mb-1">Smoke Intensity</Text>
+                                <Text className="text-gray-500 text-xs mb-1">Smoke Analysis</Text>
                                 <Text className="text-gray-800 font-semibold text-base">
-                                  {selectedReport.smoke_detection} {selectedReport.smoke_confidence ? `(${selectedReport.smoke_confidence})` : ''}
+                                  {selectedReport.smoke_detection || 'Not analyzed'} {selectedReport.smoke_confidence ? `(${selectedReport.smoke_confidence})` : ''}
                                 </Text>
                               </View>
                             </View>
