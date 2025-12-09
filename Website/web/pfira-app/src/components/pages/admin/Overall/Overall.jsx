@@ -471,7 +471,7 @@ const Overview = () => {
 
   // Check localStorage for summary report trigger (from notification toast/list click)
   useEffect(() => {
-    const checkSummaryReportTrigger = () => {
+    const checkSummaryReportTrigger = async () => {
       const reportId = localStorage.getItem('showSummaryReportId');
       const timestamp = localStorage.getItem('showSummaryTimestamp');
       
@@ -481,7 +481,48 @@ const Overview = () => {
         const timeDiff = Date.now() - parseInt(timestamp);
         if (timeDiff < 10000) {
           console.log('🔥 Opening summary report from notification click:', reportId);
+          
+          // Check if this report is part of a cluster
+          try {
+            const reportRes = await fetch('https://fire-detection-api-production-f55b.up.railway.app/get_reports');
+            if (reportRes.ok) {
+              const allReports = await reportRes.json();
+              const fireOutReports = allReports.filter(r => 
+                (r.status || '').toString().toLowerCase().includes('fire out')
+              );
+              
+              if (fireOutReports.length > 0) {
+                const clustered = clusterReports(fireOutReports);
+                const cluster = clustered.find(c => {
+                  if (c.reports && c.reports.length > 0) {
+                    return c.reports.some(r => String(r.id) === String(reportId));
+                  }
+                  return String(c.id) === String(reportId);
+                });
+                
+                if (cluster && cluster.reports && cluster.reports.length > 1) {
+                  console.log(`📊 Found cluster with ${cluster.reports.length} reports - queueing all for summary reports`);
+                  const reportIds = cluster.reports.map(r => r.id);
+                  setSummaryReportQueue(reportIds);
+                  setCurrentSummaryIndex(0);
+                  setSummaryReportId(reportIds[0]);
+                  setShowSummaryReport(true);
+                  
+                  // Clear the localStorage flags
+                  localStorage.removeItem('showSummaryReportId');
+                  localStorage.removeItem('showSummaryTimestamp');
+                  return;
+                }
+              }
+            }
+          } catch (clusterErr) {
+            console.warn('⚠️ Could not check for cluster, showing single report:', clusterErr);
+          }
+          
+          // If not clustered or cluster check failed, show single report
           setSummaryReportId(reportId);
+          setSummaryReportQueue([]);
+          setCurrentSummaryIndex(0);
           setShowSummaryReport(true);
           
           // Clear the localStorage flags
@@ -1694,9 +1735,47 @@ const Overview = () => {
                             {(report.status === 'Fire Out' || (report.status || '').toString().toLowerCase().includes('fire out')) && (
                               <button
                                 className="px-3 py-1 bg-green-600 text-white rounded-md hover:bg-green-700 transition-colors text-xs font-medium flex items-center space-x-1"
-                                onClick={(e) => {
+                                onClick={async (e) => {
                                   e.stopPropagation();
-                                  setSummaryReportId(report.id);
+                                  const clickedReportId = report.id;
+                                  
+                                  // Check if this report is part of a cluster
+                                  try {
+                                    const reportRes = await fetch('https://fire-detection-api-production-f55b.up.railway.app/get_reports');
+                                    if (reportRes.ok) {
+                                      const allReports = await reportRes.json();
+                                      const fireOutReports = allReports.filter(r => 
+                                        (r.status || '').toString().toLowerCase().includes('fire out')
+                                      );
+                                      
+                                      if (fireOutReports.length > 0) {
+                                        const clustered = clusterReports(fireOutReports);
+                                        const cluster = clustered.find(c => {
+                                          if (c.reports && c.reports.length > 0) {
+                                            return c.reports.some(r => String(r.id) === String(clickedReportId));
+                                          }
+                                          return String(c.id) === String(clickedReportId);
+                                        });
+                                        
+                                        if (cluster && cluster.reports && cluster.reports.length > 1) {
+                                          console.log(`📊 Found cluster with ${cluster.reports.length} reports - queueing all for summary reports`);
+                                          const reportIds = cluster.reports.map(r => r.id);
+                                          setSummaryReportQueue(reportIds);
+                                          setCurrentSummaryIndex(0);
+                                          setSummaryReportId(reportIds[0]);
+                                          setShowSummaryReport(true);
+                                          return;
+                                        }
+                                      }
+                                    }
+                                  } catch (clusterErr) {
+                                    console.warn('⚠️ Could not check for cluster, showing single report:', clusterErr);
+                                  }
+                                  
+                                  // If not clustered or cluster check failed, show single report
+                                  setSummaryReportId(clickedReportId);
+                                  setSummaryReportQueue([]);
+                                  setCurrentSummaryIndex(0);
                                   setShowSummaryReport(true);
                                 }}
                                 title="View Summary Report"
