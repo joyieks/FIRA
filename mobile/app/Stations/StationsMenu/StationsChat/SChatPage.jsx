@@ -13,6 +13,8 @@ export default function SChatPage({ contact, onBack, currentStationId }) {
   const [ongoingIncidents, setOngoingIncidents] = useState([]);
   const [incidentPickerVisible, setIncidentPickerVisible] = useState(false);
   const messagesRef = useRef(null);
+  const [aiModal, setAiModal] = useState({ open: false, level: null, reportId: null, location: 'Loading...', saving: false, error: null });
+  const [successModal, setSuccessModal] = useState({ open: false, level: null });
 
   const getContactIcon = (type) => {
     switch (type) {
@@ -267,6 +269,59 @@ export default function SChatPage({ contact, onBack, currentStationId }) {
     }
   };
 
+  const normalizeAiLabel = (aiValue) => {
+    if (!aiValue) return null;
+    let suggested = null;
+    if (typeof aiValue === 'string') {
+      const trimmed = aiValue.trim();
+      if ((trimmed.startsWith('{') && trimmed.endsWith('}')) || (trimmed.startsWith('[') && trimmed.endsWith(']'))) {
+        try { return normalizeAiLabel(JSON.parse(trimmed)); } catch (_) {}
+      }
+      suggested = aiValue;
+    } else if (aiValue?.suggested_alarm) {
+      suggested = aiValue.suggested_alarm;
+    } else if (aiValue?.original_response?.alarm_level) {
+      suggested = aiValue.original_response.alarm_level.toLowerCase().replace(/\s+/g, '_');
+    }
+    if (!suggested) return null;
+    const map = {
+      none: 'Under Control',
+      first: '1st Alarm', first_alarm: '1st Alarm',
+      second: '2nd Alarm', second_alarm: '2nd Alarm',
+      third: '3rd Alarm', third_alarm: '3rd Alarm',
+      fourth: '4th Alarm', fourth_alarm: '4th Alarm',
+      fifth: '5th Alarm', fifth_alarm: '5th Alarm',
+      task_force_alpha: 'TASK FORCE ALPHA',
+      task_force_bravo: 'TASK FORCE BRAVO',
+      task_force_charlie: 'TASK FORCE CHARLIE',
+      task_force_delta_echo_hotel_india: 'TASK FORCE DELTA',
+      general: 'GENERAL ALARM'
+    };
+    return map[suggested] || suggested;
+  };
+
+  const applyAiAlarm = async () => {
+    if (!aiModal.reportId || !aiModal.level) return;
+    setAiModal(prev => ({ ...prev, saving: true, error: null }));
+    try {
+      const response = await fetch('https://fire-detection-api-production-f55b.up.railway.app/update_final_alarm_level', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ report_id: aiModal.reportId, final_alarm_level: aiModal.level })
+      });
+      if (!response.ok) {
+        const text = await response.text();
+        throw new Error(text || 'Failed to update alarm level');
+      }
+      const updatedLevel = aiModal.level;
+      setAiModal({ open: false, level: null, reportId: null, location: 'Loading...', saving: false, error: null });
+      setSuccessModal({ open: true, level: updatedLevel });
+    } catch (err) {
+      console.error('Failed to apply AI alarm:', err);
+      setAiModal(prev => ({ ...prev, saving: false, error: err.message || 'Failed to update alarm level' }));
+    }
+  };
+
   return (
     <KeyboardAvoidingView 
       className="flex-1 bg-white"
@@ -306,39 +361,53 @@ export default function SChatPage({ contact, onBack, currentStationId }) {
         showsVerticalScrollIndicator={false}
         ref={messagesRef}
       >
-        {messages.map((msg) => (
-          <TouchableOpacity
-            key={msg.id}
-            onLongPress={() => handleLongPress(msg)}
-            activeOpacity={0.7}
-            className={`mb-4 ${(msg.sender_type === 'station' || msg.sender === 'station') ? 'items-end' : 'items-start'}`}
-          >
-            <View className={`max-w-[80%] ${(msg.sender_type === 'station' || msg.sender === 'station') ? 'bg-gray-800' : 'bg-gray-100'} rounded-2xl px-4 py-3`}>
-              {!(msg.sender_type === 'station' || msg.sender === 'station') && (
-                <Text className="text-xs font-medium text-gray-600 mb-1">
-                  {getSenderName(msg.sender_type || msg.sender)}
+        {messages.map((msg) => {
+          const aiLabel = normalizeAiLabel(msg.ai_suggested_alarm);
+          const selectedIncident = ongoingIncidents.find(inc => String(inc.id) === String(msg.report_id || activeIncidentId));
+          const incidentLocation = selectedIncident
+            ? (selectedIncident.address || selectedIncident.geotag_location || selectedIncident.location || 'Unknown location')
+            : 'Unknown location';
+          return (
+            <TouchableOpacity
+              key={msg.id}
+              onLongPress={() => handleLongPress(msg)}
+              activeOpacity={0.7}
+              className={`mb-4 ${(msg.sender_type === 'station' || msg.sender === 'station') ? 'items-end' : 'items-start'}`}
+            >
+              <View className={`max-w-[80%] ${(msg.sender_type === 'station' || msg.sender === 'station') ? 'bg-gray-800' : 'bg-gray-100'} rounded-2xl px-4 py-3`}>
+                {!(msg.sender_type === 'station' || msg.sender === 'station') && (
+                  <Text className="text-xs font-medium text-gray-600 mb-1">
+                    {getSenderName(msg.sender_type || msg.sender)}
+                  </Text>
+                )}
+                <Text className={`text-base ${(msg.sender_type === 'station' || msg.sender === 'station') ? 'text-white' : 'text-gray-800'} ${msg.isDeleted ? 'italic text-gray-500' : ''}`}>
+                  {msg.text}
                 </Text>
-              )}
-              <Text className={`text-base ${(msg.sender_type === 'station' || msg.sender === 'station') ? 'text-white' : 'text-gray-800'} ${msg.isDeleted ? 'italic text-gray-500' : ''}`}>
-                {msg.text}
-              </Text>
-              {/* AI suggestion JSON display hidden - functionality still works in background */}
-                             <View className={`flex-row items-center mt-2 ${msg.sender === 'station' ? 'justify-end' : 'justify-start'}`}>
-                <Text className={`text-xs ${(msg.sender_type === 'station' || msg.sender === 'station') ? 'text-gray-300' : 'text-gray-500'}`}>
-                  {msg.created_at ? new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : (msg.timestamp || '')}
-                 </Text>
-                {(msg.sender_type === 'station' || msg.sender === 'station') && (
-                   <Ionicons 
-                     name={msg.isRead ? "checkmark-done" : "checkmark"} 
-                     size={14} 
-                     color={msg.isRead ? "#D1D5DB" : "#9CA3AF"} 
-                     style={{ marginLeft: 4 }}
-                   />
-                 )}
-               </View>
-            </View>
-          </TouchableOpacity>
-        ))}
+                {aiLabel && (
+                  <View className="mt-2 self-start">
+                    <View className="bg-blue-100 border border-blue-200 rounded px-2 py-1 flex-row items-center gap-1.5">
+                      <Text style={{ fontSize: 12 }}>✨</Text>
+                      <Text className="text-[10px] text-blue-800 font-semibold">AI Suggested: {aiLabel}</Text>
+                    </View>
+                  </View>
+                )}
+                <View className={`flex-row items-center mt-2 ${msg.sender === 'station' ? 'justify-end' : 'justify-start'}`}>
+                  <Text className={`text-xs ${(msg.sender_type === 'station' || msg.sender === 'station') ? 'text-gray-300' : 'text-gray-500'}`}>
+                    {msg.created_at ? new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : (msg.timestamp || '')}
+                  </Text>
+                  {(msg.sender_type === 'station' || msg.sender === 'station') && (
+                    <Ionicons 
+                      name={msg.isRead ? "checkmark-done" : "checkmark"} 
+                      size={14} 
+                      color={msg.isRead ? "#D1D5DB" : "#9CA3AF"} 
+                      style={{ marginLeft: 4 }}
+                    />
+                  )}
+                </View>
+              </View>
+            </TouchableOpacity>
+          );
+        })}
       </ScrollView>
 
       {/* Input Area */}
@@ -451,6 +520,51 @@ export default function SChatPage({ contact, onBack, currentStationId }) {
       </View>
     </Modal>
 
+      <Modal
+        animationType="fade"
+        transparent
+        visible={aiModal.open}
+        onRequestClose={() => setAiModal({ open: false, level: null, reportId: null, location: 'Loading...', saving: false, error: null })}
+      >
+        <View className="flex-1 bg-black/30 justify-center items-center px-6">
+          <View className="bg-white w-full rounded-2xl p-5">
+            <View className="flex-row items-start space-x-3">
+              <View className="p-2 bg-red-100 rounded-lg">
+                <Ionicons name="warning" size={20} color="#dc2626" />
+              </View>
+              <View className="flex-1">
+                <Text className="text-lg font-bold text-gray-900">AI Alarm Suggestion</Text>
+                <Text className="text-sm text-gray-700 mt-1">
+                  AI suggests this incident is <Text className="font-semibold text-red-600">{aiModal.level}</Text>. Apply this alarm level to the linked incident?
+                </Text>
+                <Text className="text-sm text-gray-600 mt-2">
+                  <Text className="font-semibold">Location:</Text> {aiModal.location || 'Unknown location'}
+                </Text>
+                {aiModal.error ? (
+                  <Text className="text-sm text-red-600 mt-2">{aiModal.error}</Text>
+                ) : null}
+              </View>
+            </View>
+            <View className="flex-row justify-end space-x-3 mt-4">
+              <TouchableOpacity
+                onPress={() => setAiModal({ open: false, level: null, reportId: null, location: 'Loading...', saving: false, error: null })}
+                disabled={aiModal.saving}
+                className="px-4 py-2 rounded-lg border border-gray-300"
+              >
+                <Text className="text-gray-700">Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={applyAiAlarm}
+                disabled={aiModal.saving}
+                className="px-4 py-2 rounded-lg bg-red-600"
+              >
+                <Text className="text-white font-semibold">{aiModal.saving ? 'Applying...' : 'Change the Alarm'}</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
       {/* Edit Message Modal */}
       <Modal
         visible={editingMessage !== null}
@@ -485,6 +599,31 @@ export default function SChatPage({ contact, onBack, currentStationId }) {
                 <Text className="text-white">Save</Text>
               </TouchableOpacity>
             </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Success Modal */}
+      <Modal visible={successModal.open} transparent={true} animationType="fade">
+        <View className="flex-1 bg-black bg-opacity-50 justify-center items-center px-4">
+          <View className="bg-white rounded-xl p-6 w-full max-w-sm shadow-2xl">
+            <View className="flex-row items-center mb-4">
+              <View style={{ backgroundColor: '#dcfce7', padding: 12, borderRadius: 999 }}>
+                <Ionicons name="checkmark-circle" size={24} color="#16a34a" />
+              </View>
+              <View className="ml-3 flex-1">
+                <Text className="text-lg font-bold text-gray-900">Success!</Text>
+                <Text className="text-sm text-gray-700 mt-1">
+                  Alarm level has been updated to <Text className="font-semibold text-green-600">{successModal.level}</Text>
+                </Text>
+              </View>
+            </View>
+            <TouchableOpacity
+              onPress={() => setSuccessModal({ open: false, level: null })}
+              className="px-6 py-3 rounded-lg bg-green-600"
+            >
+              <Text className="text-white font-semibold text-center">OK</Text>
+            </TouchableOpacity>
           </View>
         </View>
       </Modal>

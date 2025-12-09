@@ -36,6 +36,8 @@ const Sfira_chat = () => {
   const [incidentMenuOpen, setIncidentMenuOpen] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [refreshUnreadTick, setRefreshUnreadTick] = useState(0); // bump to refetch unread
+  const [aiModal, setAiModal] = useState({ open: false, level: null, reportId: null, saving: false, error: null });
+  const [successModal, setSuccessModal] = useState({ open: false, level: null });
 
   // FIXED: Get current station ID from sessionStorage (where station login stores it) with localStorage fallback
   useEffect(() => {
@@ -881,6 +883,59 @@ const Sfira_chat = () => {
     return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   };
 
+  const normalizeAiLabel = (aiValue) => {
+    if (!aiValue) return null;
+    let suggested = null;
+    if (typeof aiValue === 'string') {
+      const trimmed = aiValue.trim();
+      if ((trimmed.startsWith('{') && trimmed.endsWith('}')) || (trimmed.startsWith('[') && trimmed.endsWith(']'))) {
+        try { return normalizeAiLabel(JSON.parse(trimmed)); } catch (_) {}
+      }
+      suggested = aiValue;
+    } else if (aiValue?.suggested_alarm) {
+      suggested = aiValue.suggested_alarm;
+    } else if (aiValue?.original_response?.alarm_level) {
+      suggested = aiValue.original_response.alarm_level.toLowerCase().replace(/\s+/g, '_');
+    }
+    if (!suggested) return null;
+    const map = {
+      none: 'Under Control',
+      first: '1st Alarm', first_alarm: '1st Alarm',
+      second: '2nd Alarm', second_alarm: '2nd Alarm',
+      third: '3rd Alarm', third_alarm: '3rd Alarm',
+      fourth: '4th Alarm', fourth_alarm: '4th Alarm',
+      fifth: '5th Alarm', fifth_alarm: '5th Alarm',
+      task_force_alpha: 'TASK FORCE ALPHA',
+      task_force_bravo: 'TASK FORCE BRAVO',
+      task_force_charlie: 'TASK FORCE CHARLIE',
+      task_force_delta_echo_hotel_india: 'TASK FORCE DELTA',
+      general: 'GENERAL ALARM'
+    };
+    return map[suggested] || suggested;
+  };
+
+  const applyAiAlarm = async () => {
+    if (!aiModal.reportId || !aiModal.level) return;
+    setAiModal(prev => ({ ...prev, saving: true, error: null }));
+    try {
+      const response = await fetch('https://fire-detection-api-production-f55b.up.railway.app/update_final_alarm_level', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ report_id: aiModal.reportId, final_alarm_level: aiModal.level })
+      });
+      if (!response.ok) {
+        const text = await response.text();
+        throw new Error(text || 'Failed to update alarm level');
+      }
+      const updatedLevel = aiModal.level;
+      setAiModal({ open: false, level: null, reportId: null, saving: false, error: null });
+      setSuccessModal({ open: true, level: updatedLevel });
+    } catch (err) {
+      console.error('❌ Failed to apply AI alarm:', err);
+      setAiModal(prev => ({ ...prev, saving: false, error: err.message || 'Failed to update alarm level' }));
+    }
+  };
+
   const formatLastMessage = (message) => {
     if (!message) return 'No messages yet';
     if (message.length > 50) {
@@ -1171,6 +1226,7 @@ const Sfira_chat = () => {
               ) : (
                 messages.map((message) => {
                   const isMine = message.sender_id === currentStationId;
+                  const aiLabel = normalizeAiLabel(message.ai_suggested_alarm);
                   return (
                     <div 
                       key={message.id} 
@@ -1194,6 +1250,18 @@ const Sfira_chat = () => {
                             </div>
                           )}
                           {message.text && <p className="whitespace-pre-wrap">{message.text}</p>}
+                          {aiLabel && (
+                            <div className="mt-2 space-y-2">
+                              <div className={`px-2 py-1 rounded border ${isMine ? 'border-white/50' : 'border-gray-300'}`}>
+                                <p className={`${isMine ? 'text-white' : 'text-gray-700'} text-xs flex items-center gap-1.5`}>
+                                  <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 20 20">
+                                    <path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z" />
+                                  </svg>
+                                  <span>AI Suggested: {aiLabel}</span>
+                                </p>
+                              </div>
+                            </div>
+                          )}
                           <div className={`text-xs mt-2 text-right ${
                             isMine 
                               ? 'text-white text-opacity-80' 
@@ -1346,6 +1414,78 @@ const Sfira_chat = () => {
           </div>
         )}
       </div>
+      {aiModal.open && (
+        <div className="fixed inset-0 bg-black/20 backdrop-blur-sm flex items-center justify-center z-50 px-4">
+          <div className="bg-white rounded-xl shadow-2xl max-w-md w-full p-6 space-y-4">
+            <div className="flex items-start space-x-3">
+              <div className="p-2 bg-red-100 rounded-lg">
+                <FiAlertTriangle className="text-red-600" size={20} />
+              </div>
+              <div className="flex-1">
+                <h3 className="text-lg font-bold text-gray-900">AI Alarm Suggestion</h3>
+                <p className="text-sm text-gray-700 mt-1">
+                  AI suggests this incident is <span className="font-semibold text-red-600">{aiModal.level}</span>. Apply this alarm level to the linked incident?
+                </p>
+                <p className="text-sm text-gray-600 mt-2">
+                  <span className="font-semibold">Location:</span> {aiModal.location || 'Unknown location'}
+                </p>
+              </div>
+            </div>
+
+            {aiModal.error && (
+              <div className="bg-red-50 text-red-700 text-sm p-3 rounded-lg border border-red-200">
+                {aiModal.error}
+              </div>
+            )}
+
+            <div className="flex justify-end space-x-3">
+              <button
+                onClick={() => setAiModal({ open: false, level: null, reportId: null, saving: false, error: null, location: 'Loading...' })}
+                className="px-4 py-2 rounded-lg border border-gray-300 text-gray-700 hover:bg-gray-50"
+                disabled={aiModal.saving}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={applyAiAlarm}
+                className="px-4 py-2 rounded-lg bg-red-600 text-white hover:bg-red-700 disabled:opacity-50"
+                disabled={aiModal.saving}
+              >
+                {aiModal.saving ? 'Applying...' : 'Change the Alarm'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Success Modal */}
+      {successModal.open && (
+        <div className="fixed inset-0 bg-black/20 backdrop-blur-sm flex items-center justify-center z-50 px-4">
+          <div className="bg-white rounded-xl shadow-2xl max-w-md w-full p-6 space-y-4 animate-in fade-in zoom-in duration-200">
+            <div className="flex items-center space-x-3">
+              <div className="p-2 bg-green-100 rounded-full">
+                <svg className="w-6 h-6 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                </svg>
+              </div>
+              <div className="flex-1">
+                <h3 className="text-lg font-bold text-gray-900">Success!</h3>
+                <p className="text-sm text-gray-700 mt-1">
+                  Alarm level has been updated to <span className="font-semibold text-green-600">{successModal.level}</span>
+                </p>
+              </div>
+            </div>
+            <div className="flex justify-end">
+              <button
+                onClick={() => setSuccessModal({ open: false, level: null })}
+                className="px-6 py-2 rounded-lg bg-green-600 text-white hover:bg-green-700 transition-colors font-medium"
+              >
+                OK
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

@@ -1043,16 +1043,45 @@ const Overview = () => {
   };
 
   // Handle final alarm level change with confirmation
-  const handleFinalAlarmChange = (reportId, newAlarmLevel) => {
-    const currentReport = reports.find(r => r.id === reportId);
+  const handleFinalAlarmChange = async (reportId, newAlarmLevel) => {
+    const currentReport = reports.find(r => String(r.id) === String(reportId));
     const currentAlarmLevel = currentReport?.finalAlarmLevel || 'Unknown';
+    
+    // Get location from the specific report being edited
+    let reportLocation = currentReport?.address || 
+                        currentReport?.geotag_location || 
+                        currentReport?.location;
+    
+    // If location is still not found, try to fetch it from the API
+    if (!reportLocation || reportLocation === 'Location unavailable') {
+      try {
+        const response = await fetch(`${API_URL}/get_reports`);
+        if (response.ok) {
+          const allReports = await response.json();
+          const apiReport = allReports.find(r => String(r.id) === String(reportId));
+          if (apiReport) {
+            reportLocation = apiReport.address || 
+                           apiReport.geotag_location || 
+                           apiReport.location || 
+                           'Location unavailable';
+          }
+        }
+      } catch (error) {
+        console.error('Error fetching report location:', error);
+      }
+    }
+    
+    // Fallback if still no location
+    if (!reportLocation || reportLocation === 'Location unavailable') {
+      reportLocation = 'Location unavailable';
+    }
     
     // Show custom confirmation modal
     setAlarmChangeData({
       reportId,
       newAlarmLevel,
       currentAlarmLevel,
-      location: currentReport?.location || 'Location unavailable',
+      location: reportLocation,
       reportIdShort: reportId.toString().substring(0, 8)
     });
     setShowAlarmConfirm(true);
