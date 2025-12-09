@@ -101,9 +101,9 @@ export const findNearestStations = async (lat, lng, excludeStationId = null, lim
     // Fetch all stations
     const { data: stations, error } = await supabase
       .from('station_users')
-      .select('id, station_name, lat, lng, address')
+      .select('id, station_name, lat, lng, address, status')
       .eq('account_status', 'active')
-      .or('status.eq.active,status.is.null');
+      .eq('status', 'active');
 
     if (error) {
       console.error('❌ Error fetching stations:', error);

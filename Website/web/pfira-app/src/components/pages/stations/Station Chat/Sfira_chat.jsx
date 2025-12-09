@@ -178,6 +178,7 @@ const Sfira_chat = () => {
           .from('station_users')
           .select('*')
           .neq('id', currentStationId) // Exclude current station
+          .eq('status', 'active')
           .limit(100);
 
         if (stationsError) {
@@ -200,7 +201,7 @@ const Sfira_chat = () => {
             }];
           }
         } else {
-          otherStations = stationsData || [];
+          otherStations = (stationsData || []).filter(s => (s.status || 'active').toLowerCase() === 'active');
           console.log('✅ Other stations fetched:', otherStations);
           console.log('✅ Other stations count:', otherStations?.length || 0);
           

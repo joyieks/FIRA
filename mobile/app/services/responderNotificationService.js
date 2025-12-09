@@ -49,11 +49,12 @@ export async function getStationWithJurisdiction(reportId, reportLocation = null
       console.log('✅ Found forwarded station:', stationId);
       
       // Get station name
-      const { data: stationData } = await supabase
-        .from('station_users')
-        .select('id, station_name')
-        .eq('id', stationId)
-        .single();
+    const { data: stationData } = await supabase
+      .from('station_users')
+      .select('id, station_name, status')
+      .eq('status', 'active')
+      .eq('id', stationId)
+      .single();
 
       return {
         stationId: stationId,

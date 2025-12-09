@@ -45,6 +45,7 @@ export default function RFiraChat() {
         const { data: stationUsers, error: stationError } = await supabase
           .from('station_users')
           .select('*')
+          .eq('status', 'active')
           .eq('id', currentStationId);
 
         console.log('📋 Station query result:', { stationUsers, stationError });

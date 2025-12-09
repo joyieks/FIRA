@@ -151,7 +151,8 @@ export default function CMap({ reportIdToFocus, setReportIdToFocus }) {
         console.log('🔍 Fetching stations for citizen map...');
         const { data, error } = await supabase
           .from('station_users')
-          .select('id, station_name, lat, lng, address, phone, email, jurisdiction, area_of_coverage');
+          .select('id, station_name, lat, lng, address, phone, email, jurisdiction, area_of_coverage, status')
+          .eq('status', 'active');
         if (error) {
           console.error('❌ Supabase error fetching stations:', error);
           throw error;

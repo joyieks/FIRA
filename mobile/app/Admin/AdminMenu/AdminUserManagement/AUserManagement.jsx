@@ -81,6 +81,7 @@ const AUserManagement = () => {
         const { data: stationsData, error: stationsError } = await supabase
           .from('station_users')
           .select('*')
+          .eq('status', 'active')
           .order('station_name', { ascending: true });
 
         if (stationsError) {

@@ -12,6 +12,8 @@ const Login = () => {
   });
   const [error, setError] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [showDisabledModal, setShowDisabledModal] = useState(false);
+  const [disabledInfo, setDisabledInfo] = useState({ email: '', reason: '' });
 
   useEffect(() => {
     if (location.state?.error) {
@@ -142,6 +144,18 @@ const Login = () => {
       const stationCheck = await checkUserInSupabaseTableByUserId(user.id, 'station_users');
       if (stationCheck.exists) {
         console.log('✅ Authenticated user found in station_users table');
+
+        const status = (stationCheck.data?.status || 'active').toLowerCase();
+        if (status === 'inactive') {
+          setShowDisabledModal(true);
+          setDisabledInfo({
+            email: stationCheck.data?.email || email,
+            reason: stationCheck.data?.disable_reason || 'Your station account has been disabled by the Command Center.'
+          });
+          await supabase.auth.signOut().catch(() => {});
+          setIsLoading(false);
+          return;
+        }
 
         const userData = {
           ...stationCheck.data,
@@ -366,6 +380,39 @@ const Login = () => {
           </div>
         </div>
       </div>
+
+      {/* Disabled Station Modal */}
+      {showDisabledModal && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 px-4">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full overflow-hidden">
+            <div className="bg-gradient-to-r from-red-500 via-red-600 to-rose-600 p-5 text-white">
+              <div className="flex items-center gap-3">
+                <div className="bg-white/20 rounded-full p-3">
+                  <CiLock size={28} />
+                </div>
+                <div>
+                  <p className="text-sm opacity-80">Station Account Disabled</p>
+                  <p className="text-xl font-bold">Access Restricted</p>
+                </div>
+              </div>
+            </div>
+            <div className="p-5 space-y-3">
+              <p className="text-gray-800 font-semibold">
+                {disabledInfo.email}
+              </p>
+              <p className="text-gray-600 leading-relaxed">
+                {disabledInfo.reason || 'Your station has been disabled by the admin. Please contact the Command Center to regain access.'}
+              </p>
+              <button
+                onClick={() => setShowDisabledModal(false)}
+                className="w-full mt-2 bg-red-600 hover:bg-red-700 text-white font-semibold py-3 rounded-xl shadow-md transition"
+              >
+                Continue
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

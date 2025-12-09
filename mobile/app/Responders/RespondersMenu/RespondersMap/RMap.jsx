@@ -771,6 +771,7 @@ export default function RMap({ routingInfo }) {
       const { data: stationData, error: stationError } = await supabase
         .from('station_users')
         .select('*')
+        .eq('status', 'active')
         .eq('id', stationId)
         .single();
 

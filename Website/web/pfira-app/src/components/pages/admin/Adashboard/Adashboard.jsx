@@ -513,17 +513,18 @@ const Adashboard = () => {
       try {
         const { data: stations, error } = await supabase
           .from('station_users')
-          .select('id, station_name, address, lat, lng');
+          .select('id, station_name, address, lat, lng, status');
         if (error) {
           console.error('❌ Error fetching stations (admin):', error);
           return;
         }
-        setAllStations(stations || []);
+        const activeStations = (stations || []).filter(s => (s.status || 'active').toLowerCase() === 'active');
+        setAllStations(activeStations);
 
         if (!mapLoaded || !window.google?.maps) return;
         const geocoder = new window.google.maps.Geocoder();
         const results = await Promise.all(
-          (stations || []).map((s) => new Promise((resolve) => {
+          (activeStations || []).map((s) => new Promise((resolve) => {
             const latNum = s?.lat != null ? parseFloat(s.lat) : NaN;
             const lngNum = s?.lng != null ? parseFloat(s.lng) : NaN;
             if (!isNaN(latNum) && !isNaN(lngNum)) {
@@ -2266,7 +2267,7 @@ const Adashboard = () => {
                               console.log('🔍 Forwarding: Excluding station:', currentAssignment.id);
                               
                               if (!isNaN(lat) && !isNaN(lng)) {
-                                // Find nearest stations to the incident location
+                                // Find nearest stations to the incident location (active only)
                                 const stations = await findNearestStations(
                                   lat,
                                   lng,
@@ -2284,7 +2285,8 @@ const Adashboard = () => {
                                   // Fallback: directly query all stations (less restrictive)
                                   const { data: allStationsData, error: allStationsError } = await supabase
                                     .from('station_users')
-                                    .select('id, station_name, lat, lng')
+                                    .select('id, station_name, lat, lng, status')
+                                    .eq('status', 'active')
                                     .neq('id', currentAssignment.id);
                                   
                                   if (allStationsError) {

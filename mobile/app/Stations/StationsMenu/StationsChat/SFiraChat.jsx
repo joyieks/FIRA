@@ -74,7 +74,10 @@ export default function SFiraChat({ onContactSelect }) {
         // Other stations (exclude current)
         let stationContacts = [];
         try {
-          const { data: stations } = await supabase.from('station_users').select('id, station_name, email');
+        const { data: stations } = await supabase
+          .from('station_users')
+          .select('id, station_name, email, status')
+          .eq('status', 'active');
           stationContacts = (stations || [])
             .filter(s => !currentStationId || String(s.id) !== String(currentStationId))
             .map(s => ({ id: s.id, name: s.station_name || 'Station', email: s.email, type: 'station', avatar: (s.station_name || 'S').slice(0,1).toUpperCase(), unreadCount: 0 }));

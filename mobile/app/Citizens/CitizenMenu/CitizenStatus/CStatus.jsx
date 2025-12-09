@@ -2143,7 +2143,8 @@ const CStatus = () => {
           // Get all stations with their coverage areas
           const { data: stations, error: stationsError } = await supabase
             .from('station_users')
-            .select('id, station_name, latitude, longitude, coverage_radius')
+            .select('id, station_name, latitude, longitude, coverage_radius, status')
+            .eq('status', 'active')
             .eq('account_status', 'active');
           
           if (stationsError) {

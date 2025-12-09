@@ -129,6 +129,16 @@ const LoginComponent = () => {
       if (stationData) {
         console.log('✅ Authenticated user found in station_users table:', stationData);
 
+        // Block disabled/inactive stations
+        const stationStatus = (stationData.status || '').toLowerCase();
+        if (stationStatus && stationStatus !== 'active') {
+          console.log('🚫 Station account is inactive/disabled');
+          setBanReason(stationData.disable_reason || 'This station has been disabled by the Command Center Admin.');
+          setShowBanModal(true);
+          await supabase.auth.signOut();
+          return;
+        }
+
         const userData = {
           id: stationData.id, // Add id field
           uid: stationData.id,

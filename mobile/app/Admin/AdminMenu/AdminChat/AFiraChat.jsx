@@ -40,8 +40,8 @@ export default function AFiraChat({ onContactSelect }) {
         setIsLoading(true);
         const { data, error } = await supabase
           .from('station_users')
-          .select('id, station_name, email, active')
-          .eq('active', true)
+          .select('id, station_name, email, status')
+          .eq('status', 'active')
           .order('station_name', { ascending: true });
         if (error) throw error;
 
