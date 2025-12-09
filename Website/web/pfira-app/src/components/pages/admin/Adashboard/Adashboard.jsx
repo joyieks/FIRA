@@ -44,6 +44,7 @@ const Adashboard = () => {
   const [loadingResponders, setLoadingResponders] = useState(false); // Loading state for responders
   const [clusterIndex, setClusterIndex] = useState(0); // Pager index for clustered reports
   const noFireNotifiedRef = useRef(new Set()); // track notified report IDs to avoid duplicates
+  const pendingAssignmentRef = useRef(null); // Ref to track current pendingAssignment for real-time listeners
 
   // Helpers to hide "No Fire" + "No Smoke" reports and notify citizen once
   const isNoFireNoSmoke = (report) => {
@@ -852,7 +853,13 @@ const Adashboard = () => {
 
   // Real-time listener for assignment responses (when pendingAssignment is set)
   useEffect(() => {
-    if (!pendingAssignment) return;
+    if (!pendingAssignment) {
+      pendingAssignmentRef.current = null;
+      return;
+    }
+
+    // Update ref immediately
+    pendingAssignmentRef.current = { ...pendingAssignment };
 
     const channel = supabase
       .channel(`assignment-responses-${pendingAssignment.reportId}`)
@@ -863,20 +870,29 @@ const Adashboard = () => {
         filter: `report_id=eq.${pendingAssignment.reportId}`
       }, async (payload) => {
         const assignment = payload.new;
+        // Use ref to get the latest pendingAssignment (avoids closure issues)
+        const currentPending = pendingAssignmentRef.current;
+        if (!currentPending) return;
+        
+        // Check if this assignment matches the CURRENT expected station ID
         if (assignment.assignee_type === 'station' && 
-            String(assignment.assignee_id) === String(pendingAssignment.stationId)) {
+            String(assignment.assignee_id) === String(currentPending.stationId)) {
           
           if (assignment.status === 'accepted') {
             // Station accepted - close waiting modal and show success
             setShowWaitingApprovalModal(false);
-            alert(`✅ ${pendingAssignment.stationName} has accepted the assignment.`);
+            alert(`✅ ${currentPending.stationName} has accepted the assignment.`);
             setPendingAssignment(null);
+            pendingAssignmentRef.current = null;
             if (selectedReport) {
               loadAssignmentInfo(selectedReport.id);
             }
           } else if (assignment.status === 'declined') {
             // Station declined - show reroute modal with nearest stations
             setShowWaitingApprovalModal(false);
+            
+            // Use the current pendingAssignment to get the declined station ID
+            const declinedStationId = currentPending.stationId;
             
             // Get report location for finding nearest stations
             const reportLat = parseFloat(selectedReport?.latitude);
@@ -893,7 +909,7 @@ const Adashboard = () => {
               nearest = await findNearestStations(
                 reportLat, 
                 reportLng, 
-                pendingAssignment.stationId, 
+                declinedStationId, 
                 5,
                 incidentLocation
               );
@@ -903,8 +919,8 @@ const Adashboard = () => {
             if (nearest.length === 0) {
               console.log('📍 No stations found near report location, finding stations near declined station...');
               nearest = await findNearestStationsToStation(
-                pendingAssignment.stationId,
-                pendingAssignment.stationId,
+                declinedStationId,
+                declinedStationId,
                 5,
                 incidentLocation
               );
@@ -916,7 +932,8 @@ const Adashboard = () => {
               const { data: stations, error: stationsError } = await supabase
                 .from('station_users')
                 .select('id, station_name, lat, lng')
-                .neq('id', pendingAssignment.stationId);
+                .eq('status', 'active')
+                .neq('id', declinedStationId);
               
               if (stationsError) {
                 console.error('❌ Error fetching stations:', stationsError);
@@ -1036,11 +1053,13 @@ const Adashboard = () => {
         }
         
         // Set pending assignment info for reroute modal
-        setPendingAssignment({
+        const pendingAssign = {
           reportId: assignment.report_id,
           stationId: assignment.assignee_id,
           stationName: stationName
-        });
+        };
+        setPendingAssignment(pendingAssign);
+        pendingAssignmentRef.current = pendingAssign;
         
         // Close waiting modal if open
         setShowWaitingApprovalModal(false);
@@ -1235,8 +1254,21 @@ const Adashboard = () => {
       return;
     }
 
+    // Validate that we're not rerouting to the same station
+    if (String(selectedRerouteStation) === String(pendingAssignment.stationId)) {
+      alert('Cannot reroute to the same station. Please select a different station.');
+      return;
+    }
+
     try {
-      // Remove the declined assignment
+      console.log('🔄 Rerouting report:', {
+        reportId: pendingAssignment.reportId,
+        fromStation: pendingAssignment.stationId,
+        fromStationName: pendingAssignment.stationName,
+        toStation: selectedRerouteStation
+      });
+
+      // Remove the declined assignment (or current assignment for forwarding)
       await supabase
         .from('report_assignments')
         .delete()
@@ -1258,11 +1290,19 @@ const Adashboard = () => {
       
       // Also delete any existing assignment for this report to ensure clean state
       // (in case there's a leftover assignment from a previous reroute attempt)
-      await supabase
+      // IMPORTANT: Delete ALL station assignments for this report first
+      const { error: deleteError } = await supabase
         .from('report_assignments')
         .delete()
         .eq('report_id', pendingAssignment.reportId)
         .eq('assignee_type', 'station');
+      
+      if (deleteError) {
+        console.error('❌ Error deleting existing assignments:', deleteError);
+        throw deleteError;
+      }
+      
+      console.log('✅ Deleted all existing station assignments for report:', pendingAssignment.reportId);
       
       // Create new assignment to the selected station (always pending for reroutes)
       // Use insert instead of upsert to ensure it triggers INSERT listener on station side
@@ -1282,9 +1322,12 @@ const Adashboard = () => {
         note: noteText
       };
 
-      const { error } = await supabase
+      console.log('📝 Inserting new assignment:', payload);
+
+      const { error, data } = await supabase
         .from('report_assignments')
-        .insert(payload);
+        .insert(payload)
+        .select();
 
       if (error) {
         // Check if error is due to missing columns (migration not run)
@@ -1292,15 +1335,46 @@ const Adashboard = () => {
           alert('Database migration required! Please run the migration SQL file (assignment-status-migration.sql) in your Supabase SQL Editor first.');
           return;
         }
+        console.error('❌ Error inserting new assignment:', error);
         throw error;
       }
 
+      console.log('✅ Successfully created new assignment:', data);
+      
+      // Verify the assignment was created correctly
+      const { data: verifyAssignment } = await supabase
+        .from('report_assignments')
+        .select('assignee_id, assignee_type, status')
+        .eq('report_id', pendingAssignment.reportId)
+        .eq('assignee_type', 'station')
+        .single();
+      
+      if (verifyAssignment) {
+        console.log('✅ Verified assignment:', {
+          assignee_id: verifyAssignment.assignee_id,
+          expected: selectedRerouteStation,
+          match: String(verifyAssignment.assignee_id) === String(selectedRerouteStation)
+        });
+        
+        if (String(verifyAssignment.assignee_id) !== String(selectedRerouteStation)) {
+          console.error('❌ ASSIGNMENT MISMATCH! Expected:', selectedRerouteStation, 'Got:', verifyAssignment.assignee_id);
+          alert('Error: Assignment was created for wrong station. Please try again.');
+          return;
+        }
+      }
+
+      // Store the old station name before updating pendingAssignment
+      const oldStationName = pendingAssignment.stationName;
+      const oldStationId = pendingAssignment.stationId;
+
       // Update pendingAssignment to track the new station
-      setPendingAssignment({
+      const updatedPendingAssignment = {
         reportId: pendingAssignment.reportId,
         stationId: selectedRerouteStation,
         stationName: newStationName
-      });
+      };
+      setPendingAssignment(updatedPendingAssignment);
+      pendingAssignmentRef.current = updatedPendingAssignment; // Update ref immediately
 
       // Show waiting modal
       setShowRerouteModal(false);
@@ -1318,7 +1392,7 @@ const Adashboard = () => {
         const title = isRerouteForForwarding 
           ? `🚨 Fire Report Forwarded to Your Station - Action Required`
           : `🚨 Fire Report Rerouted to Your Station - Action Required`;
-        const message = `Command Center is ${actionText} a fire report to your station.\n\nLocation: ${locationInfo}\nReporter: ${reporterName}\nPrevious station: ${pendingAssignment.stationName}${noteText}\n\nWill you accept this assignment?`;
+        const message = `Command Center is ${actionText} a fire report to your station.\n\nLocation: ${locationInfo}\nReporter: ${reporterName}\nPrevious station: ${oldStationName}${noteText}\n\nWill you accept this assignment?`;
         
         const { error: notifError } = await supabase
           .from('notifications')
@@ -1420,11 +1494,13 @@ const Adashboard = () => {
             .eq('id', assigneeId)
             .single();
 
-          setPendingAssignment({
+          const pendingAssign = {
             reportId: selectedReport.id,
             stationId: assigneeId,
             stationName: stationData?.station_name || 'Station'
-          });
+          };
+          setPendingAssignment(pendingAssign);
+          pendingAssignmentRef.current = pendingAssign;
           setShowWaitingApprovalModal(true);
 
           // Create notification for the assigned station (use representative report)
@@ -2493,11 +2569,13 @@ const Adashboard = () => {
                             setRerouteNote('');
                             
                             // Set pendingAssignment for forwarding context
-                            setPendingAssignment({
+                            const pendingAssign = {
                               reportId: selectedReport.id,
                               stationId: currentAssignment.id,
                               stationName: currentAssignment.name
-                            });
+                            };
+                            setPendingAssignment(pendingAssign);
+                            pendingAssignmentRef.current = pendingAssign;
                             
                             // Fetch nearest stations to the current assignment's station
                             try {
@@ -2933,6 +3011,7 @@ const Adashboard = () => {
               onClick={() => {
                 setShowWaitingApprovalModal(false);
                 setPendingAssignment(null);
+                pendingAssignmentRef.current = null;
               }}
               className="w-full bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-700 hover:to-blue-800 text-white font-semibold px-6 py-3 rounded-xl transition-all shadow-lg hover:shadow-xl transform hover:scale-105"
             >
