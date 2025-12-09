@@ -15,8 +15,14 @@ export default function RespondersScreen() {
   const [routingInfo, setRoutingInfo] = useState(null);
 
   const handleNavigateToMap = (fireInfo) => {
-    console.log('🗺️ Navigating to map with fire info:', fireInfo);
-    setRoutingInfo(fireInfo);
+    // Normalize payload to the shape RMap expects
+    const normalized =
+      fireInfo && typeof fireInfo === 'object'
+        ? fireInfo
+        : { fireReportId: fireInfo };
+
+    console.log('🗺️ Navigating to map with fire info:', normalized);
+    setRoutingInfo(normalized);
     setActiveTab(1); // Switch to Map tab (index 1)
   };
 

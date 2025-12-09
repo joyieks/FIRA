@@ -559,7 +559,7 @@ const Sdashboard = () => {
         // 1) Fetch assignments for this station (exclude declined)
         const { data: assignments, error } = await supabase
           .from('report_assignments')
-          .select('report_id, note, assigned_at, status')
+          .select('id, report_id, note, assigned_at, status, assignment_source')
           .eq('assignee_type', 'station')
           .eq('assignee_id', stationId);
 
@@ -572,6 +572,44 @@ const Sdashboard = () => {
         const activeAssignments = (assignments || []).filter(
           a => !a.status || a.status !== 'declined'
         );
+
+        // If there are pending assignments when loading (e.g., user was logged out), trigger acceptance/forwarding modal logic
+        const pendingAssignment = activeAssignments.find(a => a.status === 'pending');
+        if (pendingAssignment) {
+          try {
+            // Fetch report data
+            const response = await fetch('https://fire-detection-api-production-f55b.up.railway.app/get_reports');
+            const reports = response.ok ? await response.json() : [];
+            const reportData = reports.find(r => String(r.id) === String(pendingAssignment.report_id));
+
+            // Check busy state
+            const busyCheck = await checkStationIsBusy(stationId);
+
+            const assignmentSource = pendingAssignment.assignment_source || 'manual';
+            const assignmentId = pendingAssignment.id;
+
+            // Always surface the modal on load for pending assignments (no silent auto-accept)
+            const baseData = {
+              reportId: pendingAssignment.report_id,
+              assignmentSource,
+              reportData,
+              assignmentId,
+              busyCount: busyCheck.busyCount
+            };
+
+            if (assignmentSource === 'automatic' && busyCheck.isBusy) {
+              // Busy + auto assignment -> forwarding modal
+              setPendingAssignmentData(baseData);
+              setShowForwardingRequestModal(true);
+            } else {
+              // Manual or not busy -> acceptance modal
+              setPendingAssignmentData(baseData);
+              setShowAcceptanceModal(true);
+            }
+          } catch (pendingErr) {
+            console.error('❌ Error handling pending assignment on load:', pendingErr);
+          }
+        }
 
         // 2) Fetch forwarded reports for this station with notes
         const { data: forwarded, error: forwardError } = await supabase

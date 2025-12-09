@@ -6,20 +6,22 @@ import { supabase } from '../../../config/supabase';
 import { MaterialIcons } from '@expo/vector-icons';
 import { scheduleLocalNotification, registerForPushNotificationsAsync } from '../../../services/pushNotificationService';
 import { BlurView } from 'expo-blur';
+import { notifyRespondersOnStationAssignment } from '../../../services/responderNotificationService';
 
 // Background worker for responder alerts WITH modal UI for accepting assignments
 export default function RAlertsWorker() {
   const sirenRef = useRef(null);
   const sirenReadyRef = useRef(false);
   const [responderId, setResponderId] = useState(null);
+  const [responderStationId, setResponderStationId] = useState(null);
   const isAlertingRef = useRef(false);
   const shouldBePlayingRef = useRef(false); // Track if alarm should be playing
   const processedNotificationIdsRef = useRef(new Set());
   const appState = useRef(AppState.currentState);
   const soundWatchdogRef = useRef(null);
   
-  // NEW: Modal state for accepting assignments
-  const [showAcceptModal, setShowAcceptModal] = useState(false);
+  // Modal state for viewing assignments (after station accepts)
+  const [showAssignmentModal, setShowAssignmentModal] = useState(false);
   const [currentAssignment, setCurrentAssignment] = useState(null);
 
   const SIREN_MODULE = require('../../../../assets/sounds/fire_alarm_sound.mp3');
@@ -270,6 +272,31 @@ export default function RAlertsWorker() {
     })();
   }, []);
 
+  // Resolve responder's station ID once we have responderId
+  useEffect(() => {
+    if (!responderId) return;
+    (async () => {
+      try {
+        const { data, error } = await supabase
+          .from('responders')
+          .select('station_id')
+          .eq('id', responderId)
+          .single();
+
+        if (!error && data?.station_id) {
+          setResponderStationId(data.station_id);
+          console.log('🔊 RAlertsWorker: Station ID resolved:', data.station_id);
+        } else {
+          setResponderStationId(null);
+          if (error) console.error('🔊 RAlertsWorker: Error fetching station ID:', error);
+        }
+      } catch (e) {
+        console.error('🔊 RAlertsWorker: Unexpected error fetching station ID:', e);
+        setResponderStationId(null);
+      }
+    })();
+  }, [responderId]);
+
   // Load responder notifications and trigger alert on unread fire alerts
   const loadNotifications = async () => {
     if (!responderId) return;
@@ -287,7 +314,7 @@ export default function RAlertsWorker() {
 
       const list = data || [];
       
-      // Check for PENDING assignments (not accepted yet)
+      // Inform on PENDING assignments (no modal, no accept)
       const pendingAssignments = list.filter(n => 
         n.status === 'pending' && 
         !n.is_read &&
@@ -295,41 +322,66 @@ export default function RAlertsWorker() {
         !processedNotificationIdsRef.current.has(n.id)
       );
       
-      // If we have a pending assignment, show modal and play alarm
-      if (pendingAssignments.length > 0 && !showAcceptModal) {
-        const newAssignment = pendingAssignments[0]; // Take the first one
-        console.log('🚨 RAlertsWorker: NEW PENDING ASSIGNMENT!', newAssignment.id);
-        console.log('🚨 Title:', newAssignment.title);
-        
-        // Send push notification to device
+      if (pendingAssignments.length > 0) {
+        const pending = pendingAssignments[0];
+        console.log('📢 Pending assignment (station has not accepted yet):', pending.id);
         try {
-          console.log('📱 RAlertsWorker: Sending push notification...');
           await scheduleLocalNotification(
-            newAssignment.title || '🚨 FIRE EMERGENCY ASSIGNMENT',
-            newAssignment.message || 'You have been assigned to a fire incident. Please respond immediately.',
+            pending.title || '🚨 Fire Report Assigned to Station',
+            pending.message || 'Your station has a pending fire assignment. Await station acceptance.',
             {
-              type: 'fire_assignment',
-              notificationId: newAssignment.id,
-              fireReportId: newAssignment.fire_report_id,
-              priority: newAssignment.priority
+              type: 'fire_assignment_pending',
+              notificationId: pending.id,
+              fireReportId: pending.fire_report_id,
+              priority: pending.priority
             }
           );
-          console.log('✅ RAlertsWorker: Push notification sent');
-        } catch (notifError) {
-          console.error('❌ RAlertsWorker: Error sending push notification:', notifError);
+        } catch (e) {
+          console.error('❌ Error notifying pending assignment:', e);
         }
-        
-        // Show modal with assignment details
-        setCurrentAssignment(newAssignment);
-        setShowAcceptModal(true);
-        
+        // Mark as processed so we don't spam
+        processedNotificationIdsRef.current.add(pending.id);
+      }
+
+      // Show modal ONLY when status is accepted (station accepted)
+      const acceptedAssignments = list.filter(n =>
+        n.status === 'accepted' &&
+        !n.is_read &&
+        (n.priority === 'high' || n.priority === 'urgent') &&
+        !processedNotificationIdsRef.current.has(`accepted-${n.id}`)
+      );
+
+      if (acceptedAssignments.length > 0 && !showAssignmentModal) {
+        const accepted = acceptedAssignments[0];
+        console.log('🚨 Station accepted assignment, showing modal:', accepted.id);
+
+        // Push notification + alarm for accepted assignment
+        try {
+          await scheduleLocalNotification(
+            accepted.title || '🚨 FIRE EMERGENCY ASSIGNMENT',
+            accepted.message || 'You have been assigned to a fire incident. Please respond immediately.',
+            {
+              type: 'fire_assignment',
+              notificationId: accepted.id,
+              fireReportId: accepted.fire_report_id,
+              priority: accepted.priority
+            }
+          );
+        } catch (notifError) {
+          console.error('❌ Error sending push notification:', notifError);
+        }
+
+        // Show modal with details (no accept button)
+        setCurrentAssignment(accepted);
+        setShowAssignmentModal(true);
+
         // Start alarm
         if (!shouldBePlayingRef.current) {
           await playAlert();
         }
-        
-        // Mark as seen (but not processed - that happens on ACCEPT)
-        processedNotificationIdsRef.current.add(newAssignment.id);
+
+        // Mark processed key for accepted so we don't reopen
+        processedNotificationIdsRef.current.add(`accepted-${accepted.id}`);
         return;
       }
       
@@ -476,29 +528,41 @@ export default function RAlertsWorker() {
         const newNotif = payload.new;
         
         if (newNotif?.priority === 'high' || newNotif?.priority === 'urgent') {
-          console.log('🔊 High/urgent priority alert received, playing alarm...');
-          
-          // Send push notification
-          if (newNotif.status === 'pending' && !processedNotificationIdsRef.current.has(newNotif.id)) {
+          // Push notification for pending (with alarm), and for accepted (no alarm) to inform acceptance
+          if (!processedNotificationIdsRef.current.has(newNotif.id)) {
             try {
-              console.log('📱 Real-time: Sending push notification...');
-              await scheduleLocalNotification(
-                newNotif.title || '🚨 FIRE EMERGENCY ASSIGNMENT',
-                newNotif.message || 'You have been assigned to a fire incident.',
-                {
-                  type: 'fire_assignment',
-                  notificationId: newNotif.id,
-                  fireReportId: newNotif.fire_report_id,
-                  priority: newNotif.priority
-                }
-              );
-              console.log('✅ Real-time: Push notification sent');
+              if (newNotif.status === 'pending') {
+                console.log('📱 Real-time: Sending push notification (pending)...');
+                await scheduleLocalNotification(
+                  newNotif.title || '🚨 FIRE EMERGENCY ASSIGNMENT',
+                  newNotif.message || 'You have been assigned to a fire incident.',
+                  {
+                    type: 'fire_assignment',
+                    notificationId: newNotif.id,
+                    fireReportId: newNotif.fire_report_id,
+                    priority: newNotif.priority
+                  }
+                );
+                playAlert();
+              } else if (newNotif.status === 'accepted') {
+                console.log('📱 Real-time: Sending push notification (station accepted)...');
+                await scheduleLocalNotification(
+                  newNotif.title || '✅ Station Accepted Report',
+                  newNotif.message || 'Your station has accepted the assigned report.',
+                  {
+                    type: 'fire_assignment_accepted',
+                    notificationId: newNotif.id,
+                    fireReportId: newNotif.fire_report_id,
+                    priority: newNotif.priority
+                  }
+                );
+                // No alarm for acceptance
+              }
             } catch (notifError) {
               console.error('❌ Real-time: Error sending push notification:', notifError);
             }
+            processedNotificationIdsRef.current.add(newNotif.id);
           }
-          
-          playAlert();
         }
       })
       .on('postgres_changes', { 
@@ -582,6 +646,48 @@ export default function RAlertsWorker() {
         console.log('🔊 RAlertsWorker: Subscription status:', status);
       });
 
+    // NEW: Listen for station assignments (when a report is assigned to responder's station)
+    let stationAssignmentChannel = null;
+    if (responderStationId) {
+      stationAssignmentChannel = supabase
+        .channel(`responder-station-assignments:${responderStationId}`)
+        .on('postgres_changes', {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'report_assignments',
+          filter: `assignee_type=eq.station`
+        }, async (payload) => {
+          const assignment = payload.new;
+          
+          // Check if this assignment is for our station
+          if (String(assignment.assignee_id) === String(responderStationId) && assignment.assignee_type === 'station') {
+            console.log('🚨 RAlertsWorker: New station assignment detected!', assignment);
+            
+            // Fetch report data
+            const reportId = String(assignment.report_id);
+            try {
+              const response = await fetch('https://fire-detection-api-production-f55b.up.railway.app/get_reports');
+              const reports = response.ok ? await response.json() : [];
+              const reportData = reports.find(r => String(r.id) === reportId);
+              
+              // Notify all responders in the station (including this one)
+              await notifyRespondersOnStationAssignment(
+                responderStationId,
+                reportId,
+                reportData
+              );
+              
+              console.log('✅ RAlertsWorker: Station assignment notification sent to all responders');
+            } catch (error) {
+              console.error('❌ RAlertsWorker: Error handling station assignment:', error);
+            }
+          }
+        })
+        .subscribe((status) => {
+          console.log('🔊 RAlertsWorker: Station assignment subscription status:', status);
+        });
+    }
+
     const appSub = AppState.addEventListener('change', next => {
       if (appState.current.match(/inactive|background/) && next === 'active') {
         console.log('🔊 RAlertsWorker: App resumed, reloading notifications...');
@@ -593,49 +699,51 @@ export default function RAlertsWorker() {
     return () => {
       clearInterval(notifInterval);
       try { channel.unsubscribe(); } catch (_) {}
+      if (stationAssignmentChannel) {
+        try { stationAssignmentChannel.unsubscribe(); } catch (_) {}
+      }
       appSub.remove();
     };
-  }, [responderId]);
+  }, [responderId, responderStationId]);
 
-  // Handle accepting assignment
-  const handleAccept = async () => {
+  // Acknowledge assignment (mark read and stop alarm)
+  const handleAcknowledge = async () => {
     try {
-      console.log('✅ RAlertsWorker: Accepting assignment...', currentAssignment?.id);
+      console.log('✅ RAlertsWorker: Acknowledging assignment...', currentAssignment?.id);
       
       if (!currentAssignment) return;
       
       // Stop alarm immediately
       await stopAlert();
       
-      // Update notification status to 'accepted' and mark as read
+      // Mark notification as read
       const { error } = await supabase
         .from('responder_notifications')
         .update({ 
-          status: 'accepted',
           is_read: true,
-          accepted_at: new Date().toISOString()
+          read_at: new Date().toISOString()
         })
         .eq('id', currentAssignment.id);
       
       if (error) {
-        console.error('❌ RAlertsWorker: Error accepting assignment:', error);
+        console.error('❌ RAlertsWorker: Error acknowledging assignment:', error);
       } else {
-        console.log('✅ RAlertsWorker: Assignment accepted successfully');
+        console.log('✅ RAlertsWorker: Assignment acknowledged');
       }
       
       // Close modal
-      setShowAcceptModal(false);
+      setShowAssignmentModal(false);
       setCurrentAssignment(null);
       
     } catch (error) {
-      console.error('❌ RAlertsWorker: Error in handleAccept:', error);
+      console.error('❌ RAlertsWorker: Error in handleAcknowledge:', error);
     }
   };
 
-  // Render modal for accepting assignments
+  // Render modal for station-accepted assignments (view/acknowledge only)
   return (
     <Modal
-      visible={showAcceptModal}
+      visible={showAssignmentModal}
       transparent={true}
       animationType="fade"
       onRequestClose={() => {}} // Prevent dismissing with back button
@@ -671,9 +779,9 @@ export default function RAlertsWorker() {
             )}
           </View>
           
-          {/* Accept Button */}
+          {/* Acknowledge Button */}
           <TouchableOpacity
-            onPress={handleAccept}
+            onPress={handleAcknowledge}
             className="bg-red-600 rounded-full py-4 shadow-lg"
             style={{
               shadowColor: '#dc2626',
@@ -686,13 +794,13 @@ export default function RAlertsWorker() {
             <View className="flex-row items-center justify-center">
               <MaterialIcons name="check-circle" size={28} color="white" />
               <Text className="text-white text-xl font-bold ml-2">
-                ACCEPT ASSIGNMENT
+                ACKNOWLEDGE
               </Text>
             </View>
           </TouchableOpacity>
           
           <Text className="text-gray-500 text-center mt-4 text-sm">
-            Tap to stop alarm and accept the assignment
+            Tap to stop alarm and acknowledge this station assignment
           </Text>
         </View>
       </View>

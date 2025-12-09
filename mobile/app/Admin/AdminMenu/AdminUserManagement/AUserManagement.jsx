@@ -12,6 +12,11 @@ const AUserManagement = () => {
   const [showHistoryModal, setShowHistoryModal] = useState(false);
   const [showRespondersModal, setShowRespondersModal] = useState(false);
   const [selectedUser, setSelectedUser] = useState(null);
+  const [showDisableModal, setShowDisableModal] = useState(false);
+  const [showReEnableModal, setShowReEnableModal] = useState(false);
+  const [disableReason, setDisableReason] = useState('');
+  const [userToDisable, setUserToDisable] = useState(null);
+  const [userToReEnable, setUserToReEnable] = useState(null);
   const [newUser, setNewUser] = useState({
     name: '',
     email: '',
@@ -53,6 +58,8 @@ const AUserManagement = () => {
 
           // Determine if user is active based on status field
           const isActive = (data.status || 'active').toLowerCase() === 'active';
+          // Check if user is disabled/banned
+          const isDisabled = data.is_disabled === true;
 
           return {
             id: data.id,
@@ -61,6 +68,8 @@ const AUserManagement = () => {
             phone: data.phone || data.phone_number || 'No phone',
             address: data.address || 'No address',
             status: isActive ? 'Active' : 'Inactive',
+            isDisabled: isDisabled,
+            disableReason: data.disable_reason || null,
             lastActive: data.updated_at ? 'Recently active' : 'Unknown',
             reports: data.reports || 0,
           };
@@ -134,12 +143,114 @@ const AUserManagement = () => {
     setSelectedUser(null);
   };
 
-  const handleDisableUser = async (user) => {
+  // Handle disable for citizens (shows modal with reason)
+  const handleDisableCitizen = (user) => {
+    setUserToDisable(user);
+    setDisableReason('');
+    setShowDisableModal(true);
+  };
+
+  // Handle re-enable for citizens (shows modal)
+  const handleReEnableCitizen = (user) => {
+    setUserToReEnable(user);
+    setShowReEnableModal(true);
+  };
+
+  // Confirm disable action for citizens
+  const handleConfirmDisableCitizen = async () => {
+    if (!userToDisable) return;
+    
+    if (!disableReason.trim()) {
+      Alert.alert('Error', 'Please provide a reason for disabling this citizen.');
+      return;
+    }
+
+    try {
+      setLoading(true);
+      const { error } = await supabase
+        .from('citizen_users')
+        .update({ 
+          is_disabled: true,
+          disable_reason: disableReason.trim(),
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', userToDisable.id);
+
+      if (error) {
+        console.error('Error disabling citizen:', error);
+        Alert.alert('Error', `Failed to disable citizen: ${error.message}`);
+        return;
+      }
+
+      // Update local state
+      setCitizens(prevCitizens => 
+        prevCitizens.map(c => 
+          c.id === userToDisable.id 
+            ? { ...c, isDisabled: true, disableReason: disableReason.trim() } 
+            : c
+        )
+      );
+
+      setShowDisableModal(false);
+      setDisableReason('');
+      setUserToDisable(null);
+      Alert.alert('Success', 'Account disabled successfully!');
+    } catch (error) {
+      console.error('Error disabling citizen:', error);
+      Alert.alert('Error', `Failed to disable citizen: ${error.message}`);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Confirm re-enable action for citizens
+  const handleConfirmReEnableCitizen = async () => {
+    if (!userToReEnable) return;
+
+    try {
+      setLoading(true);
+      const { error } = await supabase
+        .from('citizen_users')
+        .update({ 
+          is_disabled: false,
+          disable_reason: null,
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', userToReEnable.id);
+
+      if (error) {
+        console.error('Error re-enabling citizen:', error);
+        Alert.alert('Error', `Failed to re-enable citizen: ${error.message}`);
+        return;
+      }
+
+      // Update local state
+      setCitizens(prevCitizens => 
+        prevCitizens.map(c => 
+          c.id === userToReEnable.id 
+            ? { ...c, isDisabled: false, disableReason: null } 
+            : c
+        )
+      );
+
+      setShowReEnableModal(false);
+      setUserToReEnable(null);
+      Alert.alert('Success', 'Account re-enabled successfully!');
+    } catch (error) {
+      console.error('Error re-enabling citizen:', error);
+      Alert.alert('Error', `Failed to re-enable citizen: ${error.message}`);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Handle disable/enable for stations (uses simple alert)
+  const handleDisableStation = async (user) => {
     const isActive = user.status === 'Active';
     const action = isActive ? 'disable' : 'enable';
     
     Alert.alert(
-      `${action.charAt(0).toUpperCase() + action.slice(1)} User`,
+      `${action.charAt(0).toUpperCase() + action.slice(1)} Station`,
       `Are you sure you want to ${action} ${user.name}?`,
       [
         { text: 'Cancel', style: 'cancel' },
@@ -150,11 +261,8 @@ const AUserManagement = () => {
             try {
               setLoading(true);
               
-              // Determine which table to update based on activeTab
-              const tableName = activeTab === 'Citizens' ? 'citizen_users' : 'station_users';
-              
               const { error } = await supabase
-                .from(tableName)
+                .from('station_users')
                 .update({ 
                   status: !isActive ? 'active' : 'inactive',
                   updated_at: new Date().toISOString()
@@ -162,34 +270,24 @@ const AUserManagement = () => {
                 .eq('id', user.id);
               
               if (error) {
-                console.error(`Error ${action}ing user:`, error);
-                Alert.alert('Error', `Failed to ${action} user`);
+                console.error(`Error ${action}ing station:`, error);
+                Alert.alert('Error', `Failed to ${action} station`);
                 return;
               }
 
               // Update local state
-              if (activeTab === 'Citizens') {
-                setCitizens(prevCitizens => 
-                  prevCitizens.map(c => 
-                    c.id === user.id 
-                      ? { ...c, status: !isActive ? 'Active' : 'Inactive' }
-                      : c
-                  )
-                );
-              } else {
-                setStations(prevStations => 
-                  prevStations.map(s => 
-                    s.id === user.id 
-                      ? { ...s, status: !isActive ? 'Active' : 'Inactive' }
-                      : s
-                  )
-                );
-              }
+              setStations(prevStations => 
+                prevStations.map(s => 
+                  s.id === user.id 
+                    ? { ...s, status: !isActive ? 'Active' : 'Inactive' }
+                    : s
+                )
+              );
 
-              Alert.alert('Success', `User ${action}d successfully!`);
+              Alert.alert('Success', `Station ${action}d successfully!`);
             } catch (error) {
-              console.error(`Error ${action}ing user:`, error);
-              Alert.alert('Error', `Failed to ${action} user`);
+              console.error(`Error ${action}ing station:`, error);
+              Alert.alert('Error', `Failed to ${action} station`);
             } finally {
               setLoading(false);
             }
@@ -197,6 +295,24 @@ const AUserManagement = () => {
         }
       ]
     );
+  };
+
+  const handleDisableUser = async (user) => {
+    // For citizens, use the disable/re-enable flow with modals
+    if (activeTab === 'Citizens') {
+      if (user.isDisabled) {
+        handleReEnableCitizen(user);
+      } else {
+        handleDisableCitizen(user);
+      }
+      return;
+    }
+
+    // For stations, use the simple alert flow
+    if (activeTab === 'Stations') {
+      handleDisableStation(user);
+      return;
+    }
   };
 
   const openEditModal = (user) => {
@@ -363,16 +479,28 @@ const AUserManagement = () => {
                 </View>
                 
                 <View className="items-end">
-                  <View 
-                    className="px-2 py-1 rounded-full mb-2"
-                    style={{ backgroundColor: getStatusColor(user.status) + '20' }}
-                  >
-                    <Text 
-                      className="text-xs font-medium"
-                      style={{ color: getStatusColor(user.status) }}
+                  <View className="flex-row items-center mb-2">
+                    <View 
+                      className="px-2 py-1 rounded-full mr-2"
+                      style={{ backgroundColor: getStatusColor(user.status) + '20' }}
                     >
-                      {user.status}
-                    </Text>
+                      <Text 
+                        className="text-xs font-medium"
+                        style={{ color: getStatusColor(user.status) }}
+                      >
+                        {user.status}
+                      </Text>
+                    </View>
+                    {activeTab === 'Citizens' && user.isDisabled && (
+                      <View 
+                        className="px-2 py-1 rounded-full"
+                        style={{ backgroundColor: '#dc2626' }}
+                      >
+                        <Text className="text-xs font-medium text-white">
+                          🚫 Disabled
+                        </Text>
+                      </View>
+                    )}
                   </View>
                   
                   <View className="flex-row">
@@ -397,13 +525,32 @@ const AUserManagement = () => {
                       </TouchableOpacity>
                     )}
                     <TouchableOpacity
-                      className="w-8 h-8 rounded-full bg-red-100 items-center justify-center"
+                      className="w-8 h-8 rounded-full items-center justify-center"
+                      style={{ 
+                        backgroundColor: activeTab === 'Citizens' && user.isDisabled
+                          ? '#d1fae5'
+                          : user.status === 'Active' 
+                          ? '#fee2e2' 
+                          : '#d1fae5'
+                      }}
                       onPress={() => handleDisableUser(user)}
                     >
                       <MaterialIcons 
-                        name={user.status === 'Active' ? 'block' : 'check-circle'} 
+                        name={
+                          activeTab === 'Citizens' && user.isDisabled
+                            ? 'check-circle'
+                            : user.status === 'Active' 
+                            ? 'block' 
+                            : 'check-circle'
+                        } 
                         size={16} 
-                        color={user.status === 'Active' ? '#ef4444' : '#10b981'} 
+                        color={
+                          activeTab === 'Citizens' && user.isDisabled
+                            ? '#10b981'
+                            : user.status === 'Active' 
+                            ? '#ef4444' 
+                            : '#10b981'
+                        } 
                       />
                     </TouchableOpacity>
                   </View>
@@ -575,6 +722,18 @@ const AUserManagement = () => {
                   <Text className="text-gray-600 text-sm mb-1">Last Active</Text>
                   <Text className="text-red-600 font-bold text-lg">{selectedUser?.lastActive || 'N/A'}</Text>
                 </View>
+                
+                {/* Show disable reason if citizen is disabled */}
+                {activeTab === 'Citizens' && selectedUser?.isDisabled && selectedUser?.disableReason && (
+                  <View className="mt-4 p-4 bg-red-50 border-2 border-red-200 rounded-lg">
+                    <View className="flex-row items-center mb-2">
+                      <MaterialIcons name="block" size={20} color="#dc2626" />
+                      <Text className="text-red-900 font-bold text-sm ml-2">Account Disabled</Text>
+                    </View>
+                    <Text className="text-xs font-medium text-red-800 mb-1">Reason:</Text>
+                    <Text className="text-gray-800 text-sm">{selectedUser.disableReason}</Text>
+                  </View>
+                )}
               </View>
               
               <TouchableOpacity
@@ -690,7 +849,209 @@ const AUserManagement = () => {
         </View>
       </Modal>
 
+      {/* Disable Citizen Modal */}
+      <Modal
+        visible={showDisableModal}
+        animationType="slide"
+        transparent={true}
+        onRequestClose={() => {
+          setShowDisableModal(false);
+          setDisableReason('');
+          setUserToDisable(null);
+        }}
+      >
+        <View className="flex-1 bg-black/60 justify-center items-center p-4">
+          <View className="bg-white rounded-3xl p-6 w-full max-w-md">
+            {/* Header */}
+            <View className="flex-row items-center justify-between mb-6">
+              <View className="flex-row items-center flex-1">
+                <View className="w-12 h-12 bg-red-100 rounded-full items-center justify-center mr-3">
+                  <MaterialIcons name="block" size={24} color="#dc2626" />
+                </View>
+                <View className="flex-1">
+                  <Text className="text-xl font-bold text-gray-900">Disable Account</Text>
+                  <Text className="text-gray-600 text-sm">Confirm action and provide reason</Text>
+                </View>
+              </View>
+              <TouchableOpacity
+                onPress={() => {
+                  setShowDisableModal(false);
+                  setDisableReason('');
+                  setUserToDisable(null);
+                }}
+                className="p-2"
+              >
+                <MaterialIcons name="close" size={24} color="#6b7280" />
+              </TouchableOpacity>
+            </View>
 
+            {/* User Info */}
+            {userToDisable && (
+              <View className="bg-red-50 border border-red-200 rounded-xl p-4 mb-4">
+                <Text className="text-sm text-gray-700 mb-1">
+                  <Text className="font-semibold">Citizen:</Text> {userToDisable.name}
+                </Text>
+                <Text className="text-sm text-gray-600">
+                  <Text className="font-semibold">Email:</Text> {userToDisable.email}
+                </Text>
+              </View>
+            )}
+
+            {/* Warning */}
+            <View className="bg-yellow-50 border-l-4 border-yellow-400 p-4 mb-4 rounded-r-lg">
+              <View className="flex-row">
+                <MaterialIcons name="warning" size={20} color="#f59e0b" style={{ marginRight: 8, marginTop: 2 }} />
+                <Text className="text-sm text-yellow-700 flex-1">
+                  <Text className="font-bold">Warning:</Text> Disabling this citizen will prevent them from logging in. They will see a ban message when attempting to access their account.
+                </Text>
+              </View>
+            </View>
+
+            {/* Reason Input */}
+            <View className="mb-6">
+              <Text className="text-sm font-medium text-gray-700 mb-2">
+                Reason for Disabling <Text className="text-red-500">*</Text>
+              </Text>
+              <TextInput
+                className="border border-gray-300 rounded-xl p-4 bg-gray-50 text-gray-800"
+                placeholder="Enter the reason for disabling this citizen (e.g., Violation of terms, Inappropriate behavior, etc.)"
+                value={disableReason}
+                onChangeText={setDisableReason}
+                multiline
+                numberOfLines={4}
+                textAlignVertical="top"
+                style={{ minHeight: 100 }}
+              />
+              <Text className="text-xs text-gray-500 mt-1">
+                This reason will be shown to the citizen when they attempt to log in.
+              </Text>
+            </View>
+
+            {/* Buttons */}
+            <View className="flex-row space-x-3">
+              <TouchableOpacity
+                className="flex-1 bg-gray-200 rounded-xl py-4 items-center"
+                onPress={() => {
+                  setShowDisableModal(false);
+                  setDisableReason('');
+                  setUserToDisable(null);
+                }}
+              >
+                <Text className="text-gray-700 font-semibold">Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                className={`flex-1 rounded-xl py-4 items-center ${
+                  disableReason.trim() ? 'bg-red-600' : 'bg-gray-300'
+                }`}
+                onPress={handleConfirmDisableCitizen}
+                disabled={!disableReason.trim()}
+              >
+                <Text className={`font-semibold ${disableReason.trim() ? 'text-white' : 'text-gray-500'}`}>
+                  Confirm Disable
+                </Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Re-enable Citizen Modal */}
+      <Modal
+        visible={showReEnableModal}
+        animationType="slide"
+        transparent={true}
+        onRequestClose={() => {
+          setShowReEnableModal(false);
+          setUserToReEnable(null);
+        }}
+      >
+        <View className="flex-1 bg-black/60 justify-center items-center p-4">
+          <View className="bg-white rounded-3xl p-6 w-full max-w-md">
+            {/* Header */}
+            <View className="flex-row items-center justify-between mb-6">
+              <View className="flex-row items-center flex-1">
+                <View className="w-12 h-12 bg-green-100 rounded-full items-center justify-center mr-3">
+                  <MaterialIcons name="check-circle" size={24} color="#10b981" />
+                </View>
+                <View className="flex-1">
+                  <Text className="text-xl font-bold text-gray-900">Re-enable Account</Text>
+                  <Text className="text-gray-600 text-sm">Confirm action to restore access</Text>
+                </View>
+              </View>
+              <TouchableOpacity
+                onPress={() => {
+                  setShowReEnableModal(false);
+                  setUserToReEnable(null);
+                }}
+                className="p-2"
+              >
+                <MaterialIcons name="close" size={24} color="#6b7280" />
+              </TouchableOpacity>
+            </View>
+
+            {/* User Info */}
+            {userToReEnable && (
+              <View className="bg-green-50 border border-green-200 rounded-xl p-4 mb-4">
+                <Text className="text-sm text-gray-700 mb-1">
+                  <Text className="font-semibold">Citizen:</Text> {userToReEnable.name}
+                </Text>
+                <Text className="text-sm text-gray-600">
+                  <Text className="font-semibold">Email:</Text> {userToReEnable.email}
+                </Text>
+                {userToReEnable.disableReason && (
+                  <View className="mt-3 pt-3 border-t border-green-200">
+                    <Text className="text-xs font-medium text-green-800 mb-1">Previous Ban Reason:</Text>
+                    <Text className="text-sm text-gray-700 italic">{userToReEnable.disableReason}</Text>
+                  </View>
+                )}
+              </View>
+            )}
+
+            {/* Info */}
+            <View className="bg-blue-50 border-l-4 border-blue-400 p-4 mb-4 rounded-r-lg">
+              <View className="flex-row">
+                <MaterialIcons name="info" size={20} color="#3b82f6" style={{ marginRight: 8, marginTop: 2 }} />
+                <Text className="text-sm text-blue-700 flex-1">
+                  <Text className="font-bold">Note:</Text> Re-enabling this citizen will restore their login access. They will be able to use the application again immediately.
+                </Text>
+              </View>
+            </View>
+
+            {/* Checklist */}
+            <View className="bg-gradient-to-r from-green-50 to-emerald-50 border-2 border-green-200 rounded-xl p-4 mb-6">
+              <View className="flex-row items-start">
+                <MaterialIcons name="check-circle" size={20} color="#10b981" style={{ marginRight: 8, marginTop: 2 }} />
+                <View className="flex-1">
+                  <Text className="text-sm font-semibold text-green-900 mb-2">What will happen:</Text>
+                  <Text className="text-sm text-green-800 mb-1">• Account ban will be removed</Text>
+                  <Text className="text-sm text-green-800 mb-1">• Login access will be restored</Text>
+                  <Text className="text-sm text-green-800 mb-1">• Previous ban reason will be cleared</Text>
+                  <Text className="text-sm text-green-800">• Citizen can immediately access the application</Text>
+                </View>
+              </View>
+            </View>
+
+            {/* Buttons */}
+            <View className="flex-row space-x-3">
+              <TouchableOpacity
+                className="flex-1 bg-gray-200 rounded-xl py-4 items-center"
+                onPress={() => {
+                  setShowReEnableModal(false);
+                  setUserToReEnable(null);
+                }}
+              >
+                <Text className="text-gray-700 font-semibold">Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                className="flex-1 bg-green-600 rounded-xl py-4 items-center"
+                onPress={handleConfirmReEnableCitizen}
+              >
+                <Text className="text-white font-semibold">Confirm Re-enable</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
         
     </ScrollView>
   );

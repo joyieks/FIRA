@@ -13,6 +13,7 @@ export default function RMap({ routingInfo }) {
   const [errorMsg, setErrorMsg] = useState(null);
   const [isLoading, setIsLoading] = useState(true);
   const [assignedReports, setAssignedReports] = useState([]);
+  const [nearbyReports, setNearbyReports] = useState([]); // Nearby reports within radius
   const [selectedReport, setSelectedReport] = useState(null);
   const [showReportModal, setShowReportModal] = useState(false);
   const [region, setRegion] = useState(null);
@@ -46,9 +47,9 @@ export default function RMap({ routingInfo }) {
   };
 
   const getMarkerColor = (report) => {
-    // First check for alarm level
-    if (report?.recommended_alarm_level || report?.alarm_level) {
-      return getAlarmLevelColor(report.recommended_alarm_level || report.alarm_level);
+    // First check for alarm level (prefer admin-set final alarm level)
+    if (report?.final_fire_alarm_level || report?.alarm_level || report?.recommended_alarm_level) {
+      return getAlarmLevelColor(report.final_fire_alarm_level || report.alarm_level || report.recommended_alarm_level);
     }
     
     // Fallback to prediction-based colors
@@ -60,7 +61,19 @@ export default function RMap({ routingInfo }) {
   };
 
   const formatAlarm = (report) => {
-    return report?.recommended_alarm_level || report?.alarm_level || report?.status || 'Unknown';
+    // Prefer admin-set final alarm level, fall back to current alarm_level, then AI suggestion, then default 1st Alarm
+    const alarm =
+      report?.final_fire_alarm_level ||
+      report?.alarm_level ||
+      report?.recommended_alarm_level ||
+      report?.status ||
+      '1st Alarm';
+
+    const alarmText = (typeof alarm === 'string' ? alarm : String(alarm || '')).trim();
+    if (!alarmText || alarmText.toLowerCase().includes('unknown')) {
+      return '1st Alarm';
+    }
+    return alarmText;
   };
 
   const formatPrediction = (report) => {
@@ -813,6 +826,101 @@ export default function RMap({ routingInfo }) {
     }
   };
 
+  // Fetch nearby reports (within radius, not assigned to station)
+  const fetchNearbyReports = async () => {
+    if (!location?.coords) {
+      console.log('⚠️ No location available for nearby reports');
+      setNearbyReports([]);
+      return;
+    }
+
+    try {
+      console.log('🔍 Fetching nearby reports for responder...');
+      
+      // Fetch all reports from API
+      const response = await fetch('https://fire-detection-api-production-f55b.up.railway.app/get_reports');
+      if (!response.ok) {
+        console.error('Failed to fetch fire reports from API');
+        return;
+      }
+
+      const allReports = await response.json();
+      console.log('🔥 All reports from API:', allReports.length);
+
+      // Get assigned report IDs to exclude them from nearby reports
+      const stationId = userData?.stationId || userData?.station_id;
+      const assignedReportIds = new Set();
+      
+      if (stationId) {
+        const { data: assignments } = await supabase
+          .from('report_assignments')
+          .select('report_id')
+          .eq('assignee_type', 'station')
+          .eq('assignee_id', stationId);
+        
+        if (assignments) {
+          assignments.forEach(a => assignedReportIds.add(String(a.report_id)));
+        }
+      }
+
+      // Filter and calculate distance for nearby reports
+      const MIN_DISTANCE_KM = 0.0; // Start from 0km
+      const MAX_DISTANCE_KM = 10.0; // Within 10km
+      
+      const nearby = allReports
+        .filter(report => {
+          // Exclude "No Fire/No Smoke" reports
+          if (isNoFireNoSmoke(report)) return false;
+          
+          // Exclude already assigned reports
+          if (assignedReportIds.has(String(report.id))) return false;
+          
+          // Must have valid coordinates
+          const latNum = typeof report?.latitude === 'number' ? report.latitude : parseFloat(report?.latitude);
+          const lngNum = typeof report?.longitude === 'number' ? report.longitude : parseFloat(report?.longitude);
+          if (isNaN(latNum) || isNaN(lngNum)) return false;
+          
+          // Calculate distance
+          const distance = calculateDistance(
+            location.coords.latitude,
+            location.coords.longitude,
+            latNum,
+            lngNum
+          );
+          
+          // Only include reports within range
+          return distance >= MIN_DISTANCE_KM && distance <= MAX_DISTANCE_KM;
+        })
+        .map(report => {
+          const latNum = typeof report?.latitude === 'number' ? report.latitude : parseFloat(report?.latitude);
+          const lngNum = typeof report?.longitude === 'number' ? report.longitude : parseFloat(report?.longitude);
+          const distance = calculateDistance(
+            location.coords.latitude,
+            location.coords.longitude,
+            latNum,
+            lngNum
+          );
+          
+          return {
+            ...report,
+            latitude: latNum,
+            longitude: lngNum,
+            distance: distance,
+            distanceText: distance < 1 
+              ? `${Math.round(distance * 1000)}m away` 
+              : `${distance.toFixed(1)}km away`
+          };
+        })
+        .sort((a, b) => a.distance - b.distance); // Sort by closest first
+
+      console.log(`✅ Found ${nearby.length} nearby report(s) within ${MAX_DISTANCE_KM}km`);
+      setNearbyReports(nearby);
+    } catch (error) {
+      console.error('❌ Error fetching nearby reports:', error);
+      setNearbyReports([]);
+    }
+  };
+
   // Fetch assigned fire reports - reports assigned to the responder's station (like Station Map)
   const fetchAssignedReports = async () => {
     if (!userData?.id) return;
@@ -985,6 +1093,20 @@ export default function RMap({ routingInfo }) {
       console.error('Error fetching assigned reports:', error);
     }
   };
+
+  // Fetch nearby reports when location is available
+  useEffect(() => {
+    if (location?.coords && userData?.id) {
+      fetchNearbyReports();
+      
+      // Refresh nearby reports every 30 seconds
+      const nearbyInterval = setInterval(() => {
+        fetchNearbyReports();
+      }, 30000);
+      
+      return () => clearInterval(nearbyInterval);
+    }
+  }, [location, userData?.id]);
 
   // Get current location and fetch assigned reports
   useEffect(() => {
@@ -1210,7 +1332,7 @@ export default function RMap({ routingInfo }) {
     return () => clearInterval(statusInterval);
   }, [acceptedAssignment]);
 
-  // Handle routingInfo from RStatus when responder accepts assignment
+  // Handle routingInfo from RStatus (either accept assignment or focus-only from nearby list)
   useEffect(() => {
     if (!routingInfo) return;
 
@@ -1218,13 +1340,13 @@ export default function RMap({ routingInfo }) {
     
     const handleRouting = async () => {
       try {
-        const { fireReportId, location: fireLocation, destination } = routingInfo;
+        const { fireReportId, location: fireLocation, destination, focusOnly } = routingInfo;
         
         console.log('🔍 Fetching fire report details for ID:', fireReportId);
         console.log('📍 Fire location from notification:', fireLocation);
         console.log('📍 Destination:', destination);
 
-        // Fetch the specific fire report from Railway API
+        // Fetch the specific fire report from Railway API (needed for modal fields)
         const response = await fetch('https://fire-detection-api-production-f55b.up.railway.app/get_reports');
         if (!response.ok) {
           console.error('❌ Failed to fetch fire reports from API');
@@ -1255,6 +1377,33 @@ export default function RMap({ routingInfo }) {
           return;
         }
 
+        // If focusOnly: clear routes and just center & show modal
+        if (focusOnly) {
+          console.log('🧭 Focus-only request: clearing routes and centering on report');
+          setRouteCoordinates([]);
+          setAllRoutes([]);
+          setRouteInfo(null);
+          setAcceptedAssignment(null);
+
+          setSelectedReport({
+            ...fireReport,
+            latitude: lat,
+            longitude: lng,
+          });
+          setShowReportModal(true);
+
+          // Center map on the report
+          setRegion({
+            latitude: lat,
+            longitude: lng,
+            latitudeDelta: 0.01,
+            longitudeDelta: 0.01,
+          });
+
+          return;
+        }
+
+        // Otherwise, compute full route (assignment accept)
         // Get current location if not already available
         let currentLocation = location;
         if (!currentLocation?.coords) {
@@ -1570,6 +1719,50 @@ export default function RMap({ routingInfo }) {
             />
           </React.Fragment>
         ))}
+
+        {/* Nearby Reports Markers (not assigned to station) */}
+        {nearbyReports.map(report => {
+          const latNum = typeof report?.latitude === 'number' ? report.latitude : parseFloat(report?.latitude);
+          const lngNum = typeof report?.longitude === 'number' ? report.longitude : parseFloat(report?.longitude);
+          
+          if (isNaN(latNum) || isNaN(lngNum)) return null;
+
+          const color = getMarkerColor(report);
+          const alarmText = toStr(formatAlarm(report));
+          const aiText = toStr(formatPrediction(report));
+          const locText = toStr(report?.address || report?.geotag_location || 'Not specified', 'Not specified');
+
+          return (
+            <Marker
+              key={`nearby-${report.id}`}
+              coordinate={{ latitude: latNum, longitude: lngNum }}
+              title="📍 Nearby Fire Report"
+              description={`${alarmText} - ${locText} (${report.distanceText})`}
+              onPress={() => {
+                setSelectedReport(report);
+                setShowReportModal(true);
+              }}
+            >
+              <View style={{
+                width: 28,
+                height: 28,
+                borderRadius: 14,
+                backgroundColor: color,
+                borderWidth: 2,
+                borderColor: '#ffffff',
+                justifyContent: 'center',
+                alignItems: 'center',
+                shadowColor: '#000',
+                shadowOffset: { width: 0, height: 2 },
+                shadowOpacity: 0.3,
+                shadowRadius: 4,
+                elevation: 6,
+              }}>
+                <Ionicons name="location" size={16} color="#ffffff" />
+              </View>
+            </Marker>
+          );
+        })}
 
         {/* Assigned fire reports markers */}
         {assignedReports.map(report => {

@@ -262,11 +262,65 @@ export const handleAssignmentResponse = async (reportId, stationId, response) =>
       return { success: false, error: error.message };
     }
 
+    // Notify responders when accepted (web-side implementation to avoid cross-bundle imports)
+    if (response === 'accepted') {
+      try {
+        await notifyRespondersOnStationAcceptanceWeb(stationId, reportId);
+      } catch (notifyErr) {
+        console.error('⚠️ Failed to notify responders on station acceptance:', notifyErr);
+      }
+    }
+
     // If declined, we might want to notify admin (handled in component)
     return { success: true };
   } catch (error) {
     console.error('❌ Error in handleAssignmentResponse:', error);
     return { success: false, error: error.message };
+  }
+};
+
+// -------- Web-side responder acceptance notifier (avoid importing mobile bundle) --------
+const notifyRespondersOnStationAcceptanceWeb = async (stationId, reportId) => {
+  try {
+    if (!stationId || !reportId) return;
+
+    // Get responders for the station
+    const { data: responders, error: responderErr } = await supabase
+      .from('responders')
+      .select('id')
+      .eq('station_id', stationId);
+
+    if (responderErr) {
+      console.error('❌ Error fetching responders for acceptance notify:', responderErr);
+      return;
+    }
+    if (!responders || responders.length === 0) return;
+
+    // Update any existing notifications for this report to accepted
+    await supabase
+      .from('responder_notifications')
+      .update({ status: 'accepted' })
+      .eq('fire_report_id', String(reportId))
+      .eq('station_id', stationId);
+
+    const readableId = `FR-${String(reportId).substring(0, 8).toUpperCase()}`;
+    const title = `✅ Station Accepted Report ${readableId}`;
+    const message = `Your station accepted report ${readableId}. Please proceed.`;
+
+    const rows = responders.map(r => ({
+      responder_id: r.id,
+      station_id: stationId,
+      fire_report_id: String(reportId),
+      title,
+      message,
+      priority: 'high',
+      status: 'accepted',
+      is_read: false
+    }));
+
+    await supabase.from('responder_notifications').insert(rows);
+  } catch (err) {
+    console.error('❌ notifyRespondersOnStationAcceptanceWeb error:', err);
   }
 };
 

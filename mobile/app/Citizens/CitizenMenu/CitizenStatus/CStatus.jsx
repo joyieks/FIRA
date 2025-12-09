@@ -10,6 +10,7 @@ import { useAuth } from '../../../config/AuthContext';
 import { supabase } from '../../../config/supabase';
 import { sendPushNotification } from '../../../services/pushNotificationService';
 import { createNearbyIncidentNotifications } from '../../../services/citizenNotificationService';
+import { notifyRespondersOnNewReport } from '../../../services/responderNotificationService';
 
 // Fire Detection API base
 const API_URL = 'https://fire-detection-api-production-f55b.up.railway.app/predict';
@@ -2199,9 +2200,60 @@ const CStatus = () => {
               } else {
                 console.log(`✅ Successfully notified ${nearbyStations.length} station(s):`, 
                   nearbyStations.map(s => s.station_name).join(', '));
+                
+                // Also notify responders in these stations
+                const reportId = String(data?.id || newReport.id);
+                const reportData = {
+                  ...data,
+                  id: reportId,
+                  address: pickedAddress || currentLocation,
+                  latitude: reportLat,
+                  longitude: reportLng,
+                  confidence: data?.confidence,
+                  prediction: data?.prediction,
+                  cause: emergencyData.cause,
+                  number_of_structures_on_fire: emergencyData.numberOfStructures,
+                  created_at: new Date().toISOString()
+                };
+                
+                // Notify responders for each nearby station
+                for (const station of nearbyStations) {
+                  try {
+                    await notifyRespondersOnNewReport(station.id, {
+                      ...reportData,
+                      // Use station ID as jurisdiction indicator
+                      station_id: station.id
+                    });
+                    console.log(`✅ Notified responders in station: ${station.station_name}`);
+                  } catch (responderNotifError) {
+                    console.error(`❌ Error notifying responders in station ${station.station_name}:`, responderNotifError);
+                  }
+                }
               }
             } else {
               console.log('ℹ️ No stations found within coverage area of this report');
+              
+              // Even if no nearby stations, try to notify responders based on jurisdiction
+              try {
+                const reportId = String(data?.id || newReport.id);
+                const reportData = {
+                  ...data,
+                  id: reportId,
+                  address: pickedAddress || currentLocation,
+                  latitude: reportLat,
+                  longitude: reportLng,
+                  confidence: data?.confidence,
+                  prediction: data?.prediction,
+                  cause: emergencyData.cause,
+                  number_of_structures_on_fire: emergencyData.numberOfStructures,
+                  created_at: new Date().toISOString()
+                };
+                
+                await notifyRespondersOnNewReport(reportId, reportData);
+                console.log('✅ Attempted to notify responders based on jurisdiction');
+              } catch (jurisdictionError) {
+                console.error('❌ Error notifying responders by jurisdiction:', jurisdictionError);
+              }
             }
           }
         }

@@ -620,3 +620,330 @@ export async function fetchReportData(reportId) {
   }
 }
 
+/**
+ * Notify all responders in a station when a report is assigned to their station
+ * This is called when a report is assigned to a station (not individual responders)
+ * 
+ * @param {string} stationId - The station ID that was assigned the report
+ * @param {string} reportId - The fire report ID
+ * @param {object} reportData - Full report data (optional, for details)
+ */
+export async function notifyRespondersOnStationAssignment(stationId, reportId, reportData = null) {
+  try {
+    console.log('🔔 Notifying responders of station assignment:', { stationId, reportId });
+
+    if (!stationId || !reportId) {
+      console.error('❌ Missing stationId or reportId');
+      return { success: false, message: 'Missing required parameters' };
+    }
+
+    // Get all responders for this station
+    const responders = await getStationResponders(stationId);
+    
+    if (!responders || responders.length === 0) {
+      console.log('⚠️ No responders found for station:', stationId);
+      return { success: false, message: 'No responders found' };
+    }
+
+    console.log(`📋 Found ${responders.length} responders for station ${stationId}`);
+
+    // Fetch report data if not provided
+    let report = reportData;
+    if (!report) {
+      report = await fetchReportData(reportId);
+    }
+
+    // Helper function to format values
+    const toStr = (val, def = 'Not specified') => val || def;
+    const formatAlarm = (report) => {
+      return report?.alarm_level || report?.recommended_alarm_level || report?.suggested_alarm_level || '1st Alarm';
+    };
+    const formatPrediction = (report) => {
+      return report?.prediction || report?.ai_detection || 'Not analyzed';
+    };
+
+    // Create notification message
+    const locationInfo = toStr(report?.address || report?.resolved_address || report?.geotag_location, 'Location not specified');
+    const alarmLevel = formatAlarm(report || {});
+    const aiDetection = formatPrediction(report || {});
+    const reporter = toStr(report?.reporter_name || report?.reporter || report?.reported_by, 'Unknown Reporter');
+    const cause = toStr(report?.cause || report?.cause_of_fire || report?.possible_cause, 'Under investigation');
+    const structure = toStr(report?.structure || report?.structure_type || report?.building_type, 'Not specified');
+    const structuresAffected = report?.number_of_structures_on_fire != null ? String(report.number_of_structures_on_fire) : 'Unknown';
+    const timestamp = toStr(report?.formatted_timestamp || report?.timestamp || report?.created_at, 'Time not specified');
+    const confidence = report?.confidence ? `${report.confidence}%` : 'N/A';
+    
+    const notificationMessage = `🚨 NEW FIRE REPORT ASSIGNED TO YOUR STATION 🚨
+📍 Location: ${locationInfo}
+🔥 Alarm Level: ${alarmLevel}
+📊 AI Detection: ${aiDetection} (${confidence})
+👤 Reporter: ${reporter}
+📝 Cause: ${cause}
+💨 Smoke Analysis: ${report?.smoke_detection ? toStr(`${report.smoke_detection}${report.smoke_confidence ? ` (${report.smoke_confidence}%)` : ''}`) : 'Not analyzed'}
+🏠 Structure: ${structure}
+🏘️ Structures Affected: ${structuresAffected}
+⏰ Reported: ${timestamp}
+
+A new fire report has been assigned to your station. Please review the incident details and respond accordingly.`;
+
+    const title = `🚨 New Fire Report Assigned to Your Station`;
+
+    // Create notifications for all responders in the station
+    console.log(`📝 Creating station assignment notifications for ${responders.length} responder(s)...`);
+    
+    const notificationPromises = responders.map(async (responder) => {
+      try {
+        const { error: notificationError } = await supabase
+          .from('responder_notifications')
+          .insert({
+            responder_id: responder.id,
+            station_id: stationId,
+            fire_report_id: String(reportId),
+            title: title,
+            message: notificationMessage,
+            priority: 'urgent', // High priority for station assignments
+            status: 'pending', // Mark as pending so responders can see it
+            is_read: false
+          });
+
+        if (notificationError) {
+          console.error(`❌ Error notifying responder ${responder.id}:`, notificationError);
+          return false;
+        }
+
+        console.log(`✅ Station assignment notification sent to responder ${responder.id}`);
+        return true;
+      } catch (error) {
+        console.error(`❌ Error notifying responder ${responder.id}:`, error);
+        return false;
+      }
+    });
+
+    const results = await Promise.all(notificationPromises);
+    const successCount = results.filter(Boolean).length;
+    
+    console.log('📊 Station assignment notification results:', { successCount, totalResponders: responders.length });
+    
+    if (successCount > 0) {
+      console.log(`✅ Successfully notified ${successCount} responders of station assignment`);
+      return { 
+        success: true, 
+        count: successCount,
+        total: responders.length
+      };
+    } else {
+      console.error('❌ Failed to create any station assignment notifications');
+      return { success: false, message: 'Failed to create any notifications' };
+    }
+  } catch (error) {
+    console.error('❌ Error notifying responders on station assignment:', error);
+    return { success: false, error: error.message };
+  }
+}
+
+/**
+ * Notify responders that their station has accepted an assigned report.
+ * Also updates any existing responder_notifications for the same report to status "accepted".
+ */
+export async function notifyRespondersOnStationAcceptance(stationId, reportId, reportData = null) {
+  try {
+    console.log('✅ Notifying responders of station acceptance:', { stationId, reportId });
+
+    if (!stationId || !reportId) {
+      console.error('❌ Missing stationId or reportId for acceptance notification');
+      return { success: false, message: 'Missing required parameters' };
+    }
+
+    // Get all responders for this station
+    const responders = await getStationResponders(stationId);
+    if (!responders || responders.length === 0) {
+      console.log('⚠️ No responders found for station:', stationId);
+      return { success: false, message: 'No responders found' };
+    }
+
+    // Fetch report data if not provided
+    let report = reportData;
+    if (!report) {
+      report = await fetchReportData(reportId);
+    }
+
+    const toStr = (val, def = 'Not specified') => val || def;
+    const alarmLevel = report?.final_fire_alarm_level || report?.alarm_level || report?.recommended_alarm_level || '1st Alarm';
+    const locationInfo = toStr(report?.address || report?.resolved_address || report?.geotag_location, 'Location not specified');
+    const readableId = `FR-${String(reportId).substring(0, 8).toUpperCase()}`;
+
+    const title = `✅ Station Accepted Report ${readableId}`;
+    const message = `Your station accepted report ${readableId}.\n📍 ${locationInfo}\n🔥 Alarm Level: ${alarmLevel}`;
+
+    // Update existing notifications for this report to accepted
+    await supabase
+      .from('responder_notifications')
+      .update({ status: 'accepted' })
+      .eq('fire_report_id', String(reportId))
+      .eq('station_id', stationId);
+
+    // Insert a fresh acceptance notification for each responder
+    const inserts = responders.map(async (responder) => {
+      const { error } = await supabase
+        .from('responder_notifications')
+        .insert({
+          responder_id: responder.id,
+          station_id: stationId,
+          fire_report_id: String(reportId),
+          title,
+          message,
+          priority: 'high',
+          status: 'accepted',
+          is_read: false
+        });
+      if (error) {
+        console.error(`❌ Error inserting acceptance notification for responder ${responder.id}:`, error);
+        return false;
+      }
+      return true;
+    });
+
+    await Promise.all(inserts);
+    console.log('✅ Acceptance notifications created for responders');
+    return { success: true };
+  } catch (error) {
+    console.error('❌ Error notifying responders on station acceptance:', error);
+    return { success: false, message: error.message };
+  }
+}
+
+/**
+ * Notify responders when a new report is validated/submitted under their station's jurisdiction
+ * This is called when a report is created and needs to notify nearby stations
+ * 
+ * @param {string} reportId - The fire report ID
+ * @param {object} reportData - Full report data
+ */
+export async function notifyRespondersOnNewReport(reportId, reportData) {
+  try {
+    console.log('🔔 Notifying responders of new validated report:', { reportId });
+
+    if (!reportId || !reportData) {
+      console.error('❌ Missing reportId or reportData');
+      return { success: false, message: 'Missing required parameters' };
+    }
+
+    // Get report location
+    const lat = parseFloat(reportData.latitude || reportData.lat);
+    const lng = parseFloat(reportData.longitude || reportData.lng);
+    
+    if (isNaN(lat) || isNaN(lng)) {
+      console.log('⚠️ Report has no valid coordinates, cannot determine jurisdiction');
+      return { success: false, message: 'Report has no valid coordinates' };
+    }
+
+    const reportLocation = { latitude: lat, longitude: lng };
+
+    // Determine which station has jurisdiction
+    const station = await getStationWithJurisdiction(reportId, reportLocation);
+    
+    if (!station || !station.stationId) {
+      console.log('⚠️ No station jurisdiction found for new report');
+      return { success: false, message: 'No station jurisdiction found' };
+    }
+
+    console.log('✅ Station with jurisdiction for new report:', station);
+
+    // Get all responders for this station
+    const responders = await getStationResponders(station.stationId);
+    
+    if (!responders || responders.length === 0) {
+      console.log('⚠️ No responders found for station:', station.stationId);
+      return { success: false, message: 'No responders found' };
+    }
+
+    console.log(`📋 Found ${responders.length} responders for station ${station.stationId}`);
+
+    // Helper function to format values
+    const toStr = (val, def = 'Not specified') => val || def;
+    const formatAlarm = (report) => {
+      return report?.alarm_level || report?.recommended_alarm_level || report?.suggested_alarm_level || '1st Alarm';
+    };
+    const formatPrediction = (report) => {
+      return report?.prediction || report?.ai_detection || 'Not analyzed';
+    };
+
+    // Create notification message
+    const locationInfo = toStr(reportData?.address || reportData?.resolved_address || reportData?.geotag_location, 'Location not specified');
+    const alarmLevel = formatAlarm(reportData);
+    const aiDetection = formatPrediction(reportData);
+    const reporter = toStr(reportData?.reporter_name || reportData?.reporter || reportData?.reported_by, 'Unknown Reporter');
+    const cause = toStr(reportData?.cause || reportData?.cause_of_fire || reportData?.possible_cause, 'Under investigation');
+    const structure = toStr(reportData?.structure || reportData?.structure_type || reportData?.building_type, 'Not specified');
+    const structuresAffected = reportData?.number_of_structures_on_fire != null ? String(reportData.number_of_structures_on_fire) : 'Unknown';
+    const timestamp = toStr(reportData?.formatted_timestamp || reportData?.timestamp || reportData?.created_at, 'Time not specified');
+    const confidence = reportData?.confidence ? `${reportData.confidence}%` : 'N/A';
+    
+    const notificationMessage = `🔥 NEW FIRE REPORT IN YOUR JURISDICTION 🔥
+📍 Location: ${locationInfo}
+🔥 Alarm Level: ${alarmLevel}
+📊 AI Detection: ${aiDetection} (${confidence})
+👤 Reporter: ${reporter}
+📝 Cause: ${cause}
+💨 Smoke Analysis: ${reportData?.smoke_detection ? toStr(`${reportData.smoke_detection}${reportData.smoke_confidence ? ` (${reportData.smoke_confidence}%)` : ''}`) : 'Not analyzed'}
+🏠 Structure: ${structure}
+🏘️ Structures Affected: ${structuresAffected}
+⏰ Reported: ${timestamp}
+
+A new fire report has been validated and submitted in your station's jurisdiction. Please review the incident details.`;
+
+    const title = `🔥 New Fire Report in Your Station's Jurisdiction`;
+
+    // Create notifications for all responders in the station
+    console.log(`📝 Creating new report notifications for ${responders.length} responder(s)...`);
+    
+    const notificationPromises = responders.map(async (responder) => {
+      try {
+        const { error: notificationError } = await supabase
+          .from('responder_notifications')
+          .insert({
+            responder_id: responder.id,
+            station_id: station.stationId,
+            fire_report_id: String(reportId),
+            title: title,
+            message: notificationMessage,
+            priority: 'high', // High priority for new reports
+            status: 'pending', // Mark as pending
+            is_read: false
+          });
+
+        if (notificationError) {
+          console.error(`❌ Error notifying responder ${responder.id}:`, notificationError);
+          return false;
+        }
+
+        console.log(`✅ New report notification sent to responder ${responder.id}`);
+        return true;
+      } catch (error) {
+        console.error(`❌ Error notifying responder ${responder.id}:`, error);
+        return false;
+      }
+    });
+
+    const results = await Promise.all(notificationPromises);
+    const successCount = results.filter(Boolean).length;
+    
+    console.log('📊 New report notification results:', { successCount, totalResponders: responders.length });
+    
+    if (successCount > 0) {
+      console.log(`✅ Successfully notified ${successCount} responders of new report`);
+      return { 
+        success: true, 
+        count: successCount,
+        total: responders.length
+      };
+    } else {
+      console.error('❌ Failed to create any new report notifications');
+      return { success: false, message: 'Failed to create any notifications' };
+    }
+  } catch (error) {
+    console.error('❌ Error notifying responders on new report:', error);
+    return { success: false, error: error.message };
+  }
+}
+
