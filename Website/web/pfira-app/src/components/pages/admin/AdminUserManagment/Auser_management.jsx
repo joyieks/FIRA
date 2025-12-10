@@ -6,12 +6,11 @@ import { GoogleMap, Marker, useJsApiLoader } from '@react-google-maps/api';
 
 // Move libraries outside component to prevent re-initialization
 const GOOGLE_MAPS_LIBRARIES = ['places'];
+const GOOGLE_MAPS_API_KEY = 'AIzaSyBX5taF1AgNhicxw5_BXUJDs6ouniAuiQI';
 
 const Auser_management = () => {
-  const GOOGLE_MAPS_API_KEY = 'AIzaSyBX5taF1AgNhicxw5_BXUJDs6ouniAuiQI';
-  
   const { isLoaded: isMapLoaded, loadError } = useJsApiLoader({
-    id: 'google-map-user-management',
+    id: 'google-map-admin',
     googleMapsApiKey: GOOGLE_MAPS_API_KEY,
     libraries: GOOGLE_MAPS_LIBRARIES
   });

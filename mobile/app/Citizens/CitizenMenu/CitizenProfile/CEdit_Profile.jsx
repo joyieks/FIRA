@@ -179,7 +179,7 @@ const CEdit_Profile = () => {
       setProfile({ ...tempProfile, photoUrl: profilePictureUrl, photo: null });
       setTempProfile({ ...tempProfile, photoUrl: profilePictureUrl, photo: null });
       setSaving(false);
-      setShowSuccess(true);
+    setShowSuccess(true);
       
       console.log('✅ Profile updated successfully with photo URL:', profilePictureUrl);
     } catch (error) {
@@ -248,7 +248,7 @@ const CEdit_Profile = () => {
           {saving ? (
             <ActivityIndicator size="small" color="#fff" />
           ) : (
-            <Text className="text-white font-bold text-lg">Save Changes</Text>
+          <Text className="text-white font-bold text-lg">Save Changes</Text>
           )}
         </TouchableOpacity>
       </View>

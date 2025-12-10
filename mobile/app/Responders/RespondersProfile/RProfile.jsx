@@ -16,14 +16,14 @@ const RProfile = () => {
   const [loading, setLoading] = useState(true);
 
   // Fetch responder profile data from Supabase whenever screen comes into focus
-  const fetchProfile = async () => {
-    if (!userData?.id && !userData?.uid) {
-      console.log('No user ID available, userData:', userData);
-      setLoading(false);
-      return;
-    }
+    const fetchProfile = async () => {
+      if (!userData?.id && !userData?.uid) {
+        console.log('No user ID available, userData:', userData);
+        setLoading(false);
+        return;
+      }
 
-    try {
+      try {
         const userId = userData.id || userData.uid;
         console.log('Fetching responder profile for user:', { userId, userData });
         
@@ -98,7 +98,7 @@ const RProfile = () => {
             picUrl = await getProfilePictureUrl(userId, 'responder');
           }
           setProfilePictureUrl(picUrl);
-
+          
           setProfile({
             firstName: responderData.first_name || 'N/A',
             lastName: responderData.last_name || 'N/A',
@@ -116,17 +116,17 @@ const RProfile = () => {
           console.log('No responder data found for user');
           Alert.alert('Error', 'Responder profile not found. Please contact administrator.');
         }
-    } catch (error) {
-      console.error('Error in fetchProfile:', error);
-      Alert.alert('Error', 'An error occurred while loading profile');
-    } finally {
-      setLoading(false);
-    }
-  };
+      } catch (error) {
+        console.error('Error in fetchProfile:', error);
+        Alert.alert('Error', 'An error occurred while loading profile');
+      } finally {
+        setLoading(false);
+      }
+    };
 
   useFocusEffect(
     React.useCallback(() => {
-      fetchProfile();
+    fetchProfile();
     }, [userData?.id, userData?.uid, userData?.email])
   );
 
@@ -182,11 +182,11 @@ const RProfile = () => {
               style={{ width: 96, height: 96, borderRadius: 48 }}
             />
           ) : (
-            <View className="w-24 h-24 rounded-full mb-4 items-center justify-center bg-fire mt-20">
-              <Text className="text-4xl font-bold text-white">
-                {profile.firstName[0]}{profile.lastName[0]}
-              </Text>
-            </View>
+          <View className="w-24 h-24 rounded-full mb-4 items-center justify-center bg-fire mt-20">
+            <Text className="text-4xl font-bold text-white">
+              {profile.firstName[0]}{profile.lastName[0]}
+            </Text>
+          </View>
           )}
           <Text className="text-2xl font-bold text-gray-800 mb-1">{profile.firstName} {profile.lastName}</Text>
           <Text className="text-base text-gray-500 mb-1">{profile.userPosition}</Text>

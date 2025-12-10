@@ -4,9 +4,12 @@ import { supabase } from '../../../../config/supabase';
 import { useNotifications } from '../../../../contexts/NotificationContext';
 import { checkStationIsBusy, findNearestStations, findNearestStationsToStation, handleAssignmentResponse, calculateDistance } from '../../../../utils/assignmentHelpers';
 
+// Move libraries outside component to prevent re-initialization
+const GOOGLE_MAPS_LIBRARIES = ['places'];
+const GOOGLE_MAPS_API_KEY = 'AIzaSyBX5taF1AgNhicxw5_BXUJDs6ouniAuiQI';
+
 const Adashboard = () => {
   const { unreadCount, stopAlert, audioBlocked, playAlert } = useNotifications();
-  const GOOGLE_MAPS_API_KEY = 'AIzaSyBX5taF1AgNhicxw5_BXUJDs6ouniAuiQI';
   const [mapLoaded, setMapLoaded] = useState(false);
   const [mapError, setMapError] = useState(null);
   const [fireReports, setFireReports] = useState([]);
@@ -104,8 +107,9 @@ const Adashboard = () => {
   const [stationActiveCounts, setStationActiveCounts] = useState({}); // {stationId: busyCount} for reroute modal
   // Load Google Maps API once globally to avoid duplicate script loads
   const { isLoaded: isMapsLoaded, loadError: mapsLoadError } = useJsApiLoader({
-    id: 'google-map-script',
-    googleMapsApiKey: GOOGLE_MAPS_API_KEY
+    id: 'google-map-admin',
+    googleMapsApiKey: GOOGLE_MAPS_API_KEY,
+    libraries: GOOGLE_MAPS_LIBRARIES
   });
 
   // Fixed location for Bureau of Fire Protection - Regional Office VII

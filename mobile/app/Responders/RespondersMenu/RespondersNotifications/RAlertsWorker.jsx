@@ -513,9 +513,9 @@ export default function RAlertsWorker() {
                               message.includes('under control');
         
         return (isCompleted || isStatusChange) &&
-               !n.is_read &&
-               (n.priority === 'high' || n.priority === 'urgent') &&
-               !n.title?.includes('Alarm Level Changed') && // Exclude alarm changes (already handled)
+        !n.is_read &&
+        (n.priority === 'high' || n.priority === 'urgent') &&
+        !n.title?.includes('Alarm Level Changed') && // Exclude alarm changes (already handled)
                !processedNotificationIdsRef.current.has(`status-${n.id}`); // Use different key for status updates
       });
       
@@ -576,17 +576,17 @@ export default function RAlertsWorker() {
             if (!alreadySentPush) {
               try {
                 const notificationResult = await scheduleLocalNotification(
-                  statusUpdate.title || '🔥 Fire Status Update',
-                  statusUpdate.message || 'The fire report status has been updated.',
-                  {
-                    type: 'status_update',
-                    notificationId: statusUpdate.id,
-                    fireReportId: statusUpdate.fire_report_id,
-                    priority: statusUpdate.priority,
-                    status: statusUpdate.status
-                  }
-                );
-                
+              statusUpdate.title || '🔥 Fire Status Update',
+              statusUpdate.message || 'The fire report status has been updated.',
+              {
+                type: 'status_update',
+                notificationId: statusUpdate.id,
+                fireReportId: statusUpdate.fire_report_id,
+                priority: statusUpdate.priority,
+                status: statusUpdate.status
+              }
+            );
+            
                 if (notificationResult) {
                   console.log('✅ Status update push notification sent successfully');
                   if (isUnderControl) {
@@ -862,16 +862,16 @@ export default function RAlertsWorker() {
             if (!alreadySentPush) {
               try {
                 const notificationResult = await scheduleLocalNotification(
-                  newData.title || '🔥 Fire Status Update',
-                  newData.message || 'The fire report status has been updated.',
-                  {
-                    type: 'status_update',
-                    notificationId: newData.id,
-                    fireReportId: newData.fire_report_id,
-                    priority: newData.priority,
-                    status: newData.status
-                  }
-                );
+              newData.title || '🔥 Fire Status Update',
+              newData.message || 'The fire report status has been updated.',
+              {
+                type: 'status_update',
+                notificationId: newData.id,
+                fireReportId: newData.fire_report_id,
+                priority: newData.priority,
+                status: newData.status
+              }
+            );
                 
                 if (notificationResult) {
                   console.log('✅ Real-time: Status update push notification sent successfully');
@@ -1030,7 +1030,7 @@ export default function RAlertsWorker() {
       
       // Update notification status (target the specific notification id)
       const updatePayload = { 
-        is_read: true,
+          is_read: true,
         status,
         updated_at: new Date().toISOString()
       };
@@ -1128,62 +1128,62 @@ export default function RAlertsWorker() {
   return (
     <>
       {/* Assignment Modal */}
-      <Modal
-        visible={showAssignmentModal}
-        transparent={true}
-        animationType="fade"
-        onRequestClose={() => {}} // Prevent dismissing with back button
-      >
-        <View className="flex-1 bg-black/70 justify-center items-center px-6">
-          <View className="bg-white rounded-3xl p-6 w-full max-w-md shadow-2xl">
-            {/* Fire Icon */}
-            <View className="items-center mb-4">
-              <View className="bg-red-100 rounded-full p-4 mb-3">
-                <MaterialIcons name="local-fire-department" size={64} color="#dc2626" />
+    <Modal
+      visible={showAssignmentModal}
+      transparent={true}
+      animationType="fade"
+      onRequestClose={() => {}} // Prevent dismissing with back button
+    >
+      <View className="flex-1 bg-black/70 justify-center items-center px-6">
+        <View className="bg-white rounded-3xl p-6 w-full max-w-md shadow-2xl">
+          {/* Fire Icon */}
+          <View className="items-center mb-4">
+            <View className="bg-red-100 rounded-full p-4 mb-3">
+              <MaterialIcons name="local-fire-department" size={64} color="#dc2626" />
+            </View>
+            <Text className="text-2xl font-bold text-red-600 text-center">
+              🚨 FIRE EMERGENCY ASSIGNMENT 🚨
+            </Text>
+          </View>
+          
+          {/* Assignment Details */}
+          <View className="bg-red-50 rounded-2xl p-4 mb-6">
+            <Text className="text-lg font-bold text-gray-800 mb-2">
+              {currentAssignment?.title || 'New Fire Assignment'}
+            </Text>
+            <Text className="text-gray-700 mb-3">
+              {currentAssignment?.message || 'You have been assigned to a fire incident.'}
+            </Text>
+            
+            {currentAssignment?.priority && (
+              <View className="flex-row items-center">
+                <MaterialIcons name="warning" size={20} color="#dc2626" />
+                <Text className="text-red-600 font-bold ml-2 uppercase">
+                  {currentAssignment.priority} PRIORITY
+                </Text>
               </View>
-              <Text className="text-2xl font-bold text-red-600 text-center">
-                🚨 FIRE EMERGENCY ASSIGNMENT 🚨
-              </Text>
-            </View>
-            
-            {/* Assignment Details */}
-            <View className="bg-red-50 rounded-2xl p-4 mb-6">
-              <Text className="text-lg font-bold text-gray-800 mb-2">
-                {currentAssignment?.title || 'New Fire Assignment'}
-              </Text>
-              <Text className="text-gray-700 mb-3">
-                {currentAssignment?.message || 'You have been assigned to a fire incident.'}
-              </Text>
-              
-              {currentAssignment?.priority && (
-                <View className="flex-row items-center">
-                  <MaterialIcons name="warning" size={20} color="#dc2626" />
-                  <Text className="text-red-600 font-bold ml-2 uppercase">
-                    {currentAssignment.priority} PRIORITY
-                  </Text>
-                </View>
-              )}
-            </View>
-            
-            {/* Acknowledge Button */}
-            <TouchableOpacity
+            )}
+          </View>
+          
+          {/* Acknowledge Button */}
+          <TouchableOpacity
               onPress={() => handleAssignmentResponse('accepted')}
               className="bg-red-600 rounded-xl py-3 mt-2"
-              style={{
-                shadowColor: '#dc2626',
-                shadowOffset: { width: 0, height: 4 },
-                shadowOpacity: 0.3,
-                shadowRadius: 8,
-                elevation: 8
-              }}
-            >
+            style={{
+              shadowColor: '#dc2626',
+              shadowOffset: { width: 0, height: 4 },
+              shadowOpacity: 0.3,
+              shadowRadius: 8,
+              elevation: 8
+            }}
+          >
               <Text className="text-center text-white font-bold text-lg">I acknowledge</Text>
             </TouchableOpacity>
 
             <Text className="text-gray-500 text-center mt-4 text-sm">
               Please acknowledge this assignment. Alarm will stop after you confirm.
-            </Text>
-          </View>
+              </Text>
+            </View>
         </View>
       </Modal>
 
@@ -1327,14 +1327,14 @@ export default function RAlertsWorker() {
               }}
             >
               <Text className="text-center text-white font-bold text-lg">Got it</Text>
-            </TouchableOpacity>
-
-            <Text className="text-gray-500 text-center mt-4 text-sm">
+          </TouchableOpacity>
+          
+          <Text className="text-gray-500 text-center mt-4 text-sm">
               Thank you for your service!
-            </Text>
-          </View>
+          </Text>
+        </View>
         </BlurView>
-      </Modal>
+    </Modal>
     </>
   );
 }
