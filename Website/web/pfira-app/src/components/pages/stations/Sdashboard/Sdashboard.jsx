@@ -793,8 +793,8 @@ const Sdashboard = () => {
           return rid && allReportIds.has(rid) && r.latitude && r.longitude && !isNaN(r.latitude) && !isNaN(r.longitude);
         });
 
-        // Drop no-fire / no-smoke reports from station map view
-        withCoords = withCoords.filter((r) => !isNoFireNoSmoke(r));
+        // Drop invalidated reports and unvalidated no-fire / no-smoke reports from station map view
+        withCoords = withCoords.filter((r) => !r.invalidated && (!isNoFireNoSmoke(r) || r.validated));
 
         // 4) Fallback to snapshot table for any report IDs missing in external API
         const missingIds = Array.from(allReportIds).filter(id => !withCoords.find(r => String(r.id) === id));

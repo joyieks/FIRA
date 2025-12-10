@@ -534,7 +534,7 @@ const Adashboard = () => {
         const data = await response.json();
         // Fetched fire reports
         
-        // Filter reports that have valid coordinates AND are not cancelled/fire out AND not no-fire/no-smoke
+        // Filter reports that have valid coordinates AND are not cancelled/fire out AND not unvalidated no-fire/no-smoke
         const filteredReports = [];
         for (const report of data) {
           const hasCoords = report.latitude && report.longitude && !isNaN(report.latitude) && !isNaN(report.longitude);
@@ -542,8 +542,12 @@ const Adashboard = () => {
           const isCancelled = statusText.includes('cancelled') || statusText.includes('canceled');
           const isFireOut = statusText.includes('fire out');
           if (!hasCoords || isCancelled || isFireOut) continue;
-          if (isNoFireNoSmoke(report)) {
-            await notifyCitizenInvalid(report);
+          // Skip No Fire/No Smoke reports UNLESS they've been validated by admin
+          // Also skip any report that is currently marked as invalidated
+          if (report.invalidated || (isNoFireNoSmoke(report) && !report.validated)) {
+            if (!report.invalidated && isNoFireNoSmoke(report) && !report.validated) {
+              await notifyCitizenInvalid(report);
+            }
             continue;
           }
           filteredReports.push(report);
