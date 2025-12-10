@@ -33,7 +33,11 @@ export default function AOverview() {
   const [isAssigning, setIsAssigning] = useState(false);
   const [assignedResponders, setAssignedResponders] = useState([]);
   const [isLoadingAssigned, setIsLoadingAssigned] = useState(false);
-  const [currentStationAssignment, setCurrentStationAssignment] = useState(null); // { stationId, stationName, status }
+  const [currentStationAssignment, setCurrentStationAssignment] = useState(null); // { stationId, stationName, status, role }
+  const [allAssignedStations, setAllAssignedStations] = useState([]); // Array of all assigned stations (primary + backups)
+  const [backupStationId, setBackupStationId] = useState(null); // For backup assignment dropdown
+  const [showWaitingBackupModal, setShowWaitingBackupModal] = useState(false);
+  const [pendingBackupAssignment, setPendingBackupAssignment] = useState(null);
   const [showStatusConfirmModal, setShowStatusConfirmModal] = useState(false);
   const [showAlarmConfirmModal, setShowAlarmConfirmModal] = useState(false);
   const [pendingStatusChange, setPendingStatusChange] = useState(null);
@@ -846,49 +850,78 @@ export default function AOverview() {
     const loadStationAssignment = async (reportId) => {
       try {
         setCurrentStationAssignment(null);
+        setAllAssignedStations([]);
         setAssignStationId(null);
 
         if (!reportId) return;
 
-        // Fetch station assignment (only accepted or pending, not declined)
-        const { data: assignment, error } = await supabase
+        // Fetch ALL station assignments (primary + backups)
+        const { data: assignments, error } = await supabase
           .from('report_assignments')
-          .select('assignee_id, status')
+          .select('assignee_id, status, assignment_role, assigned_at')
           .eq('report_id', reportId)
           .eq('assignee_type', 'station')
           .in('status', ['accepted', 'pending'])
-          .order('assigned_at', { ascending: false })
-          .limit(1)
-          .single();
+          .order('assignment_role', { ascending: true }) // primary first
+          .order('assigned_at', { ascending: false });
 
         if (error) {
-          // No assignment found or other error - that's okay
-          if (error.code !== 'PGRST116') { // PGRST116 = no rows returned
-            console.error('Error fetching station assignment:', error);
+          if (error.code !== 'PGRST116') {
+            console.error('Error fetching station assignments:', error);
           }
           setCurrentStationAssignment(null);
+          setAllAssignedStations([]);
           return;
         }
 
-        if (assignment) {
-          // Fetch station name
-          const { data: stationData } = await supabase
+        if (assignments && assignments.length > 0) {
+          // Fetch all station names
+          const stationIds = assignments.map(a => a.assignee_id);
+          const { data: stationsData } = await supabase
             .from('station_users')
-            .select('station_name')
-            .eq('id', assignment.assignee_id)
-            .single();
+            .select('id, station_name')
+            .in('id', stationIds);
 
-          setCurrentStationAssignment({
-            stationId: assignment.assignee_id,
-            stationName: stationData?.station_name || 'Unknown Station',
-            status: assignment.status
+          const stationMap = {};
+          (stationsData || []).forEach(s => {
+            stationMap[s.id] = s.station_name;
           });
+
+          const allStations = assignments.map(a => ({
+            id: a.assignee_id,
+            name: stationMap[a.assignee_id] || 'Unknown Station',
+            status: a.status,
+            role: a.assignment_role || 'primary'
+          }));
+
+          setAllAssignedStations(allStations);
+
+          // Set primary station as current
+          const primary = allStations.find(s => s.role === 'primary');
+          if (primary) {
+            setCurrentStationAssignment({
+              stationId: primary.id,
+              stationName: primary.name,
+              status: primary.status,
+              role: 'primary'
+            });
+          } else if (allStations.length > 0) {
+            // Fallback to first station if no primary found
+            setCurrentStationAssignment({
+              stationId: allStations[0].id,
+              stationName: allStations[0].name,
+              status: allStations[0].status,
+              role: allStations[0].role
+            });
+          }
         } else {
           setCurrentStationAssignment(null);
+          setAllAssignedStations([]);
         }
       } catch (e) {
-        console.error('Failed loading station assignment:', e);
+        console.error('Failed loading station assignments:', e);
         setCurrentStationAssignment(null);
+        setAllAssignedStations([]);
       }
     };
 
@@ -902,6 +935,189 @@ export default function AOverview() {
       setAssignStationId(null);
     }
   }, [selectedReport?.id]);
+
+  // Resolve the best available alarm level
+  const resolveAlarmLevel = (report) => {
+    const normalize = (value) => {
+      if (!value) return null;
+      const cleaned = formatAlarmLevel(String(value).trim());
+      if (!cleaned || cleaned === 'Unknown') return null;
+      return cleaned;
+    };
+
+    const candidates = [
+      normalize(report?.final_fire_alarm_level),
+      normalize(report?.recommended_alarm_level),
+      normalize(report?.suggested_alarm_level),
+      normalize(report?.ai_suggested_alarm),
+      normalize(report?.alarm_level)
+    ].filter(Boolean);
+
+    return candidates.length > 0 ? candidates[0] : '1st Alarm';
+  };
+
+  // Handle backup station assignment
+  const handleAssignBackup = async () => {
+    if (!selectedReport || !backupStationId) {
+      Alert.alert('Error', 'Please select a backup station');
+      return;
+    }
+
+    try {
+      // Validate alarm level - must be 2 or higher
+      const alarmLevel = resolveAlarmLevel(selectedReport);
+      const alarmLevelLower = alarmLevel.toLowerCase();
+      const isAlarmLevel2Plus = alarmLevel && (
+        alarmLevelLower.includes('second alarm') ||
+        alarmLevelLower.includes('2nd alarm') ||
+        alarmLevelLower.includes('third alarm') ||
+        alarmLevelLower.includes('3rd alarm') ||
+        alarmLevelLower.includes('fourth alarm') ||
+        alarmLevelLower.includes('4th alarm') ||
+        alarmLevelLower.includes('fifth alarm') ||
+        alarmLevelLower.includes('5th alarm') ||
+        alarmLevelLower.includes('task force alpha') ||
+        alarmLevelLower.includes('task force bravo') ||
+        alarmLevelLower.includes('task force charlie') ||
+        alarmLevelLower.includes('task force delta') ||
+        alarmLevelLower.includes('general alarm')
+      );
+
+      if (!isAlarmLevel2Plus) {
+        Alert.alert('Cannot Assign Backup', `Backup stations can only be assigned to incidents with Alarm Level 2 or higher.\n\nCurrent alarm level: ${alarmLevel}`);
+        return;
+      }
+
+      // Check if station is already assigned
+      const { data: existingAssignments } = await supabase
+        .from('report_assignments')
+        .select('assignment_role, status')
+        .eq('report_id', selectedReport.id)
+        .eq('assignee_type', 'station')
+        .eq('assignee_id', backupStationId)
+        .in('status', ['pending', 'accepted']);
+
+      if (existingAssignments && existingAssignments.length > 0) {
+        const role = existingAssignments[0].assignment_role === 'primary' ? 'primary station' : 'backup station';
+        Alert.alert('Already Assigned', `This station is already assigned as ${role} for this incident.`);
+        return;
+      }
+
+      // Delete old declined assignments
+      await supabase
+        .from('report_assignments')
+        .delete()
+        .eq('report_id', selectedReport.id)
+        .eq('assignee_type', 'station')
+        .eq('assignee_id', backupStationId)
+        .neq('status', 'pending')
+        .neq('status', 'accepted');
+
+      // Check if station is busy
+      const busyCheck = await checkStationIsBusy(backupStationId);
+      
+      const backupAssignment = {
+        report_id: selectedReport.id,
+        assignee_type: 'station',
+        assignee_id: backupStationId,
+        assigned_at: new Date().toISOString(),
+        status: busyCheck.isBusy ? 'pending' : 'accepted',
+        assignment_source: 'manual',
+        assignment_role: 'backup',
+        note: `Backup for ${alarmLevel} incident`
+      };
+
+      const { error } = await supabase
+        .from('report_assignments')
+        .upsert(backupAssignment, { 
+          onConflict: 'report_id,assignee_type,assignee_id',
+          ignoreDuplicates: false 
+        });
+
+      if (error) {
+        console.error('Backup assignment error:', error);
+        Alert.alert('Error', 'Failed to assign backup station: ' + error.message);
+        return;
+      }
+
+      // Get station name
+      const { data: stationData } = await supabase
+        .from('station_users')
+        .select('station_name')
+        .eq('id', backupStationId)
+        .single();
+
+      const stationName = stationData?.station_name || 'Station';
+
+      if (busyCheck.isBusy) {
+        // Show waiting modal
+        setPendingBackupAssignment({
+          reportId: selectedReport.id,
+          stationId: backupStationId,
+          stationName
+        });
+        setShowWaitingBackupModal(true);
+
+        // Send notification
+        const locationInfo = selectedReport.address || selectedReport.geotag_location || 'Location unavailable';
+        const reporterName = selectedReport.reporter_name || selectedReport.reporter || 'Unknown Reporter';
+        
+        await supabase
+          .from('notifications')
+          .insert({
+            user_id: backupStationId,
+            user_type: 'station',
+            type: 'assignment',
+            related_report_id: String(selectedReport.id),
+            title: `🚨 Backup Assistance Request - ${alarmLevel}`,
+            message: `Command Center is requesting your station as BACKUP for a ${alarmLevel} incident.\n\nLocation: ${locationInfo}\nReporter: ${reporterName}\n\nNote: You will provide support but cannot change the fire status. Only the primary station can update the incident status.\n\nWill you accept this backup assignment?`,
+            priority: 'urgent',
+            is_read: false
+          });
+      } else {
+        Alert.alert('Success', `✅ ${stationName} has been assigned as backup station.`);
+      }
+
+      // Reload assignments
+      if (selectedReport?.id) {
+        const { data: assignments } = await supabase
+          .from('report_assignments')
+          .select('assignee_id, status, assignment_role, assigned_at')
+          .eq('report_id', selectedReport.id)
+          .eq('assignee_type', 'station')
+          .in('status', ['accepted', 'pending'])
+          .order('assignment_role', { ascending: true })
+          .order('assigned_at', { ascending: false });
+
+        if (assignments && assignments.length > 0) {
+          const stationIds = assignments.map(a => a.assignee_id);
+          const { data: stationsData } = await supabase
+            .from('station_users')
+            .select('id, station_name')
+            .in('id', stationIds);
+
+          const stationMap = {};
+          (stationsData || []).forEach(s => {
+            stationMap[s.id] = s.station_name;
+          });
+
+          const allStations = assignments.map(a => ({
+            id: a.assignee_id,
+            name: stationMap[a.assignee_id] || 'Unknown Station',
+            status: a.status,
+            role: a.assignment_role || 'primary'
+          }));
+
+          setAllAssignedStations(allStations);
+        }
+      }
+
+      setBackupStationId(null);
+    } catch (error) {
+      console.error('Error assigning backup:', error);
+      Alert.alert('Error', 'Failed to assign backup station');
+    }
+  };
 
   // Invalidate No Fire/No Smoke report - marks it as invalid so admins can review
   const handleInvalidateReport = async (reportId) => {
@@ -2785,6 +3001,101 @@ export default function AOverview() {
                     </TouchableOpacity>
                   </View>
 
+                  {/* Backup Station Assignment - Only show if alarm level 2+ and primary station exists */}
+                  {currentStationAssignment && (() => {
+                    const alarmLevel = resolveAlarmLevel(selectedReport);
+                    const alarmLevelLower = alarmLevel.toLowerCase();
+                    const isAlarmLevel2Plus = alarmLevel && (
+                      alarmLevelLower.includes('second alarm') ||
+                      alarmLevelLower.includes('2nd alarm') ||
+                      alarmLevelLower.includes('third alarm') ||
+                      alarmLevelLower.includes('3rd alarm') ||
+                      alarmLevelLower.includes('fourth alarm') ||
+                      alarmLevelLower.includes('4th alarm') ||
+                      alarmLevelLower.includes('fifth alarm') ||
+                      alarmLevelLower.includes('5th alarm') ||
+                      alarmLevelLower.includes('task force alpha') ||
+                      alarmLevelLower.includes('task force bravo') ||
+                      alarmLevelLower.includes('task force charlie') ||
+                      alarmLevelLower.includes('task force delta') ||
+                      alarmLevelLower.includes('general alarm')
+                    );
+
+                    return isAlarmLevel2Plus && (
+                      <View style={{ marginBottom: 20, backgroundColor: '#faf5ff', borderLeftWidth: 4, borderLeftColor: '#a855f7', borderRadius: 8, padding: 12 }}>
+                        <Text style={{ fontSize: 16, fontWeight: '700', color: '#7e22ce', marginBottom: 4 }}>
+                          🚨 {alarmLevel} - Assign Backup Station
+                        </Text>
+                        <Text style={{ fontSize: 12, color: '#6b21a8', marginBottom: 12 }}>
+                          This incident requires backup support. Backup stations can view and support but cannot change the fire status.
+                        </Text>
+
+                        {/* Show all assigned stations */}
+                        {allAssignedStations.length > 0 && (
+                          <View style={{ backgroundColor: '#f3e8ff', borderRadius: 6, padding: 10, marginBottom: 12 }}>
+                            <Text style={{ fontSize: 14, fontWeight: '600', color: '#7e22ce', marginBottom: 6 }}>
+                              All Assigned Stations:
+                            </Text>
+                            {allAssignedStations.map((station, idx) => (
+                              <View key={idx} style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: idx > 0 ? 8 : 0, paddingTop: idx > 0 ? 8 : 0, borderTopWidth: idx > 0 ? 1 : 0, borderTopColor: '#e9d5ff' }}>
+                                <Text style={{ fontSize: 14, color: '#581c87', fontWeight: '600' }}>
+                                  {station.name}
+                                </Text>
+                                <View style={{ backgroundColor: station.role === 'primary' ? '#3b82f6' : '#a855f7', paddingHorizontal: 8, paddingVertical: 2, borderRadius: 4 }}>
+                                  <Text style={{ fontSize: 10, color: 'white', fontWeight: '700' }}>
+                                    {station.role === 'primary' ? 'PRIMARY' : 'BACKUP'}
+                                  </Text>
+                                </View>
+                              </View>
+                            ))}
+                          </View>
+                        )}
+
+                        <View style={{ borderWidth: 1, borderColor: '#d8b4fe', borderRadius: 8, overflow: 'hidden', marginBottom: 10 }}>
+                          <ScrollView 
+                            style={{ maxHeight: 120 }} 
+                            nestedScrollEnabled={true}
+                            showsVerticalScrollIndicator={true}
+                          >
+                            {(stations || [])
+                              .filter(s => !allAssignedStations.some(assigned => assigned.id === s.id))
+                              .map((s) => (
+                              <TouchableOpacity
+                                key={s.id}
+                                onPress={() => setBackupStationId(s.id)}
+                                style={{ 
+                                  paddingVertical: 10, 
+                                  paddingHorizontal: 12, 
+                                  backgroundColor: backupStationId === s.id ? '#e9d5ff' : 'white', 
+                                  borderBottomWidth: 1, 
+                                  borderBottomColor: '#e9d5ff' 
+                                }}
+                              >
+                                <Text style={{ color: '#581c87', fontWeight: backupStationId === s.id ? '700' : '500' }}>
+                                  {s.station_name || 'Station'}
+                                </Text>
+                              </TouchableOpacity>
+                            ))}
+                          </ScrollView>
+                        </View>
+
+                        <TouchableOpacity
+                          onPress={handleAssignBackup}
+                          disabled={!backupStationId}
+                          style={{ 
+                            backgroundColor: !backupStationId ? '#9ca3af' : '#a855f7', 
+                            paddingVertical: 10, 
+                            borderRadius: 8, 
+                            alignItems: 'center' 
+                          }}
+                        >
+                          <Text style={{ color: 'white', fontWeight: '700' }}>
+                            Assign Backup Station
+                          </Text>
+                        </TouchableOpacity>
+                      </View>
+                    );
+                  })()}
 
                   {/* Full Timestamp */}
                   <View style={{ marginBottom: 20 }}>
@@ -3296,6 +3607,45 @@ export default function AOverview() {
                 setPendingAssignment(null);
               }}
               style={{ backgroundColor: '#2563eb', paddingVertical: 12, borderRadius: 8, alignItems: 'center' }}
+            >
+              <Text style={{ color: 'white', fontWeight: 'bold', fontSize: 16 }}>Okay</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Waiting for Backup Station Approval Modal */}
+      <Modal
+        visible={showWaitingBackupModal}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={() => {
+          setShowWaitingBackupModal(false);
+          setPendingBackupAssignment(null);
+        }}
+      >
+        <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'center', alignItems: 'center', padding: 20 }}>
+          <View style={{ backgroundColor: 'white', borderRadius: 16, padding: 24, width: '100%', maxWidth: 400 }}>
+            <View style={{ alignItems: 'center', marginBottom: 16 }}>
+              <View style={{ backgroundColor: '#f3e8ff', borderRadius: 50, padding: 12 }}>
+                <MaterialIcons name="schedule" size={32} color="#a855f7" />
+              </View>
+            </View>
+            <Text style={{ fontSize: 24, fontWeight: 'bold', color: '#111827', textAlign: 'center', marginBottom: 8 }}>
+              Waiting for Backup Approval
+            </Text>
+            <Text style={{ fontSize: 16, color: '#6b7280', textAlign: 'center', marginBottom: 8 }}>
+              Backup request sent to <Text style={{ fontWeight: '600', color: '#7e22ce' }}>{pendingBackupAssignment?.stationName}</Text>.
+            </Text>
+            <Text style={{ fontSize: 12, color: '#9ca3af', textAlign: 'center', marginBottom: 24, fontStyle: 'italic' }}>
+              Backup stations provide support but cannot change fire status
+            </Text>
+            <TouchableOpacity
+              onPress={() => {
+                setShowWaitingBackupModal(false);
+                setPendingBackupAssignment(null);
+              }}
+              style={{ backgroundColor: '#a855f7', paddingVertical: 12, borderRadius: 8, alignItems: 'center' }}
             >
               <Text style={{ color: 'white', fontWeight: 'bold', fontSize: 16 }}>Okay</Text>
             </TouchableOpacity>
