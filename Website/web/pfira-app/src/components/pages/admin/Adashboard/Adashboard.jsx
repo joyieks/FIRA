@@ -32,9 +32,12 @@ const Adashboard = () => {
   const [redirectTarget, setRedirectTarget] = useState(''); // e.g., 'station:<id>' | 'agency:police'
   const [redirectNote, setRedirectNote] = useState('');
   const [assignmentNote, setAssignmentNote] = useState('');
-  const [currentAssignment, setCurrentAssignment] = useState(null); // Current assignment info
+  const [currentAssignment, setCurrentAssignment] = useState(null); // Primary station assignment info
+  const [allAssignedStations, setAllAssignedStations] = useState([]); // All stations (primary + backups) with roles
   const [forwardedTo, setForwardedTo] = useState([]); // List of stations this was forwarded to
   const [showWaitingApprovalModal, setShowWaitingApprovalModal] = useState(false);
+  const [showWaitingBackupModal, setShowWaitingBackupModal] = useState(false); // For backup assignment approval
+  const [pendingBackupAssignment, setPendingBackupAssignment] = useState(null); // {reportId, stationId, stationName}
   const [showRerouteModal, setShowRerouteModal] = useState(false);
   const [nearestStations, setNearestStations] = useState([]);
   const [pendingAssignment, setPendingAssignment] = useState(null); // {reportId, stationId, stationName}
@@ -184,21 +187,22 @@ const Adashboard = () => {
     try {
       setAutoAssignmentsInProgress(prev => new Set(prev).add(reportId));
 
-      // Check if report is already assigned to a station
+      // Check if report is already assigned to a PRIMARY station
       const { data: existingAssignments, error: checkError } = await supabase
         .from('report_assignments')
-        .select('assignee_id, assignee_type')
+        .select('assignee_id, assignee_type, assignment_role')
         .eq('report_id', reportId)
-        .eq('assignee_type', 'station');
+        .eq('assignee_type', 'station')
+        .eq('assignment_role', 'primary'); // Only check for primary assignments
 
       if (checkError) {
         console.error('❌ Error checking existing assignments:', checkError);
         return;
       }
 
-      // If already assigned to a station, skip auto-assignment
+      // If already assigned to a PRIMARY station, skip auto-assignment
       if (existingAssignments && existingAssignments.length > 0) {
-        console.log(`ℹ️ Report ${reportId} already assigned to station, skipping auto-assignment`);
+        console.log(`ℹ️ Report ${reportId} already assigned to PRIMARY station, skipping auto-assignment`);
         return;
       }
 
@@ -214,6 +218,7 @@ const Adashboard = () => {
         assigned_at: new Date().toISOString(),
         status: assignmentStatus,
         assignment_source: 'automatic',
+        assignment_role: 'primary', // Primary station (auto-assigned based on jurisdiction)
         note: `Auto-assigned: Report is within ${station.name}'s jurisdiction (${Math.round(station.distance)}m away)`
       };
 
@@ -758,43 +763,52 @@ const Adashboard = () => {
     if (!reportId) return;
 
     try {
-      // 1. Fetch current assignment (try to include status if column exists)
-      const { data: assignment, error: assignError } = await supabase
+      // 1. Fetch ALL station assignments (primary + backups) with roles
+      const { data: allAssignments, error: allAssignError } = await supabase
         .from('report_assignments')
-        .select('assignee_type, assignee_id, assigned_at, note, status')
+        .select('assignee_type, assignee_id, assigned_at, note, status, assignment_role')
         .eq('report_id', reportId)
-        .single();
+        .eq('assignee_type', 'station')
+        .in('status', ['pending', 'accepted'])
+        .order('assignment_role', { ascending: true }); // primary first, then backup
 
-      if (assignError && assignError.code !== 'PGRST116') {
-        console.error('Error fetching assignment:', assignError);
+      if (allAssignError && allAssignError.code !== 'PGRST116') {
+        console.error('Error fetching all assignments:', allAssignError);
       }
 
-      // If we have an assignment and it's a station, get the station name
-      if (assignment && assignment.assignee_type === 'station') {
-        const { data: stationData } = await supabase
-          .from('station_users')
-          .select('station_name')
-          .eq('id', assignment.assignee_id)
-          .single();
+      // Fetch station names for all assignments
+      if (allAssignments && allAssignments.length > 0) {
+        const stationsWithDetails = await Promise.all(
+          allAssignments.map(async (assignment) => {
+            const { data: stationData } = await supabase
+              .from('station_users')
+              .select('station_name')
+              .eq('id', assignment.assignee_id)
+              .single();
 
-        setCurrentAssignment({
-          type: assignment.assignee_type,
-          id: assignment.assignee_id,
-          name: stationData?.station_name || 'Unknown Station',
-          assigned_at: assignment.assigned_at,
-          note: assignment.note || '',
-          status: assignment.status || 'accepted' // Default to accepted if status column doesn't exist
-        });
-      } else if (assignment && assignment.assignee_type === 'responder') {
-        setCurrentAssignment({
-          type: assignment.assignee_type,
-          id: assignment.assignee_id,
-          name: 'Responder',
-          assigned_at: assignment.assigned_at,
-          note: assignment.note || '',
-          status: assignment.status || 'accepted'
-        });
+            return {
+              type: assignment.assignee_type,
+              id: assignment.assignee_id,
+              name: stationData?.station_name || 'Unknown Station',
+              assigned_at: assignment.assigned_at,
+              note: assignment.note || '',
+              status: assignment.status || 'accepted',
+              role: assignment.assignment_role || 'primary'
+            };
+          })
+        );
+
+        setAllAssignedStations(stationsWithDetails);
+
+        // Set primary station as currentAssignment for backward compatibility
+        const primaryStation = stationsWithDetails.find(s => s.role === 'primary');
+        if (primaryStation) {
+          setCurrentAssignment(primaryStation);
+        } else {
+          setCurrentAssignment(null);
+        }
       } else {
+        setAllAssignedStations([]);
         setCurrentAssignment(null);
       }
 
@@ -855,6 +869,7 @@ const Adashboard = () => {
       loadAssignmentInfo(selectedReport.id);
     } else {
       setCurrentAssignment(null);
+      setAllAssignedStations([]);
       setForwardedTo([]);
     }
   }, [selectedReport, loadAssignmentInfo]);
@@ -887,11 +902,22 @@ const Adashboard = () => {
             String(assignment.assignee_id) === String(currentPending.stationId)) {
           
           if (assignment.status === 'accepted') {
-            // Station accepted - close waiting modal and show success
-            setShowWaitingApprovalModal(false);
-            alert(`✅ ${currentPending.stationName} has accepted the assignment.`);
-            setPendingAssignment(null);
-            pendingAssignmentRef.current = null;
+            // Check if this is a backup assignment
+            const isBackup = assignment.assignment_role === 'backup';
+            
+            if (isBackup) {
+              // Backup station accepted - close backup waiting modal
+              setShowWaitingBackupModal(false);
+              alert(`✅ ${currentPending.stationName} has accepted the backup assignment.`);
+              setPendingBackupAssignment(null);
+            } else {
+              // Primary station accepted - close waiting modal and show success
+              setShowWaitingApprovalModal(false);
+              alert(`✅ ${currentPending.stationName} has accepted the assignment.`);
+              setPendingAssignment(null);
+              pendingAssignmentRef.current = null;
+            }
+            
             if (selectedReport) {
               loadAssignmentInfo(selectedReport.id);
             }
@@ -1478,6 +1504,7 @@ const Adashboard = () => {
             assigned_at: new Date().toISOString(),
             status: 'pending', // Set to pending for approval
             assignment_source: 'manual', // Admin manually assigned
+            assignment_role: 'primary', // Primary station (can change status)
             note: assignmentNote && assignmentNote.trim() ? assignmentNote.trim() : null
           }));
           
@@ -1585,6 +1612,7 @@ const Adashboard = () => {
             assigned_at: new Date().toISOString(),
             status: 'accepted', // Auto-accept for free stations
             assignment_source: 'manual',
+            assignment_role: 'primary', // Primary station (can change status)
             note: assignmentNote && assignmentNote.trim() ? assignmentNote.trim() : null
           }));
           
@@ -1677,7 +1705,8 @@ const Adashboard = () => {
         assignee_id: assigneeId,
         assigned_at: new Date().toISOString(),
         status: 'accepted',
-        assignment_source: 'manual'
+        assignment_source: 'manual',
+        assignment_role: 'primary' // Primary assignment
       };
       
       const { error } = await supabase
@@ -1750,6 +1779,293 @@ const Adashboard = () => {
       alert('Failed to assign report. Check console.');
     }
   }, [selectedReport, assigneeType, assigneeId, assignmentNote, loadAssignmentInfo]);
+
+  // Handle backup station assignment (for alarm level 2+ incidents)
+  const handleAssignBackup = useCallback(async (backupStationId) => {
+    try {
+      if (!selectedReport) {
+        alert('Select a fire report first.');
+        return;
+      }
+      if (!backupStationId) {
+        alert('Choose a backup station.');
+        return;
+      }
+
+      // Validate alarm level - must be 2 or higher
+      const alarmLevel = resolveAlarmLevel(selectedReport);
+      const alarmLevelCleaned = alarmLevel || '';
+      const alarmLevelLower = alarmLevelCleaned.toLowerCase();
+      const isAlarmLevel2Plus = alarmLevelCleaned && (
+        alarmLevelLower.includes('second alarm') ||
+        alarmLevelLower.includes('2nd alarm') ||
+        alarmLevelLower.includes('third alarm') ||
+        alarmLevelLower.includes('3rd alarm') ||
+        alarmLevelLower.includes('fourth alarm') ||
+        alarmLevelLower.includes('4th alarm') ||
+        alarmLevelLower.includes('fifth alarm') ||
+        alarmLevelLower.includes('5th alarm') ||
+        alarmLevelLower.includes('task force alpha') ||
+        alarmLevelLower.includes('task force bravo') ||
+        alarmLevelLower.includes('task force charlie') ||
+        alarmLevelLower.includes('task force delta') ||
+        alarmLevelLower.includes('general alarm')
+      );
+
+      if (!isAlarmLevel2Plus) {
+        alert('⚠️ Backup stations can only be assigned to incidents with Alarm Level 2 or higher.\n\nCurrent alarm level: ' + (alarmLevelCleaned || 'Not set'));
+        return;
+      }
+
+      // First, get ALL assignments for this station to see what's happening
+      const { data: allAssignments, error: allCheckError } = await supabase
+        .from('report_assignments')
+        .select('*')
+        .eq('report_id', selectedReport.id)
+        .eq('assignee_type', 'station')
+        .eq('assignee_id', backupStationId);
+
+      console.log('🔍 ALL assignments for station', backupStationId, ':', allAssignments);
+
+      if (allCheckError) {
+        console.error('Error checking existing assignments:', allCheckError);
+      }
+
+      // Check if this station is already assigned with active status
+      const { data: existingAssignments, error: checkError } = await supabase
+        .from('report_assignments')
+        .select('assignment_role, status')
+        .eq('report_id', selectedReport.id)
+        .eq('assignee_type', 'station')
+        .eq('assignee_id', backupStationId)
+        .in('status', ['pending', 'accepted']); // Only check active assignments
+
+      console.log('🔍 ACTIVE assignments for station:', backupStationId, existingAssignments);
+
+      if (checkError) {
+        console.error('Error checking existing backup assignment:', checkError);
+        alert('Failed to check station assignment status. Please try again.');
+        return;
+      }
+
+      if (existingAssignments && existingAssignments.length > 0) {
+        const activeAssignment = existingAssignments[0];
+        const role = activeAssignment.assignment_role === 'primary' ? 'primary station' : 'backup station';
+        console.log('❌ Station already has active assignment:', activeAssignment);
+        alert(`⚠️ This station is already assigned as ${role} for this incident.`);
+        return;
+      }
+
+      // Delete ALL old assignments (declined, timeout, etc.) for this station to prevent unique constraint issues
+      console.log('🗑️ Attempting to delete old assignments...');
+      const { data: deletedData, error: deleteError } = await supabase
+        .from('report_assignments')
+        .delete()
+        .eq('report_id', selectedReport.id)
+        .eq('assignee_type', 'station')
+        .eq('assignee_id', backupStationId)
+        .neq('status', 'pending')
+        .neq('status', 'accepted')
+        .select();
+
+      if (deleteError) {
+        console.error('❌ Could not delete old assignments:', deleteError);
+      } else {
+        console.log('✅ Deleted old assignments:', deletedData);
+      }
+
+      // Check if station is busy
+      const busyCheck = await checkStationIsBusy(backupStationId);
+      
+      if (busyCheck.isBusy) {
+        // Station is busy - set assignment to pending and show waiting modal
+        const backupAssignment = {
+          report_id: selectedReport.id,
+          assignee_type: 'station',
+          assignee_id: backupStationId,
+          assigned_at: new Date().toISOString(),
+          status: 'pending', // Requires approval
+          assignment_source: 'manual',
+          assignment_role: 'backup', // BACKUP STATION (cannot change status)
+          note: `Backup for ${alarmLevelCleaned} incident`
+        };
+
+        const { data: insertData, error } = await supabase
+          .from('report_assignments')
+          .upsert(backupAssignment, { 
+            onConflict: 'report_id,assignee_type,assignee_id',
+            ignoreDuplicates: false 
+          })
+          .select();
+
+        if (error) {
+          console.error('❌ Pending backup upsert error:', error);
+          if (error.message && error.message.includes('column') && error.message.includes('does not exist')) {
+            console.error('❌ Database migration not run. Please run add_assignment_role_column.sql');
+            alert('Database migration required! Please run the migration SQL file (add_assignment_role_column.sql) in your Supabase SQL Editor first.');
+            return;
+          }
+          alert('Failed to assign backup station. Error: ' + error.message);
+          throw error;
+        }
+
+        console.log('✅ Pending backup assignment created/updated:', insertData);
+
+        // Get station name for modal
+        const { data: stationData } = await supabase
+          .from('station_users')
+          .select('station_name')
+          .eq('id', backupStationId)
+          .single();
+
+        const pendingBackup = {
+          reportId: selectedReport.id,
+          stationId: backupStationId,
+          stationName: stationData?.station_name || 'Station'
+        };
+        setPendingBackupAssignment(pendingBackup);
+        setShowWaitingBackupModal(true);
+
+        // Create notification for backup request
+        try {
+          const locationInfo = selectedReport.address || selectedReport.geotag_location || 'Location unavailable';
+          const reporterName = selectedReport.reporter_name || selectedReport.reporter || 'Unknown Reporter';
+          const title = `🚨 Backup Assistance Request - ${alarmLevelCleaned}`;
+          const message = `Command Center is requesting your station as BACKUP for a ${alarmLevelCleaned} incident.\n\nLocation: ${locationInfo}\nReporter: ${reporterName}\n\nNote: You will provide support but cannot change the fire status. Only the primary station can update the incident status.\n\nWill you accept this backup assignment?`;
+          
+          const { error: notifError } = await supabase
+            .from('notifications')
+            .insert({
+              user_id: backupStationId,
+              user_type: 'station',
+              type: 'assignment',
+              related_report_id: String(selectedReport.id),
+              title: title,
+              message: message,
+              priority: 'urgent',
+              is_read: false
+            });
+          
+          if (notifError) {
+            console.error('❌ Error creating backup notification:', notifError);
+          }
+        } catch (notifErr) {
+          console.error('❌ Failed to create backup notification:', notifErr);
+        }
+
+        // Snapshot report coordinates
+        try {
+          const lat = parseFloat(selectedReport.latitude);
+          const lng = parseFloat(selectedReport.longitude);
+          await supabase
+            .from('assigned_report_snapshots')
+            .upsert({
+              report_id: String(selectedReport.id),
+              lat: isNaN(lat) ? null : lat,
+              lng: isNaN(lng) ? null : lng,
+              address: selectedReport.address || selectedReport.geotag_location || null,
+              snapshot_json: selectedReport
+            }, { onConflict: 'report_id' });
+        } catch (snapErr) {
+          console.warn('Snapshot upsert failed:', snapErr?.message || snapErr);
+        }
+
+        loadAssignmentInfo(selectedReport.id);
+      } else {
+        // Station is NOT busy - auto-accept backup assignment
+        const backupAssignment = {
+          report_id: selectedReport.id,
+          assignee_type: 'station',
+          assignee_id: backupStationId,
+          assigned_at: new Date().toISOString(),
+          status: 'accepted', // Auto-accept
+          assignment_source: 'manual',
+          assignment_role: 'backup', // BACKUP STATION (cannot change status)
+          note: `Backup for ${alarmLevelCleaned} incident`
+        };
+
+        const { data: insertData, error } = await supabase
+          .from('report_assignments')
+          .upsert(backupAssignment, { 
+            onConflict: 'report_id,assignee_type,assignee_id',
+            ignoreDuplicates: false 
+          })
+          .select();
+
+        if (error) {
+          console.error('❌ Auto-accept backup upsert error:', error);
+          if (error.message && error.message.includes('column') && error.message.includes('does not exist')) {
+            console.error('❌ Database migration not run. Please run add_assignment_role_column.sql');
+            alert('Database migration required! Please run the migration SQL file (add_assignment_role_column.sql) in your Supabase SQL Editor first.');
+            return;
+          }
+          alert('Failed to assign backup station. Error: ' + error.message);
+          throw error;
+        }
+
+        console.log('✅ Auto-accept backup assignment created/updated:', insertData);
+
+        // Get station name for success message
+        const { data: stationData } = await supabase
+          .from('station_users')
+          .select('station_name')
+          .eq('id', backupStationId)
+          .single();
+
+        const stationName = stationData?.station_name || 'Station';
+
+        // Create notification (even though auto-accepted)
+        try {
+          const locationInfo = selectedReport.address || selectedReport.geotag_location || 'Location unavailable';
+          const reporterName = selectedReport.reporter_name || selectedReport.reporter || 'Unknown Reporter';
+          const title = `🚨 Backup Assignment - ${alarmLevelCleaned}`;
+          const message = `You have been assigned as BACKUP for a ${alarmLevelCleaned} incident.\n\nLocation: ${locationInfo}\nReporter: ${reporterName}\n\nNote: You will provide support but cannot change the fire status. Only the primary station can update the incident status.`;
+          
+          const { error: notifError } = await supabase
+            .from('notifications')
+            .insert({
+              user_id: backupStationId,
+              user_type: 'station',
+              type: 'assignment',
+              related_report_id: String(selectedReport.id),
+              title: title,
+              message: message,
+              priority: 'urgent',
+              is_read: false
+            });
+          
+          if (notifError) {
+            console.error('❌ Error creating backup notification:', notifError);
+          }
+        } catch (notifErr) {
+          console.error('❌ Failed to create backup notification:', notifErr);
+        }
+
+        // Snapshot report coordinates
+        try {
+          const lat = parseFloat(selectedReport.latitude);
+          const lng = parseFloat(selectedReport.longitude);
+          await supabase
+            .from('assigned_report_snapshots')
+            .upsert({
+              report_id: String(selectedReport.id),
+              lat: isNaN(lat) ? null : lat,
+              lng: isNaN(lng) ? null : lng,
+              address: selectedReport.address || selectedReport.geotag_location || null,
+              snapshot_json: selectedReport
+            }, { onConflict: 'report_id' });
+        } catch (snapErr) {
+          console.warn('Snapshot upsert failed:', snapErr?.message || snapErr);
+        }
+
+        loadAssignmentInfo(selectedReport.id);
+        alert(`✅ ${stationName} successfully assigned as backup station.`);
+      }
+    } catch (e) {
+      console.error('❌ Backup assignment failed:', e);
+      alert('Failed to assign backup station. Check console.');
+    }
+  }, [selectedReport, loadAssignmentInfo]);
 
   const handleRedirect = useCallback(async () => {
     try {
@@ -2503,6 +2819,41 @@ const Adashboard = () => {
                     </div>
                   )}
 
+                  {/* All Assigned Stations Display (Primary + Backups) */}
+                  {allAssignedStations.length > 1 && (
+                    <div className="mt-3 bg-green-50 border-l-4 border-green-500 p-3 rounded">
+                      <div className="flex items-start space-x-2">
+                        <span className="text-lg">🚒</span>
+                        <div className="flex-1">
+                          <p className="font-bold text-green-900 text-sm mb-2">All Assigned Stations:</p>
+                          {allAssignedStations.map((station, index) => (
+                            <div key={index} className={`${index > 0 ? 'mt-2 pt-2 border-t border-green-200' : ''}`}>
+                              <div className="flex items-center justify-between">
+                                <p className="text-green-800 font-semibold">{station.name}</p>
+                                <span className={`text-xs font-bold px-2 py-1 rounded-full ${
+                                  station.role === 'primary' 
+                                    ? 'bg-blue-600 text-white' 
+                                    : 'bg-purple-600 text-white'
+                                }`}>
+                                  {station.role === 'primary' ? '⭐ PRIMARY' : '🔧 BACKUP'}
+                                </span>
+                              </div>
+                              {station.note && (
+                                <p className="text-green-700 text-xs mt-1 italic">
+                                  Note: {station.note}
+                                </p>
+                              )}
+                              <p className="text-green-600 text-xs mt-1">
+                                Assigned: {new Date(station.assigned_at).toLocaleString()}
+                                {station.status === 'pending' && ' • ⏳ Pending approval'}
+                              </p>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
                   {/* Forwarded To Display */}
                   {forwardedTo.length > 0 && (
                     <div className="mt-3 bg-amber-50 border-l-4 border-amber-500 p-3 rounded">
@@ -2688,6 +3039,86 @@ const Adashboard = () => {
                       </div>
                     </div>
                   )}
+
+                  {/* Backup Station Assignment - Only show if alarm level 2+ and primary station exists */}
+                  {currentAssignment && (() => {
+                    // Use the same logic as the rest of the app to resolve alarm level
+                    const alarmLevel = resolveAlarmLevel(selectedReport);
+                    const alarmLevelCleaned = alarmLevel || '';
+                    const alarmLevelLower = alarmLevelCleaned.toLowerCase();
+                    const isAlarmLevel2Plus = alarmLevelCleaned && (
+                      alarmLevelLower.includes('second alarm') ||
+                      alarmLevelLower.includes('2nd alarm') ||
+                      alarmLevelLower.includes('third alarm') ||
+                      alarmLevelLower.includes('3rd alarm') ||
+                      alarmLevelLower.includes('fourth alarm') ||
+                      alarmLevelLower.includes('4th alarm') ||
+                      alarmLevelLower.includes('fifth alarm') ||
+                      alarmLevelLower.includes('5th alarm') ||
+                      alarmLevelLower.includes('task force alpha') ||
+                      alarmLevelLower.includes('task force bravo') ||
+                      alarmLevelLower.includes('task force charlie') ||
+                      alarmLevelLower.includes('task force delta') ||
+                      alarmLevelLower.includes('general alarm')
+                    );
+
+                    // Debug logging
+                    console.log('🔍 Backup Station Check:', {
+                      selectedReport,
+                      alarmLevel,
+                      alarmLevelCleaned,
+                      alarmLevelLower,
+                      isAlarmLevel2Plus,
+                      currentAssignment: !!currentAssignment,
+                      final_fire_alarm_level: selectedReport.final_fire_alarm_level,
+                      recommended_alarm_level: selectedReport.recommended_alarm_level
+                    });
+
+                    return isAlarmLevel2Plus && (
+                      <div className="mt-4 pt-4 border-t border-gray-200">
+                        <div className="bg-purple-50 border-l-4 border-purple-500 p-4 rounded">
+                          <div className="flex items-start space-x-2">
+                            <span className="text-2xl">🚨</span>
+                            <div className="flex-1">
+                              <p className="font-bold text-purple-900 text-base mb-2">
+                                {alarmLevelCleaned} - Assign Backup Station
+                              </p>
+                              <p className="text-sm text-purple-700 mb-3">
+                                This incident requires backup support. Backup stations can view and support but cannot change the fire status.
+                              </p>
+                              <select 
+                                className="w-full border border-purple-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-purple-500 mb-3" 
+                                id="backup-station-select"
+                                defaultValue=""
+                              >
+                                <option value="">Select backup station…</option>
+                                {allStations
+                                  .filter(s => !allAssignedStations.some(assigned => assigned.id === s.id))
+                                  .map(s => (
+                                    <option key={s.id} value={s.id}>{s.station_name || 'Station'}</option>
+                                  ))}
+                              </select>
+                              <button 
+                                className="w-full bg-purple-600 hover:bg-purple-700 text-white font-medium px-4 py-2 rounded-lg transition-colors text-sm" 
+                                onClick={() => {
+                                  const selectElement = document.getElementById('backup-station-select');
+                                  const backupStationId = selectElement?.value;
+                                  if (backupStationId) {
+                                    handleAssignBackup(backupStationId);
+                                    selectElement.value = '';
+                                  } else {
+                                    alert('Please select a backup station first.');
+                                  }
+                                }}
+                              >
+                                Assign Backup Station
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })()}
                 </div>
               </div>
             </InfoWindow>
@@ -3022,6 +3453,37 @@ const Adashboard = () => {
                 pendingAssignmentRef.current = null;
               }}
               className="w-full bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-700 hover:to-blue-800 text-white font-semibold px-6 py-3 rounded-xl transition-all shadow-lg hover:shadow-xl transform hover:scale-105"
+            >
+              Okay
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Waiting for Backup Station Approval Modal */}
+      {showWaitingBackupModal && pendingBackupAssignment && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 animate-in fade-in duration-200">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full mx-4 p-8 transform transition-all animate-in zoom-in-95 duration-200">
+            <div className="flex items-center justify-center mb-6">
+              <div className="bg-gradient-to-br from-purple-500 to-purple-600 rounded-full p-4 shadow-lg animate-pulse">
+                <svg className="w-10 h-10 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+              </div>
+            </div>
+            <h3 className="text-2xl font-bold text-gray-900 text-center mb-3">Waiting for Backup Approval</h3>
+            <p className="text-gray-600 text-center mb-2 leading-relaxed">
+              Backup request sent to <span className="font-semibold text-purple-900">{pendingBackupAssignment.stationName}</span>.
+            </p>
+            <p className="text-xs text-gray-500 text-center mb-8 italic">
+              Backup stations provide support but cannot change fire status
+            </p>
+            <button
+              onClick={() => {
+                setShowWaitingBackupModal(false);
+                setPendingBackupAssignment(null);
+              }}
+              className="w-full bg-gradient-to-r from-purple-600 to-purple-700 hover:from-purple-700 hover:to-purple-800 text-white font-semibold px-6 py-3 rounded-xl transition-all shadow-lg hover:shadow-xl transform hover:scale-105"
             >
               Okay
             </button>
