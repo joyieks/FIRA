@@ -54,21 +54,190 @@ export default function AOverview() {
   
   // Waiting for station approval modal state
   const [showWaitingApprovalModal, setShowWaitingApprovalModal] = useState(false);
+  
+  // Tab state for viewing different report categories
+  const [activeTab, setActiveTab] = useState('active'); // 'active' | 'invalidated'
+  
+  // Invalidation state
+  const [isInvalidating, setIsInvalidating] = useState(false);
+  
+  // Restore/Invalidate modal states
+  const [showRestoreModal, setShowRestoreModal] = useState(false);
+  const [reportToRestore, setReportToRestore] = useState(null);
+  const [showRestoreSuccessModal, setShowRestoreSuccessModal] = useState(false);
+  const [showReInvalidateModal, setShowReInvalidateModal] = useState(false);
+  const [reportToReInvalidate, setReportToReInvalidate] = useState(null);
+  const [invalidateConfirmText, setInvalidateConfirmText] = useState('');
+  const [showInvalidateSuccessModal, setShowInvalidateSuccessModal] = useState(false);
+
+  // Helper function to check if report is "No Fire" + "No Smoke" - defined early
+  const isNoFireNoSmoke = useCallback((report) => {
+    const pred = (report?.prediction || '').toLowerCase().trim();
+    const smoke = (report?.smoke_detection || report?.smokeDetection || '').toLowerCase().trim();
+    return (pred.includes('no fire') || pred.includes('no_fire')) && 
+           (smoke.includes('no smoke') || smoke.includes('no_smoke'));
+  }, []);
+
+  // Helper function to format alarm level display
+  const formatAlarmLevel = useCallback((alarmLevel) => {
+    if (!alarmLevel) return 'Unknown';
+    const level = String(alarmLevel).toLowerCase().trim();
+    
+    // Handle "Unknown - structure count not provided" and similar
+    if (level.includes('unknown')) return 'Unknown';
+    
+    // Convert underscore format to proper display format
+    const alarmMap = {
+      'first_alarm': '1st Alarm',
+      '1st_alarm': '1st Alarm',
+      'second_alarm': '2nd Alarm',
+      '2nd_alarm': '2nd Alarm',
+      'third_alarm': '3rd Alarm',
+      '3rd_alarm': '3rd Alarm',
+      'fourth_alarm': '4th Alarm',
+      '4th_alarm': '4th Alarm',
+      'fifth_alarm': '5th Alarm',
+      '5th_alarm': '5th Alarm',
+      'task_force_alpha': 'TASK FORCE ALPHA',
+      'task_force_bravo': 'TASK FORCE BRAVO',
+      'task_force_charlie': 'TASK FORCE CHARLIE',
+      'task_force_delta': 'TASK FORCE DELTA',
+      'general_alarm': 'GENERAL ALARM'
+    };
+    
+    return alarmMap[level] || alarmLevel;
+  }, []);
 
   const fetchReports = useCallback(async () => {
     try {
       setLoading(true);
-      // 1) Prefer Supabase table (source of truth)
+      // 1) Try Railway API first (has reporter names and addresses populated)
+      try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 10000);
+        const res = await fetch(`${API_URL}/get_reports`, { signal: controller.signal });
+        clearTimeout(timeoutId);
+        
+        if (res.ok) {
+          const data = await res.json();
+          console.log('[AOverview] Railway API get_reports length:', Array.isArray(data) ? data.length : 'non-array');
+          
+          if (Array.isArray(data) && data.length > 0) {
+            // Auto-invalidate No Fire/No Smoke reports
+            data.forEach(report => {
+              const shouldAutoInvalidate = isNoFireNoSmoke(report) && 
+                                           report.invalidated !== true && 
+                                           report.validated !== true;
+              
+              if (shouldAutoInvalidate) {
+                supabase
+                  .from('fire_reports')
+                  .update({ 
+                    invalidated: true,
+                    invalidated_at: new Date().toISOString()
+                  })
+                  .eq('id', report.id)
+                  .then(({ error }) => {
+                    if (error) console.error('Error auto-invalidating report:', error);
+                    else console.log('✅ Auto-invalidated No Fire/No Smoke report:', report.id);
+                  });
+                // Update local data immediately
+                report.invalidated = true;
+                report.invalidated_at = new Date().toISOString();
+              }
+            });
+            
+            setReports(data);
+            // Load station assignments for these reports
+            const ids = data.map(r => String(r.id));
+            if (ids.length) {
+              const { data: assigns } = await supabase
+                .from('report_assignments')
+                .select('report_id')
+                .in('report_id', ids)
+                .eq('assignee_type', 'station');
+              setAssignedStationReportIds(new Set((assigns || []).map(a => String(a.report_id))));
+            } else {
+              setAssignedStationReportIds(new Set());
+            }
+            return;
+          }
+        }
+        console.warn('[AOverview] Railway API failed or returned no data, falling back to Supabase');
+      } catch (apiErr) {
+        console.warn('[AOverview] Railway API error:', apiErr?.message || apiErr);
+      }
+
+      // 2) Fallback to Supabase with user join for reporter names
       try {
         const { data: sbData, error: sbErr } = await supabase
           .from('fire_reports')
-          .select('*')
+          .select(`
+            *,
+            users:user_id (
+              first_name,
+              last_name,
+              email
+            )
+          `)
           .order('created_at', { ascending: false });
+          
         if (!sbErr && Array.isArray(sbData) && sbData.length > 0) {
           console.log('[AOverview] Supabase fire_reports rows:', sbData.length);
-          setReports(sbData);
+          
+          // Transform data to match Railway API format
+          const transformedData = sbData.map(report => {
+            // Build reporter name from joined user data
+            let reporter = 'Anonymous Reporter';
+            if (report.users) {
+              const firstName = report.users.first_name || '';
+              const lastName = report.users.last_name || '';
+              if (firstName || lastName) {
+                reporter = `${firstName} ${lastName}`.trim();
+              } else if (report.users.email) {
+                reporter = report.users.email;
+              }
+            } else if (report.reporter) {
+              reporter = report.reporter;
+            } else if (report.user_name) {
+              reporter = report.user_name;
+            }
+            
+            return {
+              ...report,
+              reporter: reporter,
+              // Ensure address is properly mapped
+              address: report.address || report.geotag_location || null
+            };
+          });
+          
+          // Auto-invalidate No Fire/No Smoke reports
+          transformedData.forEach(report => {
+            const shouldAutoInvalidate = isNoFireNoSmoke(report) && 
+                                         report.invalidated !== true && 
+                                         report.validated !== true;
+            
+            if (shouldAutoInvalidate) {
+              supabase
+                .from('fire_reports')
+                .update({ 
+                  invalidated: true,
+                  invalidated_at: new Date().toISOString()
+                })
+                .eq('id', report.id)
+                .then(({ error }) => {
+                  if (error) console.error('Error auto-invalidating report:', error);
+                  else console.log('✅ Auto-invalidated No Fire/No Smoke report:', report.id);
+                });
+              // Update local data immediately
+              report.invalidated = true;
+              report.invalidated_at = new Date().toISOString();
+            }
+          });
+          
+          setReports(transformedData);
           // Load station assignments for these reports
-          const ids = sbData.map(r => String(r.id));
+          const ids = transformedData.map(r => String(r.id));
           if (ids.length) {
             const { data: assigns } = await supabase
               .from('report_assignments')
@@ -85,29 +254,6 @@ export default function AOverview() {
       } catch (sbCatch) {
         console.warn('[AOverview] Supabase fire_reports catch:', sbCatch?.message || sbCatch);
       }
-
-      // 2) Fallback to Flask API
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 10000);
-      const res = await fetch(`${API_URL}/get_reports`, { signal: controller.signal });
-      clearTimeout(timeoutId);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json();
-      console.log('[AOverview] API get_reports length:', Array.isArray(data) ? data.length : 'non-array');
-      if (Array.isArray(data)) {
-        setReports(data);
-        const ids = data.map(r => String(r.id));
-        if (ids.length) {
-          const { data: assigns } = await supabase
-            .from('report_assignments')
-            .select('report_id')
-            .in('report_id', ids)
-            .eq('assignee_type', 'station');
-          setAssignedStationReportIds(new Set((assigns || []).map(a => String(a.report_id))));
-        } else {
-          setAssignedStationReportIds(new Set());
-        }
-      }
     } catch (e) {
       console.error('Error fetching reports:', e);
       if (e.name === 'AbortError') {
@@ -117,7 +263,7 @@ export default function AOverview() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [isNoFireNoSmoke]);
 
   // Build printable HTML for summary (lightweight vs web version)
   const formatDateTime = (timestamp) => {
@@ -757,6 +903,192 @@ export default function AOverview() {
     }
   }, [selectedReport?.id]);
 
+  // Invalidate No Fire/No Smoke report - marks it as invalid so admins can review
+  const handleInvalidateReport = async (reportId) => {
+    try {
+      setIsInvalidating(true);
+      
+      // Update report with invalidated flag
+      const { error } = await supabase
+        .from('fire_reports')
+        .update({ 
+          invalidated: true,
+          invalidated_at: new Date().toISOString(),
+          invalidated_by: 'Admin User',
+          invalidation_reason: 'AI misclassification - manual review required'
+        })
+        .eq('id', reportId);
+
+      if (error) throw error;
+
+      // Update local state
+      setReports(prev => prev.map(report => 
+        report.id === reportId ? { 
+          ...report, 
+          invalidated: true,
+          invalidated_at: new Date().toISOString(),
+          invalidated_by: 'Admin User',
+          invalidation_reason: 'AI misclassification - manual review required'
+        } : report
+      ));
+      
+      Alert.alert('Success', 'Report marked as invalid and moved to Invalidated Reports tab for review.');
+    } catch (error) {
+      console.error('Error invalidating report:', error);
+      Alert.alert('Error', `Failed to invalidate report: ${error.message}`);
+    } finally {
+      setIsInvalidating(false);
+    }
+  };
+
+  // Restore invalidated report
+  const handleRestoreReport = (reportId) => {
+    setReportToRestore(reportId);
+    setShowRestoreModal(true);
+  };
+
+  const confirmRestoreReport = async () => {
+    if (!reportToRestore) return;
+    
+    try {
+      setIsInvalidating(true);
+      
+      const { data, error } = await supabase
+        .from('fire_reports')
+        .update({ 
+          invalidated: false,
+          invalidated_at: null,
+          validated: true,
+          validated_at: new Date().toISOString()
+        })
+        .eq('id', reportToRestore)
+        .select();
+
+      if (error) throw error;
+
+      // Update local state
+      setReports(prev => prev.map(report => 
+        report.id === reportToRestore ? { 
+          ...report, 
+          invalidated: false,
+          invalidated_at: null,
+          validated: true,
+          validated_at: new Date().toISOString()
+        } : report
+      ));
+
+      setShowRestoreModal(false);
+      setReportToRestore(null);
+      setShowRestoreSuccessModal(true);
+      
+      setTimeout(() => {
+        setShowRestoreSuccessModal(false);
+        setActiveTab('active');
+      }, 3000);
+    } catch (error) {
+      console.error('Error restoring report:', error);
+      Alert.alert('Error', `Failed to restore report: ${error.message}`);
+    } finally {
+      setIsInvalidating(false);
+    }
+  };
+
+  // Re-invalidate a previously restored report
+  const handleReInvalidateReport = (reportId) => {
+    setReportToReInvalidate(reportId);
+    setShowReInvalidateModal(true);
+  };
+
+  const confirmReInvalidateReport = async () => {
+    if (!reportToReInvalidate) return;
+    
+    if (invalidateConfirmText.toUpperCase() !== 'INVALIDATE') {
+      Alert.alert('Error', 'Please type "INVALIDATE" to confirm.');
+      return;
+    }
+    
+    try {
+      setIsInvalidating(true);
+      
+      const { data, error } = await supabase
+        .from('fire_reports')
+        .update({ 
+          invalidated: true,
+          invalidated_at: new Date().toISOString(),
+          validated: false,
+          validated_at: null
+        })
+        .eq('id', reportToReInvalidate)
+        .select();
+
+      if (error) throw error;
+
+      // Update local state
+      setReports(prev => prev.map(report => 
+        report.id === reportToReInvalidate ? { 
+          ...report, 
+          invalidated: true,
+          invalidated_at: new Date().toISOString(),
+          validated: false,
+          validated_at: null
+        } : report
+      ));
+
+      setShowReInvalidateModal(false);
+      setReportToReInvalidate(null);
+      setInvalidateConfirmText('');
+      setShowInvalidateSuccessModal(true);
+      
+      setTimeout(() => {
+        setShowInvalidateSuccessModal(false);
+        setActiveTab('invalidated');
+      }, 3000);
+    } catch (error) {
+      console.error('Error re-invalidating report:', error);
+      Alert.alert('Error', `Failed to re-invalidate report: ${error.message}`);
+    } finally {
+      setIsInvalidating(false);
+    }
+  };
+
+  // Restore invalidated report - moves it back to validation
+  const handleRestoreReportLegacy = async (reportId) => {
+    try {
+      setIsInvalidating(true);
+      
+      // Remove invalidated flag
+      const { error} = await supabase
+        .from('fire_reports')
+        .update({ 
+          invalidated: false,
+          invalidated_at: null,
+          invalidated_by: null,
+          invalidation_reason: null
+        })
+        .eq('id', reportId);
+
+      if (error) throw error;
+
+      // Update local state
+      setReports(prev => prev.map(report => 
+        report.id === reportId ? { 
+          ...report, 
+          invalidated: false,
+          invalidated_at: null,
+          invalidated_by: null,
+          invalidation_reason: null
+        } : report
+      ));
+      
+      Alert.alert('Success', 'Report has been restored successfully.');
+    } catch (error) {
+      console.error('Error restoring report:', error);
+      Alert.alert('Error', `Failed to restore report: ${error.message}`);
+    } finally {
+      setIsInvalidating(false);
+    }
+  };
+
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
     try {
@@ -1346,6 +1678,16 @@ export default function AOverview() {
 
   const filtered = useMemo(() => {
     const result = reports.filter((r) => {
+      // Exclude invalidated reports from main overview
+      if (r.invalidated) {
+        return false;
+      }
+      
+      // Exclude unvalidated "No Fire/No Smoke" reports from main overview  
+      if (isNoFireNoSmoke(r) && !r.validated) {
+        return false;
+      }
+      
       const statusText = (r.status || '').toString().toLowerCase();
       // Do NOT hide any statuses by default. Only apply explicit status filter below.
       if (statusFilter !== 'All') {
@@ -1415,7 +1757,46 @@ export default function AOverview() {
       });
     }
     return result;
-  }, [reports, searchQuery, statusFilter, timeRangeFilter]);
+  }, [reports, searchQuery, statusFilter, timeRangeFilter, isNoFireNoSmoke]);
+
+  // Separate list for invalidated "No Fire/No Smoke" reports
+  const invalidatedReports = useMemo(() => {
+    return reports.filter((r) => {
+      // Only show invalidated reports
+      if (!r.invalidated) {
+        return false;
+      }
+
+      const q = searchQuery.trim().toLowerCase();
+      if (q) {
+        const location = (r.address || r.geotag_location || '').toLowerCase();
+        const reporter = (r.reporter || '').toLowerCase();
+        if (!(location.includes(q) || reporter.includes(q))) return false;
+      }
+
+      return true;
+    }).sort((a, b) => {
+      const timestampA = a.invalidated_at || a.created_at || a.timestamp || a.time;
+      const timestampB = b.invalidated_at || b.created_at || b.timestamp || b.time;
+      
+      if (!timestampA && !timestampB) return 0;
+      if (!timestampA) return 1;
+      if (!timestampB) return -1;
+      
+      try {
+        const dateA = new Date(timestampA);
+        const dateB = new Date(timestampB);
+        
+        if (isNaN(dateA.getTime()) && isNaN(dateB.getTime())) return 0;
+        if (isNaN(dateA.getTime())) return 1;
+        if (isNaN(dateB.getTime())) return -1;
+        
+        return dateB.getTime() - dateA.getTime();
+      } catch (error) {
+        return 0;
+      }
+    });
+  }, [reports, searchQuery]);
 
   const stats = useMemo(() => {
     const normalizePred = (p) => {
@@ -1425,14 +1806,16 @@ export default function AOverview() {
       if (s.includes('fire')) return 'fire';
       return s;
     };
-    const active = filtered.filter((r) => {
+    // Count from ALL reports, not just filtered ones
+    const activeReportsOnly = reports.filter((r) => !r.invalidated);
+    const active = activeReportsOnly.filter((r) => {
       const st = String(r.status || '').toLowerCase();
       return st.includes('on going') || st.includes('ongoing') || st.includes('under control');
     }).length;
-    const fire = filtered.filter((r) => normalizePred(r.prediction) === 'fire').length;
-    const noFire = filtered.filter((r) => normalizePred(r.prediction) === 'no fire').length;
+    const fire = activeReportsOnly.filter((r) => normalizePred(r.prediction) === 'fire').length;
+    const noFire = activeReportsOnly.filter((r) => normalizePred(r.prediction) === 'no fire').length;
     return { active, fire, noFire };
-  }, [filtered]);
+  }, [reports]);
 
   const getSafeImageUri = (uri) => {
     if (!uri || typeof uri !== 'string') return null;
@@ -1501,10 +1884,87 @@ export default function AOverview() {
         </View>
         <View style={{ height: 1, backgroundColor: '#e2e8f0', marginBottom: 12 }} />
 
-        <Text style={{ fontSize: 20, fontWeight: '800', color: '#0f172a', marginBottom: 8 }}>Active Fire Reports</Text>
-        
-        {/* Mobile-Friendly Report Cards */}
-        {loading ? (
+        {/* Tab Navigation - Improved 2-Tab Design */}
+        <View style={{ 
+          backgroundColor: 'white', 
+          borderRadius: 16, 
+          padding: 6, 
+          marginBottom: 20,
+          flexDirection: 'row',
+          shadowColor: '#000',
+          shadowOffset: { width: 0, height: 2 },
+          shadowOpacity: 0.1,
+          shadowRadius: 8,
+          elevation: 3
+        }}>
+          <TouchableOpacity
+            style={{
+              flex: 1,
+              paddingVertical: 16,
+              paddingHorizontal: 12,
+              borderRadius: 12,
+              backgroundColor: activeTab === 'active' ? '#dc2626' : 'transparent',
+              alignItems: 'center',
+              marginRight: 4,
+            }}
+            onPress={() => setActiveTab('active')}
+          >
+            <Text style={{
+              color: activeTab === 'active' ? 'white' : '#64748b',
+              fontWeight: '800',
+              fontSize: 15,
+              letterSpacing: 0.5,
+            }}>
+              Active Reports
+            </Text>
+            <Text style={{
+              color: activeTab === 'active' ? 'white' : '#9ca3af',
+              fontWeight: '700',
+              fontSize: 18,
+              marginTop: 4,
+            }}>
+              {reports.filter(r => !r.invalidated).length}
+            </Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={{
+              flex: 1,
+              paddingVertical: 16,
+              paddingHorizontal: 12,
+              borderRadius: 12,
+              backgroundColor: activeTab === 'invalidated' ? '#f97316' : 'transparent',
+              alignItems: 'center',
+              marginLeft: 4,
+            }}
+            onPress={() => setActiveTab('invalidated')}
+          >
+            <Text style={{
+              color: activeTab === 'invalidated' ? 'white' : '#64748b',
+              fontWeight: '800',
+              fontSize: 15,
+              letterSpacing: 0.5,
+            }}>
+              Invalidated
+            </Text>
+            <Text style={{
+              color: activeTab === 'invalidated' ? 'white' : '#9ca3af',
+              fontWeight: '700',
+              fontSize: 18,
+              marginTop: 4,
+            }}>
+              {invalidatedReports.length}
+            </Text>
+          </TouchableOpacity>
+        </View>
+
+        {/* Active Reports Tab Content */}
+        {activeTab === 'active' && (
+          <>
+            <Text style={{ fontSize: 20, fontWeight: '800', color: '#0f172a', marginBottom: 8 }}>Active Fire Reports</Text>
+            
+            {/* Mobile-Friendly Report Cards */}
+            {loading ? (
           <View style={{ padding: 40, alignItems: 'center' }}>
             <Text style={{ fontSize: 16, color: '#6b7280' }}>Loading reports...</Text>
           </View>
@@ -1590,7 +2050,7 @@ export default function AOverview() {
 
                 {/* Location */}
                 <Text style={{ fontSize: 14, color: '#4b5563', marginBottom: 12 }} numberOfLines={2}>
-                  📍 {r.address || r.geotag_location || 'No address'}
+                  📍 {r.address || 'No address'}
                 </Text>
 
                 {/* Alarm Levels Row */}
@@ -1611,8 +2071,8 @@ export default function AOverview() {
                       }}>
                         {(() => {
                           const aiOverride = chatAlarmByReport[String(r.id)];
-                          const s = aiOverride || r.recommended_alarm_level || r.alarm_level || '';
-                          return s && s.toLowerCase().startsWith('unknown') ? 'Unknown' : (s || 'Unknown');
+                          const level = aiOverride || r.recommended_alarm_level || r.alarm_level || 'Unknown';
+                          return formatAlarmLevel(level);
                         })()}
                       </Text>
                     </View>
@@ -1639,7 +2099,7 @@ export default function AOverview() {
                 </View>
               </View>
 
-              {/* Actions Row - modern pill buttons aligned with Stations UI */}
+              {/* Actions Row - consistent button design */}
               <View style={{
                 flexDirection: 'row',
                 justifyContent: 'space-between',
@@ -1657,7 +2117,7 @@ export default function AOverview() {
                     flex: 1,
                     paddingVertical: 10,
                     borderRadius: 10,
-                    backgroundColor: '#ef4444',
+                    backgroundColor: '#6b7280',
                     alignItems: 'center',
                     shadowColor: '#000', shadowOpacity: 0.06, shadowRadius: 6, shadowOffset: { width: 0, height: 2 }, elevation: 2
                   }}
@@ -1690,46 +2150,215 @@ export default function AOverview() {
                     flex: 1,
                     paddingVertical: 10,
                     borderRadius: 10,
-                    backgroundColor: '#f59e0b',
+                    backgroundColor: '#ef4444',
                     alignItems: 'center',
                     shadowColor: '#000', shadowOpacity: 0.06, shadowRadius: 6, shadowOffset: { width: 0, height: 2 }, elevation: 2
                   }}
                 >
                   <Text style={{ color: 'white', fontWeight: '700', fontSize: 12 }}>Edit</Text>
                 </TouchableOpacity>
-                <TouchableOpacity
-                  onPress={() => {
-                    Alert.alert(
-                      'Confirm Cancellation',
-                      `Are you sure you want to cancel this report?\n\nReporter: ${r.reporter || r.user_name || 'Anonymous Reporter'}\nLocation: ${r.address || r.geotag_location || 'No address'}\n\nYou will be asked to provide a reason for cancellation.`,
-                      [
-                        { text: 'Back', style: 'cancel' },
-                        {
-                          text: 'Proceed',
-                          style: 'destructive',
-                          onPress: () => {
-                            setCancelReport(r);
-                            setCancelReason('');
-                            setShowCancelModal(true);
-                          }
-                        }
-                      ]
-                    );
-                  }}
-                  style={{
-                    flex: 1,
-                    paddingVertical: 10,
-                    borderRadius: 10,
-                    backgroundColor: '#6b7280',
-                    alignItems: 'center',
-                    shadowColor: '#000', shadowOpacity: 0.06, shadowRadius: 6, shadowOffset: { width: 0, height: 2 }, elevation: 2
-                  }}
-                >
-                  <Text style={{ color: 'white', fontWeight: '700', fontSize: 12 }}>Cancel</Text>
-                </TouchableOpacity>
               </View>
             </View>
           ))
+        )}
+          </>
+        )}
+
+        {/* Invalidated Tab Content */}
+        {activeTab === 'invalidated' && (
+          <>
+            <View style={{ 
+              backgroundColor: '#fee2e2', 
+              borderRadius: 12, 
+              padding: 16, 
+              marginBottom: 16,
+              borderWidth: 2,
+              borderColor: '#fecaca'
+            }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 8 }}>
+                <MaterialIcons name="error-outline" size={24} color="#dc2626" />
+                <Text style={{ fontSize: 20, fontWeight: '800', color: '#7f1d1d', marginLeft: 8 }}>
+                  Invalidated Reports
+                </Text>
+              </View>
+              <Text style={{ fontSize: 14, color: '#7f1d1d', marginBottom: 12 }}>
+                These reports were flagged as AI misclassifications. Review the images to confirm if they should remain invalid or be restored.
+              </Text>
+              
+              {invalidatedReports.length === 0 ? (
+                <View style={{ padding: 20, alignItems: 'center', backgroundColor: 'white', borderRadius: 12 }}>
+                  <Text style={{ fontSize: 16, color: '#7f1d1d', textAlign: 'center' }}>No invalidated reports</Text>
+                </View>
+              ) : (
+                invalidatedReports.map((r) => (
+                  <View
+                    key={r.id}
+                    style={{
+                      backgroundColor: 'white',
+                      borderRadius: 12,
+                      marginBottom: 12,
+                      shadowColor: '#000',
+                      shadowOpacity: 0.05,
+                      shadowRadius: 6,
+                      shadowOffset: { width: 0, height: 2 },
+                      elevation: 2,
+                    }}
+                  >
+                    <View style={{ padding: 16 }}>
+                      {/* Header Row */}
+                      <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 12 }}>
+                        <View style={{ flex: 1 }}>
+                          <Text style={{ fontSize: 16, fontWeight: '700', color: '#1f2937', marginBottom: 4 }}>
+                            {r.reporter || r.user_name || 'Anonymous Reporter'}
+                          </Text>
+                          <Text style={{ fontSize: 12, color: '#6b7280' }}>
+                            Invalidated: {(() => {
+                              const timestamp = r.invalidated_at;
+                              if (!timestamp) return 'Unknown';
+                              try {
+                                const date = new Date(timestamp);
+                                if (isNaN(date.getTime())) return 'Unknown';
+                                return date.toLocaleString('en-US', {
+                                  year: 'numeric', month: 'short', day: 'numeric',
+                                  hour: '2-digit', minute: '2-digit', hour12: true
+                                });
+                              } catch {
+                                return 'Unknown';
+                              }
+                            })()}
+                          </Text>
+                          <Text style={{ fontSize: 11, color: '#9ca3af', marginTop: 2 }}>
+                            By: {r.invalidated_by || 'Unknown'}
+                          </Text>
+                        </View>
+                        <View style={{
+                          paddingHorizontal: 12,
+                          paddingVertical: 6,
+                          borderRadius: 16,
+                          backgroundColor: '#fee2e2',
+                        }}>
+                          <Text style={{
+                            color: '#dc2626',
+                            fontWeight: '600',
+                            fontSize: 12
+                          }}>
+                            Invalid
+                          </Text>
+                        </View>
+                      </View>
+
+                      {/* Location */}
+                      <Text style={{ fontSize: 14, color: '#4b5563', marginBottom: 12 }} numberOfLines={2}>
+                        📍 {r.address || 'No address'}
+                      </Text>
+
+                      {/* Invalidation Reason */}
+                      {r.invalidation_reason && (
+                        <View style={{ 
+                          backgroundColor: '#fff7ed', 
+                          borderRadius: 8, 
+                          padding: 10, 
+                          marginBottom: 12,
+                          borderWidth: 1,
+                          borderColor: '#fed7aa'
+                        }}>
+                          <Text style={{ fontSize: 11, color: '#9a3412', fontWeight: '600', marginBottom: 4 }}>
+                            Invalidation Reason:
+                          </Text>
+                          <Text style={{ fontSize: 12, color: '#7c2d12' }}>
+                            {r.invalidation_reason}
+                          </Text>
+                        </View>
+                      )}
+
+                      {/* Image Preview */}
+                      {r.image_url && (
+                        <View style={{ marginBottom: 12 }}>
+                          <Text style={{ fontSize: 11, color: '#6b7280', fontWeight: '600', marginBottom: 6 }}>
+                            Review Image:
+                          </Text>
+                          <Image
+                            source={{ uri: getSafeImageUri(r.image_url) }}
+                            style={{ width: '100%', height: 200, borderRadius: 8 }}
+                            resizeMode="cover"
+                            onError={() => { /* swallow image errors */ }}
+                          />
+                        </View>
+                      )}
+
+                      {/* AI Analysis */}
+                      {(r.prediction || r.smoke_detection) && (
+                        <View style={{ 
+                          backgroundColor: '#f0f9ff', 
+                          borderRadius: 8, 
+                          padding: 10, 
+                          borderWidth: 1,
+                          borderColor: '#bfdbfe'
+                        }}>
+                          <Text style={{ fontSize: 11, color: '#1e40af', fontWeight: '600', marginBottom: 6 }}>
+                            AI Analysis Results (Review Required)
+                          </Text>
+                          {r.prediction && (
+                            <Text style={{ fontSize: 12, color: '#374151', marginBottom: 2 }}>
+                              🔥 Fire Detection: {r.prediction} {r.confidence ? `(${(parseFloat(r.confidence) * 100).toFixed(1)}%)` : ''}
+                            </Text>
+                          )}
+                          {r.smoke_detection && (
+                            <Text style={{ fontSize: 12, color: '#374151' }}>
+                              💨 Smoke Detection: {r.smoke_detection} {r.smoke_confidence ? `(${(parseFloat(r.smoke_confidence) * 100).toFixed(1)}%)` : ''}
+                            </Text>
+                          )}
+                        </View>
+                      )}
+                    </View>
+
+                    {/* Actions Row */}
+                    <View style={{
+                      flexDirection: 'row',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                      paddingHorizontal: 16,
+                      paddingBottom: 16,
+                      paddingTop: 8,
+                      borderTopWidth: 1,
+                      borderTopColor: '#f3f4f6',
+                      gap: 8
+                    }}>
+                      <TouchableOpacity
+                        onPress={() => setSelectedReport(r)}
+                        style={{
+                          flex: 1,
+                          paddingVertical: 10,
+                          borderRadius: 10,
+                          backgroundColor: '#6b7280',
+                          alignItems: 'center',
+                          shadowColor: '#000', shadowOpacity: 0.06, shadowRadius: 6, shadowOffset: { width: 0, height: 2 }, elevation: 2
+                        }}
+                      >
+                        <Text style={{ color: 'white', fontWeight: '700', fontSize: 12 }}>View Details</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        onPress={() => handleRestoreReport(r.id)}
+                        disabled={isInvalidating}
+                        style={{
+                          flex: 1,
+                          paddingVertical: 10,
+                          borderRadius: 10,
+                          backgroundColor: isInvalidating ? '#9ca3af' : '#10b981',
+                          alignItems: 'center',
+                          shadowColor: '#000', shadowOpacity: 0.06, shadowRadius: 6, shadowOffset: { width: 0, height: 2 }, elevation: 2
+                        }}
+                      >
+                        <Text style={{ color: 'white', fontWeight: '700', fontSize: 12 }}>
+                          {isInvalidating ? 'Restoring...' : 'Restore Report'}
+                        </Text>
+                      </TouchableOpacity>
+                    </View>
+                  </View>
+                ))
+              )}
+            </View>
+          </>
         )}
       </ScrollView>
 
@@ -2202,6 +2831,50 @@ export default function AOverview() {
                         <Text style={{ fontSize: 14, color: '#1e40af' }}>No responder assigned yet.</Text>
                       )}
                     </View>
+                  </View>
+
+                  {/* Action Buttons */}
+                  <View style={{ flexDirection: 'row', gap: 12, paddingHorizontal: 16, marginTop: 8 }}>
+                    <TouchableOpacity
+                      onPress={() => setSelectedReport(null)}
+                      style={{
+                        flex: 1,
+                        paddingVertical: 14,
+                        borderRadius: 10,
+                        backgroundColor: '#6b7280',
+                        alignItems: 'center',
+                        shadowColor: '#000',
+                        shadowOpacity: 0.06,
+                        shadowRadius: 6,
+                        shadowOffset: { width: 0, height: 2 },
+                        elevation: 2
+                      }}
+                    >
+                      <Text style={{ color: 'white', fontWeight: '700', fontSize: 14 }}>Close</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      onPress={() => {
+                        handleReInvalidateReport(selectedReport.id);
+                        setSelectedReport(null);
+                      }}
+                      disabled={isInvalidating}
+                      style={{
+                        flex: 1,
+                        paddingVertical: 14,
+                        borderRadius: 10,
+                        backgroundColor: isInvalidating ? '#9ca3af' : '#ef4444',
+                        alignItems: 'center',
+                        shadowColor: '#000',
+                        shadowOpacity: 0.06,
+                        shadowRadius: 6,
+                        shadowOffset: { width: 0, height: 2 },
+                        elevation: 2
+                      }}
+                    >
+                      <Text style={{ color: 'white', fontWeight: '700', fontSize: 14 }}>
+                        {isInvalidating ? 'Processing...' : 'Invalidate'}
+                      </Text>
+                    </TouchableOpacity>
                   </View>
                 </View>
               )}
@@ -2788,6 +3461,254 @@ export default function AOverview() {
             ) : (
               <Text style={{ color: '#ef4444', textAlign: 'center', paddingVertical: 12 }}>No summary data.</Text>
             )}
+          </View>
+        </View>
+      </Modal>
+
+      {/* Restore Confirmation Modal */}
+      <Modal visible={showRestoreModal} transparent animationType="fade" onRequestClose={() => {
+        setShowRestoreModal(false);
+        setReportToRestore(null);
+      }}>
+        <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center', padding: 16 }}>
+          <View style={{ backgroundColor: 'white', borderRadius: 16, width: '100%', maxWidth: 400, padding: 24 }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 16 }}>
+              <MaterialIcons name="warning" size={32} color="#f59e0b" />
+              <Text style={{ fontSize: 20, fontWeight: '800', color: '#1f2937', marginLeft: 12 }}>
+                Restore Report?
+              </Text>
+            </View>
+            
+            <View style={{ backgroundColor: '#dbeafe', borderRadius: 12, padding: 16, marginBottom: 20 }}>
+              <Text style={{ fontSize: 14, color: '#1e40af', marginBottom: 8, fontWeight: '600' }}>
+                ⚠️ Confirm Restoration
+              </Text>
+              <Text style={{ fontSize: 14, color: '#1e3a8a' }}>
+                This incident will be moved to Active Reports and will appear on the map for responders.
+              </Text>
+            </View>
+
+            <View style={{ flexDirection: 'row', gap: 12 }}>
+              <TouchableOpacity
+                onPress={() => {
+                  setShowRestoreModal(false);
+                  setReportToRestore(null);
+                }}
+                disabled={isInvalidating}
+                style={{ flex: 1, paddingVertical: 14, borderRadius: 10, backgroundColor: '#e5e7eb', alignItems: 'center' }}
+              >
+                <Text style={{ color: '#374151', fontWeight: '700', fontSize: 14 }}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={confirmRestoreReport}
+                disabled={isInvalidating}
+                style={{ flex: 1, paddingVertical: 14, borderRadius: 10, backgroundColor: isInvalidating ? '#9ca3af' : '#10b981', alignItems: 'center' }}
+              >
+                <Text style={{ color: 'white', fontWeight: '700', fontSize: 14 }}>
+                  {isInvalidating ? 'Restoring...' : 'Confirm Restore'}
+                </Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Restore Success Modal */}
+      <Modal visible={showRestoreSuccessModal} transparent animationType="fade">
+        <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center', padding: 16 }}>
+          <View style={{ backgroundColor: 'white', borderRadius: 16, width: '100%', maxWidth: 400, padding: 24, borderWidth: 4, borderColor: '#10b981' }}>
+            <View style={{ alignItems: 'center' }}>
+              <View style={{ backgroundColor: '#10b981', borderRadius: 50, padding: 16, marginBottom: 16 }}>
+                <MaterialIcons name="check" size={48} color="white" />
+              </View>
+              
+              <Text style={{ fontSize: 22, fontWeight: '800', color: '#1f2937', textAlign: 'center', marginBottom: 16 }}>
+                Report Successfully Restored!
+              </Text>
+              
+              <View style={{ backgroundColor: '#d1fae5', borderRadius: 12, padding: 16, width: '100%', marginBottom: 20 }}>
+                <Text style={{ fontSize: 13, color: '#065f46', textAlign: 'center', marginBottom: 8, fontWeight: '600' }}>✅ Moved to Active Reports</Text>
+                <Text style={{ fontSize: 13, color: '#065f46', textAlign: 'center', marginBottom: 8, fontWeight: '600' }}>🗺️ Now visible on all maps</Text>
+                <Text style={{ fontSize: 13, color: '#065f46', textAlign: 'center', fontWeight: '600' }}>🚒 Available for station assignment</Text>
+              </View>
+
+              <TouchableOpacity
+                onPress={() => {
+                  setShowRestoreSuccessModal(false);
+                  setActiveTab('active');
+                }}
+                style={{ width: '100%', paddingVertical: 14, borderRadius: 10, backgroundColor: '#10b981', alignItems: 'center' }}
+              >
+                <Text style={{ color: 'white', fontWeight: '700', fontSize: 16 }}>View in Active Reports</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Re-Invalidate Warning Modal */}
+      <Modal visible={showReInvalidateModal} transparent animationType="fade" onRequestClose={() => {
+        setShowReInvalidateModal(false);
+        setReportToReInvalidate(null);
+        setInvalidateConfirmText('');
+      }}>
+        <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.7)', justifyContent: 'center', alignItems: 'center', padding: 16 }}>
+          <ScrollView contentContainerStyle={{ flexGrow: 1, justifyContent: 'center', alignItems: 'center', paddingVertical: 20 }}>
+            <View style={{ backgroundColor: 'white', borderRadius: 16, width: '100%', maxWidth: 450, borderWidth: 4, borderColor: '#dc2626' }}>
+              {/* Header */}
+              <View style={{ backgroundColor: '#dc2626', borderTopLeftRadius: 12, borderTopRightRadius: 12, padding: 20 }}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1 }}>
+                    <View style={{ backgroundColor: 'rgba(255,255,255,0.2)', borderRadius: 30, padding: 12, marginRight: 12 }}>
+                      <MaterialIcons name="warning" size={32} color="white" />
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={{ fontSize: 20, fontWeight: '800', color: 'white' }}>⚠️ CONFIRM INVALIDATION</Text>
+                      <Text style={{ fontSize: 12, color: '#fecaca', marginTop: 4, fontWeight: '600' }}>Critical Action Required</Text>
+                    </View>
+                  </View>
+                  <TouchableOpacity
+                    onPress={() => {
+                      setShowReInvalidateModal(false);
+                      setReportToReInvalidate(null);
+                      setInvalidateConfirmText('');
+                    }}
+                    disabled={isInvalidating}
+                  >
+                    <MaterialIcons name="close" size={28} color="rgba(255,255,255,0.8)" />
+                  </TouchableOpacity>
+                </View>
+              </View>
+
+              {/* Content */}
+              <View style={{ padding: 20 }}>
+                {/* Critical Warning */}
+                <View style={{ backgroundColor: '#fee2e2', borderRadius: 12, padding: 16, marginBottom: 16, borderWidth: 2, borderColor: '#fca5a5' }}>
+                  <View style={{ flexDirection: 'row', alignItems: 'flex-start', marginBottom: 12 }}>
+                    <MaterialIcons name="error" size={24} color="#dc2626" style={{ marginRight: 8, marginTop: 2 }} />
+                    <View style={{ flex: 1 }}>
+                      <Text style={{ fontSize: 16, fontWeight: '800', color: '#7f1d1d', marginBottom: 8 }}>CRITICAL WARNING</Text>
+                      <Text style={{ fontSize: 13, color: '#991b1b', lineHeight: 20 }}>
+                        You are about to <Text style={{ fontWeight: '800' }}>INVALIDATE</Text> this emergency report. This action will have <Text style={{ fontWeight: '800' }}>IMMEDIATE and SERIOUS consequences</Text>:
+                      </Text>
+                    </View>
+                  </View>
+                  
+                  <View style={{ marginLeft: 32 }}>
+                    <Text style={{ fontSize: 13, color: '#991b1b', marginBottom: 6 }}>❌ <Text style={{ fontWeight: '700' }}>Report will DISAPPEAR from ALL maps</Text></Text>
+                    <Text style={{ fontSize: 13, color: '#991b1b', marginBottom: 6 }}>❌ <Text style={{ fontWeight: '700' }}>Fire stations will NO LONGER see this incident</Text></Text>
+                    <Text style={{ fontSize: 13, color: '#991b1b', marginBottom: 6 }}>❌ <Text style={{ fontWeight: '700' }}>Responders will be UNABLE to respond</Text></Text>
+                    <Text style={{ fontSize: 13, color: '#991b1b' }}>⚠️ <Text style={{ fontWeight: '700' }}>If this is a REAL EMERGENCY, people could be in DANGER</Text></Text>
+                  </View>
+                </View>
+
+                {/* Important Notice */}
+                <View style={{ backgroundColor: '#fef3c7', borderRadius: 12, padding: 16, marginBottom: 16, borderWidth: 2, borderColor: '#fde68a' }}>
+                  <Text style={{ fontSize: 13, color: '#78350f', fontWeight: '700' }}>
+                    ⚡ Only invalidate if you are ABSOLUTELY CERTAIN this is a FALSE REPORT (No Fire + No Smoke)
+                  </Text>
+                </View>
+
+                {/* Confirmation Input */}
+                <View style={{ marginBottom: 16 }}>
+                  <Text style={{ fontSize: 13, color: '#1f2937', fontWeight: '700', marginBottom: 8 }}>
+                    Type <Text style={{ fontSize: 15, color: '#dc2626', fontWeight: '800' }}>INVALIDATE</Text> to confirm:
+                  </Text>
+                  <TextInput
+                    value={invalidateConfirmText}
+                    onChangeText={setInvalidateConfirmText}
+                    placeholder="Type INVALIDATE here"
+                    placeholderTextColor="#9ca3af"
+                    editable={!isInvalidating}
+                    autoCapitalize="characters"
+                    style={{
+                      borderWidth: 2,
+                      borderColor: '#d1d5db',
+                      borderRadius: 10,
+                      paddingHorizontal: 16,
+                      paddingVertical: 12,
+                      textAlign: 'center',
+                      fontSize: 16,
+                      fontWeight: '700',
+                      textTransform: 'uppercase',
+                      letterSpacing: 2,
+                      color: '#1f2937',
+                      backgroundColor: isInvalidating ? '#f3f4f6' : 'white'
+                    }}
+                  />
+                  <Text style={{ fontSize: 11, color: '#6b7280', textAlign: 'center', marginTop: 8 }}>
+                    This action cannot be easily undone. The report will need to be manually restored.
+                  </Text>
+                </View>
+
+                {/* Action Buttons */}
+                <View style={{ flexDirection: 'row', gap: 12 }}>
+                  <TouchableOpacity
+                    onPress={() => {
+                      setShowReInvalidateModal(false);
+                      setReportToReInvalidate(null);
+                      setInvalidateConfirmText('');
+                    }}
+                    disabled={isInvalidating}
+                    style={{ flex: 1, paddingVertical: 14, borderRadius: 10, backgroundColor: '#e5e7eb', alignItems: 'center' }}
+                  >
+                    <Text style={{ color: '#374151', fontWeight: '700', fontSize: 14 }}>Cancel - Keep Report Active</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    onPress={confirmReInvalidateReport}
+                    disabled={isInvalidating || invalidateConfirmText.toUpperCase() !== 'INVALIDATE'}
+                    style={{
+                      flex: 1,
+                      paddingVertical: 14,
+                      borderRadius: 10,
+                      backgroundColor: (isInvalidating || invalidateConfirmText.toUpperCase() !== 'INVALIDATE') ? '#d1d5db' : '#dc2626',
+                      alignItems: 'center'
+                    }}
+                  >
+                    <Text style={{ color: 'white', fontWeight: '700', fontSize: 14 }}>
+                      {isInvalidating ? 'Invalidating...' : 'Yes, Invalidate Report'}
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            </View>
+          </ScrollView>
+        </View>
+      </Modal>
+
+      {/* Invalidation Success Modal */}
+      <Modal visible={showInvalidateSuccessModal} transparent animationType="fade">
+        <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center', padding: 16 }}>
+          <View style={{ backgroundColor: 'white', borderRadius: 16, width: '100%', maxWidth: 400, padding: 24, borderWidth: 4, borderColor: '#f97316' }}>
+            <View style={{ alignItems: 'center' }}>
+              <View style={{ backgroundColor: '#f97316', borderRadius: 50, padding: 16, marginBottom: 16 }}>
+                <MaterialIcons name="block" size={48} color="white" />
+              </View>
+              
+              <Text style={{ fontSize: 22, fontWeight: '800', color: '#1f2937', textAlign: 'center', marginBottom: 16 }}>
+                Report Invalidated Successfully
+              </Text>
+              
+              <View style={{ backgroundColor: '#ffedd5', borderRadius: 12, padding: 16, width: '100%', marginBottom: 20 }}>
+                <Text style={{ fontSize: 13, color: '#9a3412', textAlign: 'center', marginBottom: 8, fontWeight: '600' }}>✅ Moved to Invalidated Reports</Text>
+                <Text style={{ fontSize: 13, color: '#9a3412', textAlign: 'center', marginBottom: 8, fontWeight: '600' }}>🗺️ Removed from all maps</Text>
+                <Text style={{ fontSize: 13, color: '#9a3412', textAlign: 'center', fontWeight: '600' }}>🚫 Hidden from responders</Text>
+              </View>
+
+              <TouchableOpacity
+                onPress={() => {
+                  setShowInvalidateSuccessModal(false);
+                  setActiveTab('invalidated');
+                }}
+                style={{ width: '100%', paddingVertical: 14, borderRadius: 10, backgroundColor: '#f97316', alignItems: 'center' }}
+              >
+                <Text style={{ color: 'white', fontWeight: '700', fontSize: 16 }}>View in Invalidated Reports</Text>
+              </TouchableOpacity>
+              
+              <Text style={{ fontSize: 11, color: '#6b7280', textAlign: 'center', marginTop: 12 }}>
+                Auto-switching to Invalidated tab in 3 seconds...
+              </Text>
+            </View>
           </View>
         </View>
       </Modal>

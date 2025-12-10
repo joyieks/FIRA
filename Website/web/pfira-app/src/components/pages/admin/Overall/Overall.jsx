@@ -44,6 +44,21 @@ const Overview = () => {
   const [timeRangeFilter, setTimeRangeFilter] = useState('all');
   const [fallbackUsed, setFallbackUsed] = useState(false);
   const [fetchError, setFetchError] = useState(null);
+  
+  // Tab and validation states
+  const [activeTab, setActiveTab] = useState('active'); // 'active' | 'validation' | 'invalidated'
+  const [isInvalidating, setIsInvalidating] = useState(false);
+  
+  // Restore confirmation modal states
+  const [showRestoreModal, setShowRestoreModal] = useState(false);
+  const [reportToRestore, setReportToRestore] = useState(null);
+  const [showRestoreSuccessModal, setShowRestoreSuccessModal] = useState(false);
+  
+  // Re-invalidate modal states
+  const [showReInvalidateModal, setShowReInvalidateModal] = useState(false);
+  const [reportToReInvalidate, setReportToReInvalidate] = useState(null);
+  const [invalidateConfirmText, setInvalidateConfirmText] = useState('');
+  const [showInvalidateSuccessModal, setShowInvalidateSuccessModal] = useState(false);
 
   // API endpoint for fetching reports
   const API_URL = 'https://fire-detection-api-production-f55b.up.railway.app';
@@ -91,7 +106,12 @@ const Overview = () => {
           address: report.address,
           geotag_location: report.geotag_location,
           cancelled_by: report.cancelled_by,
-          cancellation_reason: report.cancellation_reason
+          cancellation_reason: report.cancellation_reason,
+          validated: report.validated,
+          validated_at: report.validated_at,
+          invalidated: report.invalidated,
+          invalidated_at: report.invalidated_at,
+          smoke_detection: report.smoke_detection
         };
       });
       setReports(transformed);
@@ -103,6 +123,291 @@ const Overview = () => {
       setReports([]);
     } finally {
       setIsLoading(false);
+    }
+  };
+
+  // Helper function to check if report is "No Fire" + "No Smoke"
+  const isNoFireNoSmoke = (report) => {
+    const pred = (report?.prediction || '').toLowerCase().trim();
+    const smoke = (report?.smokeIntensity || report?.smokeDetection || report?.smoke_detection || report?.smoke_intensity || '').toLowerCase().trim();
+    return (pred.includes('no fire') || pred.includes('no_fire')) && 
+           (smoke.includes('no smoke') || smoke.includes('no_smoke'));
+  };
+
+  // Invalidate No Fire/No Smoke report
+  const handleInvalidateReport = async (reportId) => {
+    try {
+      setIsInvalidating(true);
+      
+      const { error } = await supabase
+        .from('fire_reports')
+        .update({ 
+          invalidated: true,
+          invalidated_at: new Date().toISOString()
+        })
+        .eq('id', reportId);
+
+      if (error) throw error;
+
+      // Update local state
+      setReports(prev => prev.map(report => 
+        report.id === reportId ? { 
+          ...report, 
+          invalidated: true,
+          invalidated_at: new Date().toISOString()
+        } : report
+      ));
+      
+      alert('Report marked as invalid and moved to Invalidated Reports tab for review.');
+    } catch (error) {
+      console.error('Error invalidating report:', error);
+      alert(`Failed to invalidate report: ${error.message}`);
+    } finally {
+      setIsInvalidating(false);
+    }
+  };
+
+  // Restore invalidated report
+  const handleRestoreReport = async (reportId) => {
+    // Show confirmation modal
+    console.log('🔑 Report ID to restore:', reportId, 'Type:', typeof reportId);
+    setReportToRestore(reportId);
+    setShowRestoreModal(true);
+  };
+
+  // Re-invalidate a previously restored report
+  const handleReInvalidateReport = (reportId) => {
+    console.log('🔄 Report ID to re-invalidate:', reportId);
+    setReportToReInvalidate(reportId);
+    setShowReInvalidateModal(true);
+  };
+
+  const confirmReInvalidateReport = async () => {
+    if (!reportToReInvalidate) return;
+    
+    // Check if user typed INVALIDATE correctly (case-insensitive)
+    if (invalidateConfirmText.toUpperCase() !== 'INVALIDATE') {
+      alert('Please type "INVALIDATE" to confirm.');
+      return;
+    }
+    
+    try {
+      setIsInvalidating(true);
+      
+      console.log('🔧 Re-invalidating report ID:', reportToReInvalidate);
+      
+      const { data: updateData, error } = await supabase
+        .from('fire_reports')
+        .update({ 
+          invalidated: true,
+          invalidated_at: new Date().toISOString(),
+          validated: false,
+          validated_at: null
+        })
+        .eq('id', reportToReInvalidate)
+        .select();
+
+      if (error) {
+        console.error('❌ Re-invalidation error:', error);
+        throw error;
+      }
+
+      console.log('✅ Report re-invalidated:', updateData);
+
+      // Update local state - remove from active reports
+      setReports(prev => prev.map(report => 
+        report.id === reportToReInvalidate ? { 
+          ...report, 
+          invalidated: true,
+          invalidated_at: new Date().toISOString(),
+          validated: false,
+          validated_at: null
+        } : report
+      ));
+
+      // Close modal and switch to invalidated tab
+      setShowReInvalidateModal(false);
+      setReportToReInvalidate(null);
+      setInvalidateConfirmText('');
+      
+      // Show success modal
+      setShowInvalidateSuccessModal(true);
+      
+      // Auto-close success modal and switch tab after 3 seconds
+      setTimeout(() => {
+        setShowInvalidateSuccessModal(false);
+        setActiveTab('invalidated');
+      }, 3000);
+    } catch (error) {
+      console.error('Error re-invalidating report:', error);
+      alert(`Failed to re-invalidate report: ${error.message}`);
+    } finally {
+      setIsInvalidating(false);
+    }
+  };
+
+  const confirmRestoreReport = async () => {
+    if (!reportToRestore) return;
+    
+    try {
+      setIsInvalidating(true);
+      
+      // Clear invalidation AND mark as validated so it appears in Active Reports
+      console.log('🔧 Attempting to update report ID:', reportToRestore, 'Type:', typeof reportToRestore);
+      
+      // First, check if the report exists
+      const { data: existingReport, error: checkError } = await supabase
+        .from('fire_reports')
+        .select('id, prediction, smoke_intensity')
+        .eq('id', reportToRestore);
+      
+      console.log('🔍 Report exists in DB?', existingReport, 'Error:', checkError);
+      
+      const { data: updateData, error } = await supabase
+        .from('fire_reports')
+        .update({ 
+          invalidated: false,
+          invalidated_at: null,
+          validated: true,
+          validated_at: new Date().toISOString()
+        })
+        .eq('id', reportToRestore)
+        .select(); // Add select() to return the updated row
+
+      if (error) {
+        console.error('❌ Database update error:', error);
+        throw error;
+      }
+
+      console.log('✅ Database update response:', updateData);
+      console.log('✅ Report restored in database:', reportToRestore);
+      console.log('Updated fields: invalidated=false, validated=true');
+
+      // Verify the update worked by querying immediately
+      const { data: verifyData } = await supabase
+        .from('fire_reports')
+        .select('id, validated, invalidated, validated_at, invalidated_at')
+        .eq('id', reportToRestore)
+        .single();
+      
+      console.log('🔍 VERIFICATION - Data in DB after update:', verifyData);
+
+      // Fetch the updated report directly from Supabase to get latest data
+      const { data: restoredReportData, error: fetchError } = await supabase
+        .from('fire_reports')
+        .select('*')
+        .eq('id', reportToRestore)
+        .single();
+
+      if (fetchError) {
+        console.error('Error fetching restored report:', fetchError);
+      } else {
+        console.log('📦 Fetched restored report from Supabase:', restoredReportData);
+        
+        // Transform the restored report
+        const aiOverride = chatAlarmByReport[String(restoredReportData.id)];
+        const suggested = aiOverride || restoredReportData.recommended_alarm_level || restoredReportData.alarm_level || determineSuggestedAlarm(restoredReportData.number_of_structures_on_fire);
+        
+        const transformedRestoredReport = {
+          id: restoredReportData.id,
+          time: formatTime(restoredReportData.formatted_timestamp || restoredReportData.created_at || restoredReportData.timestamp),
+          reporter: restoredReportData.reporter || 'Unknown Reporter',
+          location: restoredReportData.address || restoredReportData.geotag_location || 'Location unavailable',
+          status: restoredReportData.status || determineStatus(restoredReportData.prediction),
+          suggestedAlarmLevel: suggested,
+          finalAlarmLevel: restoredReportData.final_fire_alarm_level || '1st Alarm',
+          description: restoredReportData.cause_of_fire || 'No cause specified',
+          picture: restoredReportData.image_url,
+          minutesAgo: calculateMinutesAgo(restoredReportData.created_at || restoredReportData.timestamp),
+          prediction: restoredReportData.prediction,
+          confidence: restoredReportData.confidence,
+          structure: restoredReportData.structure,
+          smokeIntensity: restoredReportData.smoke_intensity,
+          smokeDetection: restoredReportData.smoke_detection,
+          smokeConfidence: restoredReportData.smoke_confidence,
+          numberOfStructures: cleanStructuresValue(restoredReportData.number_of_structures_on_fire),
+          reporterId: restoredReportData.reporterId,
+          timestamp: restoredReportData.created_at || restoredReportData.timestamp,
+          latitude: restoredReportData.latitude,
+          longitude: restoredReportData.longitude,
+          address: restoredReportData.address,
+          geotag_location: restoredReportData.geotag_location,
+          cancelled_by: restoredReportData.cancelled_by,
+          cancellation_reason: restoredReportData.cancellation_reason,
+          validated: restoredReportData.validated,
+          validated_at: restoredReportData.validated_at,
+          invalidated: restoredReportData.invalidated,
+          invalidated_at: restoredReportData.invalidated_at
+        };
+
+        // Update local state by replacing the old report with the restored one
+        setReports(prev => {
+          const existingIndex = prev.findIndex(r => r.id === reportToRestore);
+          console.log('🔍 Looking for report ID:', reportToRestore, 'in', prev.length, 'reports');
+          console.log('📋 Restored report data:', transformedRestoredReport);
+          console.log('✅ Validated?', transformedRestoredReport.validated);
+          console.log('🔥 Prediction:', transformedRestoredReport.prediction);
+          console.log('💨 Smoke:', transformedRestoredReport.smokeIntensity);
+          
+          if (existingIndex >= 0) {
+            // Replace existing report
+            const updated = [...prev];
+            updated[existingIndex] = transformedRestoredReport;
+            console.log('🔄 Updated existing report at index', existingIndex);
+            return updated;
+          } else {
+            // Add as new report
+            console.log('➕ Added restored report to state');
+            return [transformedRestoredReport, ...prev];
+          }
+        });
+      }
+      
+      console.log('📊 Local state updated with Supabase data');
+      
+      setShowRestoreModal(false);
+      setReportToRestore(null);
+      
+      console.log('✨ Showing success modal');
+      // Show success modal
+      setShowRestoreSuccessModal(true);
+    } catch (error) {
+      console.error('Error restoring report:', error);
+      alert(`Failed to restore report: ${error.message}`);
+    } finally {
+      setIsInvalidating(false);
+    }
+  };
+
+  // Validate No Fire/No Smoke report
+  const handleValidateReport = async (reportId) => {
+    try {
+      setIsInvalidating(true);
+      
+      const { error } = await supabase
+        .from('fire_reports')
+        .update({ 
+          validated: true,
+          validated_at: new Date().toISOString()
+        })
+        .eq('id', reportId);
+
+      if (error) throw error;
+
+      setReports(prev => prev.map(report => 
+        report.id === reportId ? { 
+          ...report, 
+          validated: true,
+          validated_at: new Date().toISOString()
+        } : report
+      ));
+      
+      alert('Report validated and moved to main overview.');
+    } catch (error) {
+      console.error('Error validating report:', error);
+      alert(`Failed to validate report: ${error.message}`);
+    } finally {
+      setIsInvalidating(false);
     }
   };
 
@@ -144,6 +449,27 @@ const Overview = () => {
       const transformedReports = data.map(report => {
         const aiOverride = chatAlarmByReport[String(report.id)];
         const suggested = aiOverride || report.recommended_alarm_level || report.alarm_level || determineSuggestedAlarm(report.number_of_structures_on_fire);
+        
+        // Auto-invalidate No Fire/No Smoke reports if not already processed
+        const shouldAutoInvalidate = isNoFireNoSmoke(report) && 
+                                     report.invalidated !== true && 
+                                     report.validated !== true;
+        
+        // If auto-invalidating, update database in background
+        if (shouldAutoInvalidate) {
+          supabase
+            .from('fire_reports')
+            .update({ 
+              invalidated: true,
+              invalidated_at: new Date().toISOString()
+            })
+            .eq('id', report.id)
+            .then(({ error }) => {
+              if (error) console.error('Error auto-invalidating report:', error);
+              else console.log('✅ Auto-invalidated No Fire/No Smoke report:', report.id);
+            });
+        }
+        
         return {
         id: report.id,
         time: formatTime(report.formatted_timestamp || report.created_at || report.timestamp),
@@ -159,6 +485,7 @@ const Overview = () => {
         prediction: report.prediction,
         confidence: report.confidence,
         structure: report.structure,
+        smokeIntensity: report.smoke_intensity,
         smokeDetection: report.smoke_detection,
         smokeConfidence: report.smoke_confidence,
         numberOfStructures: cleanStructuresValue(report.number_of_structures_on_fire),
@@ -171,7 +498,12 @@ const Overview = () => {
         geotag_location: report.geotag_location,
         // Cancellation info
         cancelled_by: report.cancelled_by,
-        cancellation_reason: report.cancellation_reason
+        cancellation_reason: report.cancellation_reason,
+        // Validation/Invalidation fields - use auto-invalidated value if triggered
+        validated: report.validated,
+        validated_at: report.validated_at,
+        invalidated: shouldAutoInvalidate ? true : report.invalidated,
+        invalidated_at: shouldAutoInvalidate ? new Date().toISOString() : report.invalidated_at
       };
       });
       
@@ -857,8 +1189,25 @@ const Overview = () => {
   // Cluster reports first, then filter
   const clusteredReports = clusterReports(reports);
 
-  // Filter reports based on search and filters
+  // Filter reports based on search and filters (exclude No Fire/No Smoke and invalidated reports, unless validated)
   const filteredReports = clusteredReports.filter(report => {
+    // Exclude invalidated reports from main overview
+    if (report.invalidated) {
+      return false;
+    }
+    
+    // Exclude "No Fire/No Smoke" reports UNLESS they've been validated by admin
+    const isNoFire = isNoFireNoSmoke(report);
+    const isValidated = report.validated === true;
+    
+    if (isNoFire && !isValidated) {
+      console.log(`⚠️ Filtering out unvalidated No Fire/No Smoke report ${report.id}`, { isNoFire, isValidated, validated: report.validated });
+      return false;
+    }
+    
+    if (isNoFire && isValidated) {
+      console.log(`✅ Including validated No Fire/No Smoke report ${report.id}`, { isNoFire, isValidated, validated: report.validated });
+    }
     // Search filter
     const matchesSearch = report.location.toLowerCase().includes(searchQuery.toLowerCase()) ||
                          report.reporter.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -901,6 +1250,45 @@ const Overview = () => {
     const dateA = new Date(a.timestamp || 0);
     const dateB = new Date(b.timestamp || 0);
     return dateB - dateA; // Descending order (newest first)
+  });
+
+  // Separate list for unvalidated "No Fire/No Smoke" reports
+  const validationReports = clusteredReports.filter(report => {
+    // Only show unvalidated "No Fire/No Smoke" reports that are not invalidated
+    if (!isNoFireNoSmoke(report) || report.validated || report.invalidated) {
+      return false;
+    }
+
+    // Search filter
+    const matchesSearch = report.location.toLowerCase().includes(searchQuery.toLowerCase()) ||
+                         report.reporter.toLowerCase().includes(searchQuery.toLowerCase());
+
+    return matchesSearch;
+  }).sort((a, b) => {
+    const dateA = new Date(a.timestamp || 0);
+    const dateB = new Date(b.timestamp || 0);
+    return dateB - dateA;
+  });
+
+  // Separate list for invalidated reports (includes No Fire/No Smoke reports that haven't been validated)
+  const invalidatedReports = clusteredReports.filter(report => {
+    // Show reports that are either explicitly invalidated OR are unvalidated No Fire/No Smoke
+    const isInvalidated = report.invalidated === true;
+    const isUnvalidatedNoFireNoSmoke = isNoFireNoSmoke(report) && !report.validated;
+    
+    if (!isInvalidated && !isUnvalidatedNoFireNoSmoke) {
+      return false;
+    }
+
+    // Search filter
+    const matchesSearch = report.location.toLowerCase().includes(searchQuery.toLowerCase()) ||
+                         report.reporter.toLowerCase().includes(searchQuery.toLowerCase());
+
+    return matchesSearch;
+  }).sort((a, b) => {
+    const dateA = new Date(a.invalidated_at || a.timestamp || 0);
+    const dateB = new Date(b.invalidated_at || b.timestamp || 0);
+    return dateB - dateA;
   });
 
   const handleReportClick = (report) => {
@@ -1539,17 +1927,47 @@ const Overview = () => {
           </div>
         )}
 
-        {/* Reports Table */}
+        {/* Validation Section for No Fire/No Smoke Reports */}
         {!isLoading && (
-          <div className="bg-white rounded-xl shadow-sm overflow-hidden">
-            <div className="overflow-x-auto">
-              <table className="w-full min-w[X]1200px]">
-                <thead className="bg-gray-50">
-                  <tr>
-                    <th className="px-4 py-4 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-20">Time</th>
-                    <th className="px-4 py-4 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-24">Reporter</th>
-                    <th className="px-4 py-4 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-28">Location</th>
-                    <th className="px-4 py-4 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-32">Status</th>
+          <div className="bg-white rounded-lg shadow mb-6">
+            <div className="flex border-b">
+              <button
+                onClick={() => setActiveTab('active')}
+                className={`flex-1 py-4 px-6 text-center font-medium text-sm ${
+                  activeTab === 'active'
+                    ? 'text-red-600 border-b-2 border-red-600'
+                    : 'text-gray-500 hover:text-gray-700'
+                }`}
+              >
+                Active Reports ({filteredReports.length})
+              </button>
+              
+              <button
+                onClick={() => setActiveTab('invalidated')}
+                className={`flex-1 py-4 px-6 text-center font-medium text-sm ${
+                  activeTab === 'invalidated'
+                    ? 'text-red-600 border-b-2 border-red-600'
+                    : 'text-gray-500 hover:text-gray-700'
+                }`}
+              >
+                Invalidated ({invalidatedReports.length})
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Active Reports Tab */}
+        {!isLoading && activeTab === 'active' && (
+          <>
+            <div className="bg-white rounded-xl shadow-sm overflow-hidden">
+              <div className="overflow-x-auto">
+                <table className="w-full min-w-[1200px]">
+                  <thead className="bg-gray-50">
+                    <tr>
+                      <th className="px-4 py-4 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-20">Time</th>
+                      <th className="px-4 py-4 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-24">Reporter</th>
+                      <th className="px-4 py-4 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-28">Location</th>
+                      <th className="px-4 py-4 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-32">Status</th>
                     <th className="px-4 py-4 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-40">Fire Alarm Level</th>
                     <th className="px-4 py-4 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-36">Suggested Fire Alarm</th>
                     <th className="px-4 py-4 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-28">Actions</th>
@@ -1732,6 +2150,21 @@ const Overview = () => {
                               </svg>
                               <span>Details</span>
                             </button>
+                            {/* Show Re-Invalidate button for previously invalidated reports */}
+                            {report.validated && report.invalidated_at && (
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleReInvalidateReport(report.id);
+                                }}
+                                disabled={isInvalidating}
+                                className="px-3 py-1 bg-orange-600 text-white rounded-md hover:bg-orange-700 transition-colors text-xs font-medium disabled:opacity-50 flex items-center space-x-1"
+                                title="Re-invalidate this previously restored report"
+                              >
+                                <FiX className="w-3 h-3" />
+                                <span>Invalidate Again</span>
+                              </button>
+                            )}
                             {(report.status === 'Fire Out' || (report.status || '').toString().toLowerCase().includes('fire out')) && (
                               <button
                                 className="px-3 py-1 bg-green-600 text-white rounded-md hover:bg-green-700 transition-colors text-xs font-medium flex items-center space-x-1"
@@ -1794,6 +2227,107 @@ const Overview = () => {
               </table>
             </div>
           </div>
+          </>
+        )}
+
+        {/* Invalidated Tab */}
+        {!isLoading && activeTab === 'invalidated' && (
+          <>
+            <div className="bg-white rounded-xl shadow-sm overflow-hidden">
+              <div className="overflow-x-auto">
+                <table className="w-full min-w-[1200px]">
+                  <thead className="bg-gray-50">
+                    <tr>
+                      <th className="px-4 py-4 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-20">Time</th>
+                      <th className="px-4 py-4 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-32">Reporter</th>
+                      <th className="px-4 py-4 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Location</th>
+                      <th className="px-4 py-4 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-32">Status</th>
+                      <th className="px-4 py-4 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-32">AI Analysis</th>
+                      <th className="px-4 py-4 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-40">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody className="bg-white divide-y divide-gray-200">
+                    {invalidatedReports.length === 0 ? (
+                      <tr>
+                        <td colSpan="6" className="px-4 py-8 text-center text-gray-500">
+                          ✅ No invalidated reports
+                        </td>
+                      </tr>
+                    ) : (
+                      invalidatedReports.map((report) => {
+                        return (
+                          <tr
+                            key={report.id}
+                            onClick={() => handleReportClick(report)}
+                            className="hover:bg-red-50 cursor-pointer transition-colors"
+                          >
+                            <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-900">
+                              {report.time}
+                            </td>
+                            <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-900">
+                              {report.reporter}
+                            </td>
+                            <td className="px-4 py-4 text-sm text-gray-900">
+                              <div className="flex items-start space-x-2">
+                                <FiMapPin className="w-4 h-4 text-red-600 mt-0.5 flex-shrink-0" />
+                                <span className="line-clamp-2">{report.location}</span>
+                              </div>
+                            </td>
+                            <td className="px-4 py-4 whitespace-nowrap">
+                              <span className="px-3 py-1 rounded-full text-xs font-medium bg-rose-100 text-rose-800 border border-rose-200">
+                                Invalid
+                              </span>
+                            </td>
+                            <td className="px-4 py-4">
+                              <div className="space-y-1">
+                                {report.prediction && (
+                                  <div className="text-xs text-gray-700">
+                                    🔥 <span className="font-semibold">{report.prediction}</span>
+                                    {report.confidence && <span className="text-gray-500 ml-1">({parseFloat(report.confidence).toFixed(2)}%)</span>}
+                                  </div>
+                                )}
+                                {report.smokeIntensity && (
+                                  <div className="text-xs text-gray-700">
+                                    💨 <span className="font-semibold">{report.smokeIntensity}</span>
+                                    {report.smokeConfidence && <span className="text-gray-500 ml-1">({parseFloat(report.smokeConfidence).toFixed(2)}%)</span>}
+                                  </div>
+                                )}
+                              </div>
+                            </td>
+                            <td className="px-4 py-4 whitespace-nowrap">
+                              <div className="flex items-center space-x-2">
+                                <button
+                                  className="px-3 py-1 bg-gray-600 text-white rounded-md hover:bg-gray-700 transition-colors text-xs font-medium"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleReportClick(report);
+                                  }}
+                                  title="View Details"
+                                >
+                                  Details
+                                </button>
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleRestoreReport(report.id);
+                                  }}
+                                  disabled={isInvalidating}
+                                  className="px-3 py-1 bg-green-600 text-white rounded-md hover:bg-green-700 transition-colors text-xs font-medium disabled:opacity-50"
+                                  title="Restore Report"
+                                >
+                                  Restore
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </>
         )}
 
         {/* Detailed Report Modal */}
@@ -2019,6 +2553,21 @@ const Overview = () => {
                   >
                     Close
                   </button>
+                  {/* Invalidate Button - only show if report is No Fire/No Smoke */}
+                  {isNoFireNoSmoke(currentReport) && (
+                    <button
+                      onClick={() => {
+                        setShowReportModal(false);
+                        setClusterIndex(0);
+                        handleReInvalidateReport(currentReport.id);
+                      }}
+                      disabled={isInvalidating}
+                      className="ml-3 px-8 py-4 bg-orange-600 text-white rounded-lg hover:bg-orange-700 transition-colors font-medium text-lg disabled:opacity-50 flex items-center space-x-2"
+                    >
+                      <FiX size={20} />
+                      <span>Invalidate Report</span>
+                    </button>
+                  )}
                 </div>
               </div>
             </div>
@@ -2192,6 +2741,288 @@ const Overview = () => {
                       {isCancelling ? 'Cancelling...' : 'Confirm Cancel'}
                     </button>
                   </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Restore Report Confirmation Modal */}
+        {showRestoreModal && (
+          <div className="fixed inset-0 backdrop-blur-md bg-white/20 flex items-center justify-center p-4 z-50">
+            <div className="bg-white rounded-xl shadow-xl max-w-md w-full">
+              <div className="p-6">
+                <div className="flex justify-between items-center mb-6">
+                  <h3 className="text-xl font-bold text-gray-900">Restore Report</h3>
+                  <button
+                    onClick={() => {
+                      setShowRestoreModal(false);
+                      setReportToRestore(null);
+                    }}
+                    className="text-gray-400 hover:text-gray-600"
+                    disabled={isInvalidating}
+                  >
+                    <FiX size={24} />
+                  </button>
+                </div>
+
+                <div className="space-y-4">
+                  <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+                    <p className="text-sm text-blue-800">
+                      <strong>⚠️ Confirm Restoration</strong>
+                    </p>
+                    <p className="text-sm text-blue-700 mt-2">
+                      This incident will be moved to Active Reports and will appear on the map for responders.
+                    </p>
+                  </div>
+
+                  <div className="flex space-x-3 pt-4">
+                    <button
+                      onClick={() => {
+                        setShowRestoreModal(false);
+                        setReportToRestore(null);
+                      }}
+                      disabled={isInvalidating}
+                      className="flex-1 px-4 py-2 bg-gray-300 text-gray-700 rounded-md hover:bg-gray-400 transition-colors disabled:opacity-50"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      onClick={confirmRestoreReport}
+                      disabled={isInvalidating}
+                      className={`flex-1 px-4 py-2 rounded-md transition-colors ${
+                        isInvalidating
+                          ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                          : 'bg-green-600 text-white hover:bg-green-700'
+                      }`}
+                    >
+                      {isInvalidating ? 'Restoring...' : 'Confirm Restore'}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Restore Success Modal */}
+        {showRestoreSuccessModal && (
+          <div className="fixed inset-0 backdrop-blur-md bg-white/20 flex items-center justify-center p-4 z-50">
+            <div className="bg-white rounded-xl shadow-2xl max-w-md w-full border-4 border-green-500">
+              <div className="p-8">
+                <div className="flex flex-col items-center space-y-4">
+                  <div className="bg-green-500 rounded-full p-4 animate-bounce">
+                    <svg className="w-12 h-12 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
+                    </svg>
+                  </div>
+                  
+                  <h3 className="text-2xl font-bold text-gray-900 text-center">
+                    Report Successfully Restored!
+                  </h3>
+                  
+                  <div className="bg-green-50 border-2 border-green-200 rounded-lg p-4 w-full">
+                    <p className="text-sm text-green-800 text-center space-y-2">
+                      <span className="block font-semibold">✅ Moved to Active Reports</span>
+                      <span className="block font-semibold">🗺️ Now visible on all maps</span>
+                      <span className="block font-semibold">🚒 Available for station assignment</span>
+                    </p>
+                  </div>
+
+                  <button
+                    onClick={() => {
+                      setShowRestoreSuccessModal(false);
+                      setActiveTab('active'); // Switch to Active Reports tab
+                    }}
+                    className="w-full px-6 py-3 bg-gradient-to-r from-green-500 to-green-600 text-white text-lg font-bold rounded-lg hover:from-green-600 hover:to-green-700 transition-all shadow-lg"
+                  >
+                    View in Active Reports
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Re-Invalidate Confirmation Modal - SEVERE WARNING */}
+        {showReInvalidateModal && (
+          <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4 z-50 animate-fadeIn">
+            <div className="bg-white rounded-2xl shadow-2xl max-w-lg w-full border-4 border-red-600 animate-shake">
+              {/* Danger Header */}
+              <div className="bg-gradient-to-r from-red-600 to-red-700 p-6 rounded-t-2xl">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center space-x-3">
+                    <div className="bg-white/20 backdrop-blur-sm rounded-full p-3 animate-pulse">
+                      <FiAlertTriangle className="text-white" size={32} />
+                    </div>
+                    <div>
+                      <h3 className="text-2xl font-black text-white tracking-tight">⚠️ CONFIRM INVALIDATION</h3>
+                      <p className="text-red-100 text-sm font-medium mt-1">Critical Action Required</p>
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => {
+                      setShowReInvalidateModal(false);
+                      setReportToReInvalidate(null);
+                      setInvalidateConfirmText('');
+                    }}
+                    className="text-white/80 hover:text-white transition-colors"
+                    disabled={isInvalidating}
+                  >
+                    <FiX size={28} />
+                  </button>
+                </div>
+              </div>
+
+              {/* Warning Content */}
+              <div className="p-6 space-y-5">
+                {/* Severe Warning Box */}
+                <div className="bg-red-50 border-2 border-red-300 rounded-xl p-5 space-y-3">
+                  <div className="flex items-start space-x-3">
+                    <FiAlertTriangle className="text-red-600 mt-1 flex-shrink-0" size={24} />
+                    <div className="flex-1">
+                      <p className="text-red-900 font-bold text-lg mb-2">CRITICAL WARNING</p>
+                      <p className="text-red-800 text-sm leading-relaxed">
+                        You are about to <strong className="font-black">INVALIDATE</strong> this emergency report.
+                        This action will have <strong>IMMEDIATE and SERIOUS consequences</strong>:
+                      </p>
+                    </div>
+                  </div>
+                  
+                  <ul className="space-y-2 ml-9">
+                    <li className="flex items-start space-x-2 text-red-800 text-sm">
+                      <span className="text-red-600 font-bold">❌</span>
+                      <span><strong>Report will DISAPPEAR from ALL maps</strong> (Admin & Station)</span>
+                    </li>
+                    <li className="flex items-start space-x-2 text-red-800 text-sm">
+                      <span className="text-red-600 font-bold">❌</span>
+                      <span><strong>Fire stations will NO LONGER see this incident</strong></span>
+                    </li>
+                    <li className="flex items-start space-x-2 text-red-800 text-sm">
+                      <span className="text-red-600 font-bold">❌</span>
+                      <span><strong>Responders will be UNABLE to respond</strong></span>
+                    </li>
+                    <li className="flex items-start space-x-2 text-red-800 text-sm">
+                      <span className="text-red-600 font-bold">⚠️</span>
+                      <span><strong>If this is a REAL EMERGENCY, people could be in DANGER</strong></span>
+                    </li>
+                  </ul>
+                </div>
+
+                {/* Important Notice */}
+                <div className="bg-yellow-50 border-2 border-yellow-400 rounded-lg p-4">
+                  <p className="text-yellow-900 text-sm font-semibold flex items-center space-x-2">
+                    <span className="text-xl">⚡</span>
+                    <span>Only invalidate if you are ABSOLUTELY CERTAIN this is a FALSE REPORT (No Fire + No Smoke)</span>
+                  </p>
+                </div>
+
+                {/* Confirmation Input */}
+                <div className="space-y-3">
+                  <label className="block">
+                    <span className="text-gray-900 font-bold text-sm mb-2 block">
+                      Type <span className="text-red-600 font-black text-base">INVALIDATE</span> to confirm:
+                    </span>
+                    <input
+                      type="text"
+                      value={invalidateConfirmText}
+                      onChange={(e) => setInvalidateConfirmText(e.target.value)}
+                      placeholder="Type INVALIDATE here"
+                      disabled={isInvalidating}
+                      className="w-full px-4 py-3 border-2 border-gray-300 rounded-lg focus:border-red-500 focus:ring-2 focus:ring-red-200 transition-all text-center font-mono text-lg uppercase tracking-wider disabled:bg-gray-100"
+                      autoComplete="off"
+                    />
+                  </label>
+                  <p className="text-xs text-gray-500 text-center">
+                    This action cannot be easily undone. The report will need to be manually restored.
+                  </p>
+                </div>
+
+                {/* Action Buttons */}
+                <div className="flex space-x-3 pt-2">
+                  <button
+                    onClick={() => {
+                      setShowReInvalidateModal(false);
+                      setReportToReInvalidate(null);
+                      setInvalidateConfirmText('');
+                    }}
+                    disabled={isInvalidating}
+                    className="flex-1 px-6 py-3 bg-gray-200 hover:bg-gray-300 text-gray-800 font-bold rounded-lg transition-colors disabled:opacity-50 text-base"
+                  >
+                    Cancel - Keep Report Active
+                  </button>
+                  <button
+                    onClick={confirmReInvalidateReport}
+                    disabled={isInvalidating || invalidateConfirmText.toUpperCase() !== 'INVALIDATE'}
+                    className={`flex-1 px-6 py-3 rounded-lg font-bold transition-all text-base ${
+                      isInvalidating || invalidateConfirmText.toUpperCase() !== 'INVALIDATE'
+                        ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                        : 'bg-red-600 hover:bg-red-700 text-white shadow-lg hover:shadow-xl'
+                    }`}
+                  >
+                    {isInvalidating ? 'Invalidating...' : 'Yes, Invalidate Report'}
+                  </button>
+                </div>
+              </div>
+            </div>
+            <style>{`
+              @keyframes fadeIn {
+                from { opacity: 0; }
+                to { opacity: 1; }
+              }
+              @keyframes shake {
+                0%, 100% { transform: translateX(0); }
+                10%, 30%, 50%, 70%, 90% { transform: translateX(-2px); }
+                20%, 40%, 60%, 80% { transform: translateX(2px); }
+              }
+              .animate-fadeIn {
+                animation: fadeIn 0.2s ease-out;
+              }
+              .animate-shake {
+                animation: shake 0.5s ease-in-out;
+              }
+            `}</style>
+          </div>
+        )}
+
+        {/* Invalidation Success Modal */}
+        {showInvalidateSuccessModal && (
+          <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 z-50 animate-fadeIn">
+            <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full border-4 border-orange-500">
+              <div className="p-8">
+                <div className="flex flex-col items-center space-y-4">
+                  {/* Success Icon */}
+                  <div className="bg-orange-500 rounded-full p-4 animate-bounce">
+                    <svg className="w-12 h-12 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M6 18L18 6M6 6l12 12" />
+                    </svg>
+                  </div>
+                  
+                  <h3 className="text-2xl font-bold text-gray-900 text-center">
+                    Report Invalidated Successfully
+                  </h3>
+                  
+                  <div className="bg-orange-50 border-2 border-orange-200 rounded-lg p-4 w-full">
+                    <p className="text-sm text-orange-800 text-center space-y-2">
+                      <span className="block font-semibold">✅ Moved to Invalidated Reports</span>
+                      <span className="block font-semibold">🗺️ Removed from all maps</span>
+                      <span className="block font-semibold">🚫 Hidden from responders</span>
+                    </p>
+                  </div>
+
+                  <button
+                    onClick={() => {
+                      setShowInvalidateSuccessModal(false);
+                      setActiveTab('invalidated');
+                    }}
+                    className="w-full px-6 py-3 bg-gradient-to-r from-orange-500 to-orange-600 text-white text-lg font-bold rounded-lg hover:from-orange-600 hover:to-orange-700 transition-all shadow-lg"
+                  >
+                    View in Invalidated Reports
+                  </button>
+                  
+                  <p className="text-xs text-gray-500 text-center">
+                    Auto-switching to Invalidated tab in 3 seconds...
+                  </p>
                 </div>
               </div>
             </div>
