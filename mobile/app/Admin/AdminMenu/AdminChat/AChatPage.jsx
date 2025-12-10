@@ -83,14 +83,54 @@ export default function AChatPage({ contact, onBack, currentAdminId }) {
 
 	useEffect(() => {
 		if (!contact?.id || !currentAdminId) return;
-		const channel = supabase
-			.channel(`messages:${contact.id}:${currentAdminId}`)
-			.on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages', filter: `or(and(sender_id.eq.${contact.id},receiver_id.eq.${currentAdminId}),and(sender_id.eq.${currentAdminId},receiver_id.eq.${contact.id}))` }, (payload) => {
-			setMessages((prev) => [...prev, payload.new]);
-			setTimeout(scrollToBottom, 100);
-		})
+
+		console.log('🔔 Setting up real-time subscription for admin:', currentAdminId, 'with contact:', contact.id);
+
+		// Listen for messages sent TO this admin (from the contact)
+		const incomingChannel = supabase
+			.channel(`messages:incoming:${currentAdminId}:${contact.id}`)
+			.on('postgres_changes', { 
+				event: 'INSERT', 
+				schema: 'public', 
+				table: 'messages', 
+				filter: `receiver_id=eq.${currentAdminId}` 
+			}, (payload) => {
+				console.log('🔔 Incoming message received:', payload);
+				// Only add if it's from the current contact
+				if (payload.new.sender_id === contact.id) {
+					setMessages((prev) => [...prev, payload.new]);
+					setTimeout(scrollToBottom, 100);
+				}
+			})
 			.subscribe();
-		return () => { channel.unsubscribe(); };
+
+		// Listen for messages sent BY this admin (to the contact)
+		const outgoingChannel = supabase
+			.channel(`messages:outgoing:${currentAdminId}:${contact.id}`)
+			.on('postgres_changes', { 
+				event: 'INSERT', 
+				schema: 'public', 
+				table: 'messages', 
+				filter: `sender_id=eq.${currentAdminId}` 
+			}, (payload) => {
+				console.log('🔔 Outgoing message received:', payload);
+				// Only add if it's to the current contact
+				if (payload.new.receiver_id === contact.id) {
+					// Check if message already exists (to avoid duplicates from optimistic update)
+					setMessages((prev) => {
+						const exists = prev.some(msg => msg.id === payload.new.id);
+						if (exists) return prev;
+						return [...prev, payload.new];
+					});
+					setTimeout(scrollToBottom, 100);
+				}
+			})
+			.subscribe();
+
+		return () => { 
+			incomingChannel.unsubscribe(); 
+			outgoingChannel.unsubscribe();
+		};
 	}, [contact?.id, currentAdminId]);
 
 	const sendMessage = async () => {

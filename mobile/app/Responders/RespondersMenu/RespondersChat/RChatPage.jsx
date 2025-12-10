@@ -60,22 +60,53 @@ export default function RChatPage({ contact, onBack }) {
   useEffect(() => {
     if (!contact || !userData) return;
 
-    const subscription = supabase
-      .channel(`messages:${userData.id}:${contact.id}`)
+    console.log('🔔 Setting up real-time subscription for responder:', userData.id, 'with contact:', contact.id);
+
+    // Listen for messages sent TO this responder (from the contact)
+    const incomingSubscription = supabase
+      .channel(`messages:incoming:${userData.id}:${contact.id}`)
       .on('postgres_changes', {
         event: 'INSERT',
         schema: 'public',
         table: 'messages',
-        filter: `or(and(sender_id.eq.${userData.id},receiver_id.eq.${contact.id}),and(sender_id.eq.${contact.id},receiver_id.eq.${userData.id}))`
+        filter: `receiver_id=eq.${userData.id}`
       }, (payload) => {
-        console.log('🔔 New message received:', payload);
-        setMessages(prev => [...prev, payload.new]);
-        setTimeout(scrollToBottom, 100);
+        console.log('🔔 Incoming message received:', payload);
+        // Only add if it's from the current contact
+        if (payload.new.sender_id === contact.id) {
+          setMessages(prev => [...prev, payload.new]);
+          setTimeout(scrollToBottom, 100);
+          markMessagesAsRead();
+        }
+      })
+      .subscribe();
+
+    // Listen for messages sent BY this responder (to the contact)
+    const outgoingSubscription = supabase
+      .channel(`messages:outgoing:${userData.id}:${contact.id}`)
+      .on('postgres_changes', {
+        event: 'INSERT',
+        schema: 'public',
+        table: 'messages',
+        filter: `sender_id=eq.${userData.id}`
+      }, (payload) => {
+        console.log('🔔 Outgoing message received:', payload);
+        // Only add if it's to the current contact
+        if (payload.new.receiver_id === contact.id) {
+          // Check if message already exists (to avoid duplicates from optimistic update)
+          setMessages(prev => {
+            const exists = prev.some(msg => msg.id === payload.new.id);
+            if (exists) return prev;
+            return [...prev, payload.new];
+          });
+          setTimeout(scrollToBottom, 100);
+        }
       })
       .subscribe();
 
     return () => {
-      subscription.unsubscribe();
+      incomingSubscription.unsubscribe();
+      outgoingSubscription.unsubscribe();
     };
   }, [contact, userData]);
 
