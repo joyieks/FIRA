@@ -368,21 +368,21 @@ export default function SChatPage({ contact, onBack, currentStationId }) {
             ? (selectedIncident.address || selectedIncident.geotag_location || selectedIncident.location || 'Unknown location')
             : 'Unknown location';
           return (
-            <TouchableOpacity
-              key={msg.id}
-              onLongPress={() => handleLongPress(msg)}
-              activeOpacity={0.7}
-              className={`mb-4 ${(msg.sender_type === 'station' || msg.sender === 'station') ? 'items-end' : 'items-start'}`}
-            >
-              <View className={`max-w-[80%] ${(msg.sender_type === 'station' || msg.sender === 'station') ? 'bg-gray-800' : 'bg-gray-100'} rounded-2xl px-4 py-3`}>
-                {!(msg.sender_type === 'station' || msg.sender === 'station') && (
-                  <Text className="text-xs font-medium text-gray-600 mb-1">
-                    {getSenderName(msg.sender_type || msg.sender)}
-                  </Text>
-                )}
-                <Text className={`text-base ${(msg.sender_type === 'station' || msg.sender === 'station') ? 'text-white' : 'text-gray-800'} ${msg.isDeleted ? 'italic text-gray-500' : ''}`}>
-                  {msg.text}
+          <TouchableOpacity
+            key={msg.id}
+            onLongPress={() => handleLongPress(msg)}
+            activeOpacity={0.7}
+            className={`mb-4 ${(msg.sender_type === 'station' || msg.sender === 'station') ? 'items-end' : 'items-start'}`}
+          >
+            <View className={`max-w-[80%] ${(msg.sender_type === 'station' || msg.sender === 'station') ? 'bg-gray-800' : 'bg-gray-100'} rounded-2xl px-4 py-3`}>
+              {!(msg.sender_type === 'station' || msg.sender === 'station') && (
+                <Text className="text-xs font-medium text-gray-600 mb-1">
+                  {getSenderName(msg.sender_type || msg.sender)}
                 </Text>
+              )}
+              <Text className={`text-base ${(msg.sender_type === 'station' || msg.sender === 'station') ? 'text-white' : 'text-gray-800'} ${msg.isDeleted ? 'italic text-gray-500' : ''}`}>
+                {msg.text}
+              </Text>
                 {aiLabel && (
                   <View className="mt-2 self-start">
                     <View className="bg-blue-100 border border-blue-200 rounded px-2 py-1 flex-row items-center gap-1.5">
@@ -391,21 +391,21 @@ export default function SChatPage({ contact, onBack, currentStationId }) {
                     </View>
                   </View>
                 )}
-                <View className={`flex-row items-center mt-2 ${msg.sender === 'station' ? 'justify-end' : 'justify-start'}`}>
-                  <Text className={`text-xs ${(msg.sender_type === 'station' || msg.sender === 'station') ? 'text-gray-300' : 'text-gray-500'}`}>
-                    {msg.created_at ? new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : (msg.timestamp || '')}
-                  </Text>
-                  {(msg.sender_type === 'station' || msg.sender === 'station') && (
-                    <Ionicons 
-                      name={msg.isRead ? "checkmark-done" : "checkmark"} 
-                      size={14} 
-                      color={msg.isRead ? "#D1D5DB" : "#9CA3AF"} 
-                      style={{ marginLeft: 4 }}
-                    />
-                  )}
-                </View>
-              </View>
-            </TouchableOpacity>
+                             <View className={`flex-row items-center mt-2 ${msg.sender === 'station' ? 'justify-end' : 'justify-start'}`}>
+                <Text className={`text-xs ${(msg.sender_type === 'station' || msg.sender === 'station') ? 'text-gray-300' : 'text-gray-500'}`}>
+                  {msg.created_at ? new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : (msg.timestamp || '')}
+                 </Text>
+                {(msg.sender_type === 'station' || msg.sender === 'station') && (
+                   <Ionicons 
+                     name={msg.isRead ? "checkmark-done" : "checkmark"} 
+                     size={14} 
+                     color={msg.isRead ? "#D1D5DB" : "#9CA3AF"} 
+                     style={{ marginLeft: 4 }}
+                   />
+                 )}
+               </View>
+            </View>
+          </TouchableOpacity>
           );
         })}
       </ScrollView>
@@ -561,9 +561,9 @@ export default function SChatPage({ contact, onBack, currentStationId }) {
                 <Text className="text-white font-semibold">{aiModal.saving ? 'Applying...' : 'Change the Alarm'}</Text>
               </TouchableOpacity>
             </View>
-          </View>
         </View>
-      </Modal>
+      </View>
+    </Modal>
 
       {/* Edit Message Modal */}
       <Modal

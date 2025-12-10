@@ -155,12 +155,18 @@ export default function RStatus({ onNavigateToMap }) {
       
       // APPROACH 1: Load active notifications from responder_notifications table
       // Include 'completed' status so assignments remain visible after status changes (Under Control, Fire Out)
+      // Also include 'accepted' status to show acknowledged assignments
       const { data: notificationData, error } = await supabase
         .from('responder_notifications')
         .select('*')
         .eq('responder_id', userData.id)
-        .in('status', ['pending', 'accepted', 'completed']) // Include completed for status updates
+        .in('status', ['pending', 'accepted', 'completed']) // Include accepted to show acknowledged assignments
         .order('created_at', { ascending: false });
+      
+      console.log('📋 Loaded notifications:', notificationData?.length || 0);
+      if (notificationData && notificationData.length > 0) {
+        console.log('📋 Notification statuses:', notificationData.map(n => ({ id: n.id, status: n.status, accepted_at: n.accepted_at })));
+      }
 
       if (error) {
         console.error('❌ Error loading notifications:', error);
@@ -286,10 +292,17 @@ export default function RStatus({ onNavigateToMap }) {
         // Try to find a notification for status/accepted flag
         const notif = (notificationData || []).find(n => String(n.fire_report_id) === String(rid));
         console.log(`🔔 Notification for report ${rid}:`, notif ? 'FOUND' : 'NOT FOUND');
+        if (notif) {
+          console.log(`🔔 Notification status for ${rid}:`, notif.status, 'accepted_at:', notif.accepted_at);
+        }
         const stationMeta = stationAssignmentMap.get(String(rid));
         const directMeta = directAssignmentMap.get(String(rid));
         const assignmentMeta = stationMeta || directMeta || null;
-        return buildAssignmentFromReport(report, notif, assignmentMeta);
+        const assignment = buildAssignmentFromReport(report, notif, assignmentMeta);
+        if (assignment) {
+          console.log(`📋 Built assignment for ${rid}: status="${assignment.status}", isAccepted=${assignment.isAccepted}`);
+        }
+        return assignment;
       }));
 
       const validAssignments = processedFromIds.filter(Boolean);
@@ -333,14 +346,35 @@ export default function RStatus({ onNavigateToMap }) {
       structuresAffectedFromAPI = `${structuresAffectedFromAPI} structure(s)`;
     }
     const readableId = generateReadableReportId(fireReport.id);
-    // Derive status label
-    let derivedStatus = fireReport.status || 'On Going';
-    if (notification?.status) {
-      derivedStatus = notification.status;
+    // Derive status label - prioritize notification status
+    const notifStatus = notification?.status ? String(notification.status).trim().toLowerCase() : null;
+    const isNotifAccepted = notifStatus === 'accepted' || !!notification?.accepted_at;
+    
+    console.log(`🔍 Status derivation for report ${fireReport.id}:`, {
+      notifStatus,
+      accepted_at: notification?.accepted_at,
+      isNotifAccepted,
+      notificationStatus: notification?.status,
+      rawNotificationStatus: notification?.status
+    });
+
+    let derivedStatus = 'On Going';
+    // First check if notification is accepted (highest priority) - this MUST be checked first
+    if (isNotifAccepted || notifStatus === 'accepted') {
+      derivedStatus = 'Assignment Accepted';
+      console.log(`✅ Setting status to "Assignment Accepted" for report ${fireReport.id} (notification status: ${notification?.status})`);
+    } else if (notification?.status && String(notification.status).toLowerCase() !== 'accepted') {
+      // Use notification status if it exists (pending, etc.) but NOT if it's accepted
+      const notifStatusUpper = String(notification.status).trim();
+      derivedStatus = notifStatusUpper.charAt(0).toUpperCase() + notifStatusUpper.slice(1).toLowerCase();
+      console.log(`📋 Using notification status: "${derivedStatus}" for report ${fireReport.id}`);
     } else if (assignmentMeta?.source === 'station') {
       derivedStatus = 'Assigned to Station';
     } else if (assignmentMeta?.source === 'responder') {
       derivedStatus = 'Assigned';
+    } else {
+      // Fallback to fire report status
+      derivedStatus = fireReport.status || 'On Going';
     }
 
     return {
@@ -358,7 +392,7 @@ export default function RStatus({ onNavigateToMap }) {
       cause: fireReport.cause || fireReport.possible_cause || fireReport.cause_of_fire || 'Under investigation',
       imageUrl: fireReport.image_url || null,
       status: derivedStatus,
-      isAccepted: notification?.status === 'accepted',
+      isAccepted: isNotifAccepted || derivedStatus === 'Assignment Accepted',
       reporter: reporterFromAPI,
       smokeAnalysis: smokeAnalysisFromAPI,
       structure: structureFromAPI,
@@ -483,12 +517,23 @@ export default function RStatus({ onNavigateToMap }) {
   }, [assignments, selectedAssignment, showFullReport]);
 
   const getFireReportStatusColor = (status) => {
-    switch (status) {
-      case 'On Going': return '#dc2626'; // red-600
-      case 'Under Control': return '#d97706'; // amber-600
-      case 'Fire Out': return '#16a34a'; // green-600
-      case 'Cancelled': return '#6b7280'; // gray-500
-      default: return '#6b7280'; // gray-500
+    const normalized = status ? String(status).toLowerCase().trim() : '';
+    switch (normalized) {
+      case 'assignment accepted':
+      case 'accepted':
+        return '#16a34a'; // green-600
+      case 'on going':
+      case 'ongoing':
+        return '#dc2626'; // red-600
+      case 'under control':
+        return '#d97706'; // amber-600
+      case 'fire out':
+        return '#16a34a'; // green-600
+      case 'cancelled':
+      case 'canceled':
+        return '#6b7280'; // gray-500
+      default:
+        return '#6b7280'; // gray-500
     }
   };
 
@@ -548,21 +593,25 @@ export default function RStatus({ onNavigateToMap }) {
                       </Text>
                     </View>
                     <View className="flex-row items-center flex-wrap gap-2 mb-2">
-                      {assignment.isAccepted && (
-                        <View className="bg-green-100 px-2 py-1 rounded-full">
-                          <Text className="text-green-800 text-xs font-bold">ACCEPTED</Text>
-                        </View>
-                      )}
-                      <View 
-                        className="px-3 py-1.5 rounded-full"
-                        style={{ backgroundColor: getFireReportStatusColor(assignment.status) }}
-                      >
-                        <Text 
-                          className="text-xs font-bold text-white"
-                        >
-                          {assignment.status?.toUpperCase() || 'UNKNOWN'}
-                        </Text>
-                      </View>
+                      {(() => {
+                        // Always check if status is "Assignment Accepted" or if isAccepted is true
+                        const isAcceptedStatus = assignment.status === 'Assignment Accepted' || assignment.isAccepted;
+                        const displayStatus = isAcceptedStatus
+                          ? 'Assignment Accepted'
+                          : (assignment.status || 'UNKNOWN');
+                        return (
+                          <View 
+                            className="px-3 py-1.5 rounded-full"
+                            style={{ backgroundColor: getFireReportStatusColor(displayStatus) }}
+                          >
+                            <Text 
+                              className="text-xs font-bold text-white"
+                            >
+                              {displayStatus.toUpperCase()}
+                            </Text>
+                          </View>
+                        );
+                      })()}
                     </View>
                     <Text className={`text-sm mt-1 ${assignment.isAccepted ? 'text-green-700' : 'text-red-700'}`} numberOfLines={2}>
                       📍 {assignment.location}

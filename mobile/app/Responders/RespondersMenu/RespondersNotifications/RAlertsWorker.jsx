@@ -343,36 +343,36 @@ export default function RAlertsWorker() {
         processedNotificationIdsRef.current.add(pending.id);
       }
 
-      // Show modal ONLY when status is accepted (station accepted)
-      const acceptedAssignments = list.filter(n =>
-        n.status === 'accepted' &&
+      // Show modal when status is pending OR accepted (responder can accept/decline)
+      const actionAssignments = list.filter(n =>
+        (n.status === 'pending' || n.status === 'accepted') &&
         !n.is_read &&
         (n.priority === 'high' || n.priority === 'urgent') &&
-        !processedNotificationIdsRef.current.has(`accepted-${n.id}`)
+        !processedNotificationIdsRef.current.has(`action-${n.id}`)
       );
 
-      if (acceptedAssignments.length > 0 && !showAssignmentModal) {
-        const accepted = acceptedAssignments[0];
-        console.log('🚨 Station accepted assignment, showing modal:', accepted.id);
+      if (actionAssignments.length > 0 && !showAssignmentModal) {
+        const assignment = actionAssignments[0];
+        console.log('🚨 Assignment received, showing modal:', assignment.id);
 
         // Push notification + alarm for accepted assignment
         try {
           await scheduleLocalNotification(
-            accepted.title || '🚨 FIRE EMERGENCY ASSIGNMENT',
-            accepted.message || 'You have been assigned to a fire incident. Please respond immediately.',
+            assignment.title || '🚨 FIRE EMERGENCY ASSIGNMENT',
+            assignment.message || 'You have been assigned to a fire incident. Please respond immediately.',
             {
               type: 'fire_assignment',
-              notificationId: accepted.id,
-              fireReportId: accepted.fire_report_id,
-              priority: accepted.priority
+              notificationId: assignment.id,
+              fireReportId: assignment.fire_report_id,
+              priority: assignment.priority
             }
           );
         } catch (notifError) {
           console.error('❌ Error sending push notification:', notifError);
         }
 
-        // Show modal with details (no accept button)
-        setCurrentAssignment(accepted);
+        // Show modal with details (allow accept/decline)
+        setCurrentAssignment(assignment);
         setShowAssignmentModal(true);
 
         // Start alarm
@@ -380,8 +380,8 @@ export default function RAlertsWorker() {
           await playAlert();
         }
 
-        // Mark processed key for accepted so we don't reopen
-        processedNotificationIdsRef.current.add(`accepted-${accepted.id}`);
+        // Mark processed key so we don't reopen
+        processedNotificationIdsRef.current.add(`action-${assignment.id}`);
         return;
       }
       
@@ -706,37 +706,76 @@ export default function RAlertsWorker() {
     };
   }, [responderId, responderStationId]);
 
-  // Acknowledge assignment (mark read and stop alarm)
-  const handleAcknowledge = async () => {
+  // Accept / Decline assignment (mark read and update status)
+  const handleAssignmentResponse = async (status) => {
     try {
-      console.log('✅ RAlertsWorker: Acknowledging assignment...', currentAssignment?.id);
+      console.log(`✅ RAlertsWorker: ${status} assignment...`, currentAssignment?.id);
       
       if (!currentAssignment) return;
       
       // Stop alarm immediately
       await stopAlert();
       
-      // Mark notification as read
-      const { error } = await supabase
+      // Update notification status (target the specific notification id)
+      const updatePayload = { 
+        is_read: true,
+        status,
+        updated_at: new Date().toISOString()
+      };
+      
+      // Only add accepted_at if status is 'accepted'
+      if (status === 'accepted') {
+        updatePayload.accepted_at = new Date().toISOString();
+      }
+      
+      console.log('📝 RAlertsWorker: Updating notification with payload:', updatePayload);
+      
+      const { error, data: updateData } = await supabase
         .from('responder_notifications')
-        .update({ 
-          is_read: true,
-          read_at: new Date().toISOString()
-        })
-        .eq('id', currentAssignment.id);
+        .update(updatePayload)
+        .eq('id', currentAssignment.id)
+        .eq('responder_id', responderId)
+        .select();
+      
+      // As a fallback, also update any other pending notifications for this report/responder
+      if (!error && currentAssignment?.fire_report_id) {
+        console.log('📝 RAlertsWorker: Also updating other notifications for this report...');
+        await supabase
+          .from('responder_notifications')
+          .update(updatePayload)
+          .eq('fire_report_id', currentAssignment.fire_report_id)
+          .eq('responder_id', responderId)
+          .neq('id', currentAssignment.id); // Don't update the same one twice
+      }
       
       if (error) {
-        console.error('❌ RAlertsWorker: Error acknowledging assignment:', error);
+        console.error('❌ RAlertsWorker: Error updating assignment status:', error);
       } else {
-        console.log('✅ RAlertsWorker: Assignment acknowledged');
+        console.log(`✅ RAlertsWorker: Assignment ${status}`, updateData);
+        // Verify the update was successful
+        if (updateData && updateData.length > 0) {
+          console.log('✅ RAlertsWorker: Verified notification status updated to:', updateData[0].status);
+        }
       }
+
+      // Optimistically update local state so UI reflects acceptance immediately
+      setCurrentAssignment(prev => prev ? { ...prev, status } : prev);
       
       // Close modal
       setShowAssignmentModal(false);
       setCurrentAssignment(null);
       
+      // Force a reload so status cards update immediately
+      try {
+        await loadNotifications();
+      } catch (reloadErr) {
+        console.error('❌ RAlertsWorker: Error reloading notifications after response:', reloadErr);
+      }
+      
+      // The real-time subscription in RStatus should pick up the UPDATE event and refresh
+      
     } catch (error) {
-      console.error('❌ RAlertsWorker: Error in handleAcknowledge:', error);
+      console.error('❌ RAlertsWorker: Error in handleAssignmentResponse:', error);
     }
   };
 
@@ -781,8 +820,8 @@ export default function RAlertsWorker() {
           
           {/* Acknowledge Button */}
           <TouchableOpacity
-            onPress={handleAcknowledge}
-            className="bg-red-600 rounded-full py-4 shadow-lg"
+            onPress={() => handleAssignmentResponse('accepted')}
+            className="bg-red-600 rounded-xl py-3 mt-2"
             style={{
               shadowColor: '#dc2626',
               shadowOffset: { width: 0, height: 4 },
@@ -791,16 +830,11 @@ export default function RAlertsWorker() {
               elevation: 8
             }}
           >
-            <View className="flex-row items-center justify-center">
-              <MaterialIcons name="check-circle" size={28} color="white" />
-              <Text className="text-white text-xl font-bold ml-2">
-                ACKNOWLEDGE
-              </Text>
-            </View>
+            <Text className="text-center text-white font-bold text-lg">I acknowledge</Text>
           </TouchableOpacity>
-          
+
           <Text className="text-gray-500 text-center mt-4 text-sm">
-            Tap to stop alarm and acknowledge this station assignment
+            Please acknowledge this assignment. Alarm will stop after you confirm.
           </Text>
         </View>
       </View>

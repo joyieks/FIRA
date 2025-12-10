@@ -38,6 +38,8 @@ const Suser_Management = () => {
 
   const [showAddUser, setShowAddUser] = useState(false);
   const [showProfileModal, setShowProfileModal] = useState(false);
+  const [showSuccessModal, setShowSuccessModal] = useState(false);
+  const [showErrorModal, setShowErrorModal] = useState({ open: false, message: '' });
   const [selectedResponder, setSelectedResponder] = useState(null);
   const [editId, setEditId] = useState(null);
   const [responders, setResponders] = useState([]);
@@ -235,14 +237,13 @@ const Suser_Management = () => {
         
         // Refresh the responders list
         await fetchResponders();
-        alert('Responder created successfully! Welcome email sent with login credentials.');
+        setForm({ firstName: '', middleName: '', lastName: '', email: '', phone: '', userPosition: '', password: '' });
+        setShowAddUser(false);
+        setShowSuccessModal(true);
       }
-      
-      setForm({ firstName: '', middleName: '', lastName: '', email: '', phone: '', userPosition: '', password: '' });
-      setShowAddUser(false);
     } catch (error) {
       console.error('Error handling responder:', error);
-      alert(`Error: ${error.message}`);
+      setShowErrorModal({ open: true, message: error.message || 'An error occurred while creating the responder.' });
     } finally {
       setSubmitting(false);
     }
@@ -771,9 +772,67 @@ const Suser_Management = () => {
              </div>
            </div>
          )}
+
+        {/* Success Modal */}
+        {showSuccessModal && (
+          <div className="fixed inset-0 bg-black/20 backdrop-blur-sm flex items-center justify-center z-50 px-4">
+            <div className="bg-white rounded-xl shadow-2xl max-w-md w-full p-6 space-y-4 animate-in fade-in zoom-in duration-200">
+              <div className="flex items-center space-x-3">
+                <div className="p-2 bg-green-100 rounded-full">
+                  <svg className="w-6 h-6 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                  </svg>
+                </div>
+                <div className="flex-1">
+                  <h3 className="text-lg font-bold text-gray-900">Success!</h3>
+                  <p className="text-sm text-gray-700 mt-1">
+                    Responder created successfully! Welcome email sent with login credentials.
+                  </p>
+                </div>
+              </div>
+              <div className="flex justify-end">
+                <button
+                  onClick={() => setShowSuccessModal(false)}
+                  className="px-6 py-2 rounded-lg bg-green-600 text-white hover:bg-green-700 transition-colors font-medium"
+                >
+                  OK
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Error Modal */}
+        {showErrorModal.open && (
+          <div className="fixed inset-0 bg-black/20 backdrop-blur-sm flex items-center justify-center z-50 px-4">
+            <div className="bg-white rounded-xl shadow-2xl max-w-md w-full p-6 space-y-4 animate-in fade-in zoom-in duration-200">
+              <div className="flex items-center space-x-3">
+                <div className="p-2 bg-red-100 rounded-full">
+                  <svg className="w-6 h-6 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </div>
+                <div className="flex-1">
+                  <h3 className="text-lg font-bold text-gray-900">Error</h3>
+                  <p className="text-sm text-gray-700 mt-1">
+                    {showErrorModal.message}
+                  </p>
+                </div>
+              </div>
+              <div className="flex justify-end">
+                <button
+                  onClick={() => setShowErrorModal({ open: false, message: '' })}
+                  className="px-6 py-2 rounded-lg bg-red-600 text-white hover:bg-red-700 transition-colors font-medium"
+                >
+                  OK
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
        </div>
      </div>
    );
  };
-
+ 
 export default Suser_Management;

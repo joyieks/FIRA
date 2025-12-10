@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { View, Alert, Text, ActivityIndicator, Modal, TouchableOpacity, ScrollView, StyleSheet, Image } from 'react-native';
 import MapView, { Marker, Circle, Polyline } from 'react-native-maps';
 import { Ionicons } from '@expo/vector-icons';
@@ -9,6 +9,7 @@ import { GOOGLE_MAPS_API_KEY, MAP_CONFIG, DIRECTIONS_API } from '../../../config
 
 export default function RMap({ routingInfo }) {
   const { userData } = useAuth();
+  const mapRef = useRef(null);
   const [location, setLocation] = useState(null);
   const [errorMsg, setErrorMsg] = useState(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -25,6 +26,7 @@ export default function RMap({ routingInfo }) {
   const [routeInfo, setRouteInfo] = useState(null); // { duration, distance, status }
   const [isGettingLocation, setIsGettingLocation] = useState(false);
   const [allRoutes, setAllRoutes] = useState([]); // Array of { reportId, coordinates, routeInfo, color }
+  const [showRoutesPanel, setShowRoutesPanel] = useState(true); // Control route panel visibility
 
   // Helper functions
   const getAlarmLevelColor = (alarmLevel) => {
@@ -92,30 +94,70 @@ export default function RMap({ routingInfo }) {
     return pred.includes('no fire') && smoke.includes('no smoke');
   };
 
-  // Function to center map on user's location
-  const centerOnUserLocation = async () => {
-    if (!location) return;
+  // Function to center map on user's location (Blue button)
+  const centerOnUserLocation = () => {
+    if (!location) {
+      console.log('⚠️ No location available');
+      return;
+    }
     
-    const userRegion = {
-      latitude: location.coords.latitude,
-      longitude: location.coords.longitude,
-      latitudeDelta: 0.005,
-      longitudeDelta: 0.005,
-    };
-    setRegion(userRegion);
+    if (!mapRef.current) {
+      console.log('⚠️ Map ref not available');
+      return;
+    }
+    
+    try {
+      const userRegion = {
+        latitude: location.coords.latitude,
+        longitude: location.coords.longitude,
+        latitudeDelta: 0.005,
+        longitudeDelta: 0.005,
+      };
+      
+      console.log('📍 Centering on user location:', userRegion);
+      
+      // Use animateToRegion for smooth transition without glitches
+      mapRef.current.animateToRegion(userRegion, 1000);
+    } catch (error) {
+      console.error('❌ Error centering on user location:', error);
+    }
   };
 
-  // Function to center map on station location
+  // Function to center map on station location (Violet button)
   const centerOnStationLocation = () => {
-    if (!stationInfo || (!stationInfo.lat && !stationInfo.latitude) || (!stationInfo.lng && !stationInfo.longitude)) return;
+    if (!stationInfo || (!stationInfo.lat && !stationInfo.latitude) || (!stationInfo.lng && !stationInfo.longitude)) {
+      console.log('⚠️ No station info available');
+      return;
+    }
     
-    const stationRegion = {
-      latitude: parseFloat(stationInfo.lat || stationInfo.latitude),
-      longitude: parseFloat(stationInfo.lng || stationInfo.longitude),
-      latitudeDelta: 0.01,
-      longitudeDelta: 0.01,
-    };
-    setRegion(stationRegion);
+    if (!mapRef.current) {
+      console.log('⚠️ Map ref not available');
+      return;
+    }
+    
+    try {
+      const lat = parseFloat(stationInfo.lat || stationInfo.latitude);
+      const lng = parseFloat(stationInfo.lng || stationInfo.longitude);
+      
+      if (isNaN(lat) || isNaN(lng)) {
+        console.error('❌ Invalid station coordinates:', { lat, lng });
+        return;
+      }
+      
+      const stationRegion = {
+        latitude: lat,
+        longitude: lng,
+        latitudeDelta: 0.01,
+        longitudeDelta: 0.01,
+      };
+      
+      console.log('🏢 Centering on station location:', stationRegion);
+      
+      // Use animateToRegion for smooth transition without glitches
+      mapRef.current.animateToRegion(stationRegion, 1000);
+    } catch (error) {
+      console.error('❌ Error centering on station location:', error);
+    }
   };
 
   // Function to calculate route between current location and fire report using Google Directions API
@@ -922,35 +964,67 @@ export default function RMap({ routingInfo }) {
     }
   };
 
-  // Fetch assigned fire reports - reports assigned to the responder's station (like Station Map)
+  // Fetch assigned fire reports - BOTH station-level AND responder-specific assignments
   const fetchAssignedReports = async () => {
     if (!userData?.id) return;
 
     try {
       const stationId = userData?.stationId || userData?.station_id;
-      if (!stationId) {
-        console.log('⚠️ No stationId found for responder, cannot fetch station-assigned reports');
-        setAssignedReports([]);
-        return;
-      }
-
-      console.log('🔍 Fetching station-assigned reports for responder\'s station:', stationId);
+      const responderId = userData?.id;
       
-      // Get assignments from report_assignments table where assignee_type='station' and assignee_id matches the responder's station
-      const { data: assignments, error: assignmentError } = await supabase
+      console.log('🔍 Fetching all assignments for responder:', responderId, 'Station:', stationId);
+      
+      let allAssignments = [];
+      
+      // 1. Get station-level assignments (if responder belongs to a station)
+      if (stationId) {
+        const { data: stationAssignments, error: stationError } = await supabase
+          .from('report_assignments')
+          .select('report_id, assigned_at, note')
+          .eq('assignee_type', 'station')
+          .eq('assignee_id', stationId);
+        
+        if (!stationError && stationAssignments) {
+          console.log('📋 Station-level assignments found:', stationAssignments.length);
+          allAssignments.push(...stationAssignments);
+        }
+      }
+      
+      // 2. Get responder-specific assignments (direct assignments)
+      const { data: responderAssignments, error: responderError } = await supabase
         .from('report_assignments')
         .select('report_id, assigned_at, note')
-        .eq('assignee_type', 'station')
-        .eq('assignee_id', stationId)
-        .order('assigned_at', { ascending: false });
-
-      if (assignmentError) {
-        console.error('Error fetching station assignments:', assignmentError);
-        return;
+        .eq('assignee_type', 'responder')
+        .eq('assignee_id', responderId);
+      
+      if (!responderError && responderAssignments) {
+        console.log('📋 Responder-specific assignments found:', responderAssignments.length);
+        allAssignments.push(...responderAssignments);
+      }
+      
+      // 3. Also check responder_notifications for accepted assignments
+      const { data: notifications, error: notifError } = await supabase
+        .from('responder_notifications')
+        .select('fire_report_id, created_at')
+        .eq('responder_id', responderId)
+        .in('status', ['accepted', 'completed']);
+      
+      if (!notifError && notifications) {
+        console.log('📋 Accepted notifications found:', notifications.length);
+        // Add any reports from notifications that aren't already in assignments
+        notifications.forEach(notif => {
+          if (!allAssignments.some(a => String(a.report_id) === String(notif.fire_report_id))) {
+            allAssignments.push({
+              report_id: notif.fire_report_id,
+              assigned_at: notif.created_at,
+              note: null
+            });
+          }
+        });
       }
 
-      if (!assignments || assignments.length === 0) {
-        console.log('No station-assigned reports found for this responder\'s station');
+      if (allAssignments.length === 0) {
+        console.log('⚠️ No assignments found (station, responder, or notification-based)');
         setAssignedReports([]);
         setAcceptedAssignment(null);
         setRouteCoordinates([]);
@@ -959,8 +1033,13 @@ export default function RMap({ routingInfo }) {
         return;
       }
 
-      const reportIds = assignments.map(a => String(a.report_id)).filter(Boolean);
-      console.log('📋 Fire report IDs assigned to station:', reportIds);
+      // Remove duplicates by report_id
+      const uniqueAssignments = Array.from(
+        new Map(allAssignments.map(a => [String(a.report_id), a])).values()
+      );
+
+      const reportIds = uniqueAssignments.map(a => String(a.report_id)).filter(Boolean);
+      console.log('📋 Total unique fire report IDs to display:', reportIds.length, reportIds);
 
       if (reportIds.length === 0) {
         setAssignedReports([]);
@@ -979,24 +1058,42 @@ export default function RMap({ routingInfo }) {
       
       // Create a map of assignment info
       const assignmentMap = new Map();
-      assignments.forEach(a => {
+      uniqueAssignments.forEach(a => {
         assignmentMap.set(String(a.report_id), {
           assigned_at: a.assigned_at,
           note: a.note
         });
       });
 
-      // Filter reports: must be assigned to station, have coordinates, NOT be "Fire Out" or "Under Control", and NOT be "No Fire" + "No Smoke"
+      // Filter reports: must be assigned, have coordinates, NOT be "Fire Out" or "Under Control", and NOT be "No Fire" + "No Smoke"
+      console.log('🔍 Filtering reports from API...');
+      console.log('📋 Looking for report IDs:', reportIds);
+      
       const assignedFireReports = allReports.filter(report => {
-        const isAssigned = reportIds.includes(String(report.id));
+        const reportIdStr = String(report.id);
+        const isAssigned = reportIds.includes(reportIdStr);
         const latNum = typeof report?.latitude === 'number' ? report.latitude : parseFloat(report?.latitude);
         const lngNum = typeof report?.longitude === 'number' ? report.longitude : parseFloat(report?.longitude);
         const hasValidCoordinates = !isNaN(latNum) && !isNaN(lngNum);
         const status = (report.status || '').toString().toLowerCase();
         const isCancelled = status.includes('cancelled') || status.includes('canceled');
         const isFireOut = status.includes('fire out') || status.includes('under control');
+        const isNoFireNoSmokeReport = isNoFireNoSmoke(report);
         
-        return isAssigned && hasValidCoordinates && !isCancelled && !isFireOut && !isNoFireNoSmoke(report);
+        if (isAssigned) {
+          console.log(`📊 Report ${reportIdStr}:`, {
+            isAssigned,
+            hasValidCoordinates,
+            coordinates: { lat: latNum, lng: lngNum },
+            status: report.status,
+            isCancelled,
+            isFireOut,
+            isNoFireNoSmoke: isNoFireNoSmokeReport,
+            willShow: hasValidCoordinates && !isCancelled && !isFireOut && !isNoFireNoSmokeReport
+          });
+        }
+        
+        return isAssigned && hasValidCoordinates && !isCancelled && !isFireOut && !isNoFireNoSmokeReport;
       }).map(report => {
         const assignmentInfo = assignmentMap.get(String(report.id));
         
@@ -1020,8 +1117,21 @@ export default function RMap({ routingInfo }) {
         return dateB - dateA; // Descending (newest first)
       });
 
-      console.log('✅ Station-assigned fire reports found:', assignedFireReports.length);
+      console.log('✅ Total assigned fire reports found:', assignedFireReports.length);
+      console.log('📋 Report IDs that will be displayed:', assignedFireReports.map(r => r.id));
       console.log('📅 Reports sorted by assignment date (latest first)');
+      
+      if (assignedFireReports.length > 0) {
+        assignedFireReports.forEach(report => {
+          console.log(`📍 Report ${report.id}: ${report.address || report.geotag_location || 'Unknown location'} - Coords: ${report.latitude}, ${report.longitude}`);
+        });
+      } else {
+        console.log('⚠️ No assigned reports found! Check if:');
+        console.log('  1. Reports exist in API with matching IDs');
+        console.log('  2. Reports have valid coordinates');
+        console.log('  3. Reports are not filtered out (Fire Out, Cancelled, No Fire/No Smoke)');
+      }
+      
       setAssignedReports(assignedFireReports);
 
       // Check if currently displayed acceptedAssignment is still in the assignments list
@@ -1069,12 +1179,21 @@ export default function RMap({ routingInfo }) {
             const latDelta = (maxLat - minLat) * 1.3 + 0.01;
             const lngDelta = (maxLng - minLng) * 1.3 + 0.01;
 
-            setRegion({
-              latitude: centerLat,
-              longitude: centerLng,
-              latitudeDelta: Math.max(latDelta, 0.02),
-              longitudeDelta: Math.max(lngDelta, 0.02),
-            });
+            if (mapRef.current) {
+              mapRef.current.animateToRegion({
+                latitude: centerLat,
+                longitude: centerLng,
+                latitudeDelta: Math.max(latDelta, 0.02),
+                longitudeDelta: Math.max(lngDelta, 0.02),
+              }, 1000);
+            } else {
+              setRegion({
+                latitude: centerLat,
+                longitude: centerLng,
+                latitudeDelta: Math.max(latDelta, 0.02),
+                longitudeDelta: Math.max(lngDelta, 0.02),
+              });
+            }
 
             console.log('✅ Map centered to show all routes');
           }
@@ -1082,6 +1201,43 @@ export default function RMap({ routingInfo }) {
       } else if (assignedFireReports.length > 0) {
         console.log('⚠️ Location not available yet, routes will be calculated when location is ready');
         setAcceptedAssignment(assignedFireReports[0]);
+        
+        // Center map on assigned reports even without routes
+        const reportCoords = assignedFireReports
+          .map(r => ({ lat: parseFloat(r.latitude), lng: parseFloat(r.longitude) }))
+          .filter(c => !isNaN(c.lat) && !isNaN(c.lng));
+        
+        if (reportCoords.length > 0) {
+          const lats = reportCoords.map(c => c.lat);
+          const lngs = reportCoords.map(c => c.lng);
+          const minLat = Math.min(...lats);
+          const maxLat = Math.max(...lats);
+          const minLng = Math.min(...lngs);
+          const maxLng = Math.max(...lngs);
+          
+          const centerLat = (minLat + maxLat) / 2;
+          const centerLng = (minLng + maxLng) / 2;
+          const latDelta = Math.max((maxLat - minLat) * 1.5 + 0.01, 0.02);
+          const lngDelta = Math.max((maxLng - minLng) * 1.5 + 0.01, 0.02);
+          
+          if (mapRef.current) {
+            mapRef.current.animateToRegion({
+              latitude: centerLat,
+              longitude: centerLng,
+              latitudeDelta: latDelta,
+              longitudeDelta: lngDelta,
+            }, 1000);
+          } else {
+            setRegion({
+              latitude: centerLat,
+              longitude: centerLng,
+              latitudeDelta: latDelta,
+              longitudeDelta: lngDelta,
+            });
+          }
+          
+          console.log('✅ Map centered on assigned reports (no routes yet)');
+        }
       } else {
         console.log('⚠️ No assigned reports found');
         setAcceptedAssignment(null);
@@ -1341,7 +1497,7 @@ export default function RMap({ routingInfo }) {
     
     const handleRouting = async () => {
       try {
-        const { fireReportId, location: fireLocation, destination, focusOnly } = routingInfo;
+        const { fireReportId, location: fireLocation, destination, focusOnly, openModal } = routingInfo;
         
         console.log('🔍 Fetching fire report details for ID:', fireReportId);
         console.log('📍 Fire location from notification:', fireLocation);
@@ -1378,7 +1534,7 @@ export default function RMap({ routingInfo }) {
           return;
         }
 
-        // If focusOnly: clear routes and just center & show modal
+        // If focusOnly: clear routes and just center (no modal unless explicitly allowed)
         if (focusOnly) {
           console.log('🧭 Focus-only request: clearing routes and centering on report');
           setRouteCoordinates([]);
@@ -1391,7 +1547,11 @@ export default function RMap({ routingInfo }) {
             latitude: lat,
             longitude: lng,
           });
-          setShowReportModal(true);
+          if (openModal) {
+            setShowReportModal(true);
+          } else {
+            setShowReportModal(false);
+          }
 
           // Center map on the report
           setRegion({
@@ -1542,6 +1702,7 @@ export default function RMap({ routingInfo }) {
 
 
       <MapView
+        ref={mapRef}
         style={{ flex: 1 }}
         initialRegion={region || {
           latitude: 10.3157,
@@ -1766,11 +1927,21 @@ export default function RMap({ routingInfo }) {
         })}
 
         {/* Assigned fire reports markers */}
+        {(() => {
+          console.log('🗺️ Rendering assigned reports markers. Total:', assignedReports.length);
+          assignedReports.forEach(r => {
+            console.log(`  📍 Report ${r.id}: lat=${r.latitude}, lng=${r.longitude}, location=${r.address || r.geotag_location}`);
+          });
+          return null;
+        })()}
         {assignedReports.map(report => {
           const latNum = typeof report?.latitude === 'number' ? report.latitude : parseFloat(report?.latitude);
           const lngNum = typeof report?.longitude === 'number' ? report.longitude : parseFloat(report?.longitude);
           
-          if (isNaN(latNum) || isNaN(lngNum)) return null;
+          if (isNaN(latNum) || isNaN(lngNum)) {
+            console.log(`⚠️ Report ${report.id} has invalid coordinates: lat=${latNum}, lng=${lngNum}`);
+            return null;
+          }
 
           const color = getMarkerColor(report);
           const alarmText = toStr(formatAlarm(report));
@@ -1824,7 +1995,7 @@ export default function RMap({ routingInfo }) {
       </MapView>
 
       {/* Route Information Panel - Shows all active routes */}
-      {allRoutes.length > 0 && (
+      {allRoutes.length > 0 && showRoutesPanel && (
         <View style={styles.routeInfoPanel}>
           <View style={styles.routeInfoHeader}>
             <View style={[styles.routeInfoIcon, { backgroundColor: '#3b82f6' }]}>
@@ -1840,12 +2011,7 @@ export default function RMap({ routingInfo }) {
             </View>
             <TouchableOpacity
               style={styles.routeInfoClose}
-              onPress={() => {
-                setAllRoutes([]);
-                setRouteCoordinates([]);
-                setRouteInfo(null);
-                setAcceptedAssignment(null);
-              }}
+              onPress={() => setShowRoutesPanel(false)}
             >
               <Ionicons name="close" size={18} color="#6b7280" />
             </TouchableOpacity>
@@ -1925,19 +2091,14 @@ export default function RMap({ routingInfo }) {
             <Ionicons name="business" size={20} color="#fff" />
           </TouchableOpacity>
         )}
-
-        {/* Clear Route */}
-        {routeCoordinates.length > 0 && (
+        
+        {/* Toggle Routes Panel */}
+        {allRoutes.length > 0 && (
           <TouchableOpacity
-            style={[styles.controlButton, { backgroundColor: '#ef4444' }]}
-            onPress={() => {
-              setRouteCoordinates([]);
-              setRouteInfo(null);
-              setAcceptedAssignment(null);
-              console.log('🗑️ Route cleared');
-            }}
+            style={[styles.controlButton, { backgroundColor: showRoutesPanel ? '#10b981' : '#6b7280' }]}
+            onPress={() => setShowRoutesPanel(!showRoutesPanel)}
           >
-            <Ionicons name="close" size={20} color="#fff" />
+            <Ionicons name={showRoutesPanel ? "list" : "list-outline"} size={20} color="#fff" />
           </TouchableOpacity>
         )}
       </View>
