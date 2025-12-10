@@ -1,38 +1,75 @@
-import React, { useState } from 'react';
-import { View, Text, Image, ScrollView, TouchableOpacity, Alert } from 'react-native';
+import React, { useState, useEffect } from 'react';
+import { View, Text, Image, ScrollView, TouchableOpacity, Alert, ActivityIndicator } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
-import { useRouter } from 'expo-router';
+import { useRouter, useFocusEffect } from 'expo-router';
 import { useAuth } from '../../config/AuthContext';
+import { supabase } from '../../config/supabase';
+import { getProfilePictureUrl } from '../../services/profilePictureService';
 
 const AProfile = () => {
   const router = useRouter();
-  const { logout } = useAuth();
+  const { logout, userData } = useAuth();
   const [showLogoutModal, setShowLogoutModal] = useState(false);
-  const profile = {
-    name: 'Admin User',
-    email: 'admin@gmail.com',
-    phone: '+1 (555) 123-4567',
-    address: '123 Safety St, Firetown, FT 12345',
-    barangay: 'Guadalupe',
-    birthdate: '1990-05-15',
-    gender: 'Male',
-    contactNumber: '09123456789',
-    position: 'System Administrator',
-  };
+  const [profile, setProfile] = useState(null);
+  const [profilePictureUrl, setProfilePictureUrl] = useState(null);
+  const [loading, setLoading] = useState(true);
 
-  // Calculate age from birthdate
-  const getAge = (birthdate) => {
-    const birth = new Date(birthdate);
-    if (!isNaN(birth.getTime())) {
-      const today = new Date();
-      let age = today.getFullYear() - birth.getFullYear();
-      const m = today.getMonth() - birth.getMonth();
-      if (m < 0 || (m === 0 && today.getDate() < birth.getDate())) {
-        age--;
-      }
-      return age.toString();
+  // Fetch admin profile data from Supabase whenever screen comes into focus
+  useFocusEffect(
+    React.useCallback(() => {
+      fetchProfile();
+    }, [userData?.id, userData?.uid, userData?.email])
+  );
+
+  const fetchProfile = async () => {
+    if (!userData?.id && !userData?.uid) {
+      console.log('No user ID available');
+      setLoading(false);
+      return;
     }
-    return '';
+
+    try {
+      const userId = userData.id || userData.uid;
+      console.log('Fetching admin profile:', userId);
+
+      let { data: adminData, error } = await supabase
+        .from('admin_users')
+        .select('*')
+        .eq('id', userId)
+        .maybeSingle();
+
+      if (error) {
+        console.error('Error fetching profile:', error);
+        Alert.alert('Error', 'Failed to load profile data');
+        setLoading(false);
+        return;
+      }
+
+      if (adminData) {
+        // Get profile picture URL
+        let picUrl = adminData.profile_picture_url;
+        if (!picUrl) {
+          picUrl = await getProfilePictureUrl(userId, 'admin');
+        }
+        setProfilePictureUrl(picUrl);
+
+        setProfile({
+          name: adminData.display_name || adminData.email?.split('@')[0] || 'Admin User',
+          email: adminData.email || 'N/A',
+          phone: adminData.phone || 'N/A',
+          status: adminData.status || 'Active',
+          isOnline: adminData.is_online || false,
+        });
+      } else {
+        console.log('No admin data found');
+        Alert.alert('Error', 'Profile not found');
+      }
+    } catch (error) {
+      console.error('Error in fetchProfile:', error);
+      Alert.alert('Error', 'An error occurred while loading profile');
+    } finally {
+      setLoading(false);
+    }
   };
 
   const handleLogout = () => {
@@ -50,37 +87,62 @@ const AProfile = () => {
   };
 
 
+  if (loading) {
+    return (
+      <View className="flex-1 bg-gray-100 justify-center items-center">
+        <ActivityIndicator size="large" color="#ff512f" />
+        <Text className="text-gray-600 mt-4">Loading profile...</Text>
+      </View>
+    );
+  }
+
+  if (!profile) {
+    return (
+      <View className="flex-1 bg-gray-100 justify-center items-center">
+        <MaterialIcons name="error-outline" size={64} color="#ef4444" />
+        <Text className="text-gray-600 mt-4">Failed to load profile</Text>
+      </View>
+    );
+  }
+
   return (
     <View className="flex-1 bg-gray-100">
       <ScrollView className="flex-1 pb-45" contentContainerStyle={{ flexGrow: 1 }}>
         {/* Profile Header */}
         <View className="bg-white py-8 items-center border-b border-gray-200 relative" pointerEvents="box-none">
-          <View className="w-24 h-24 rounded-full mb-4 items-center justify-center bg-fire mt-28">
-            <Text className="text-4xl font-bold text-white">
-              {profile.name.split(' ').map(n => n[0]).join('')}
-            </Text>
-          </View>
+          {profilePictureUrl ? (
+            <Image 
+              source={{ uri: profilePictureUrl }} 
+              className="w-24 h-24 rounded-full mb-4 mt-28 border-4 border-fire"
+              style={{ width: 96, height: 96, borderRadius: 48 }}
+            />
+          ) : (
+            <View className="w-24 h-24 rounded-full mb-4 items-center justify-center bg-fire mt-28">
+              <Text className="text-4xl font-bold text-white">
+                {profile.name.split(' ').map(n => n[0]).join('')}
+              </Text>
+            </View>
+          )}
           <Text className="text-2xl font-bold text-gray-800 mb-1">{profile.name}</Text>
-          <Text className="text-base text-gray-500 mb-1">{profile.position}</Text>
+          <Text className="text-base text-gray-500 mb-1">Administrator</Text>
         </View>
         {/* Edit Button - moved outside header for stacking */}
         <View className="absolute right-6 top-16 z-50" style={{ pointerEvents: 'auto', alignSelf: 'flex-end' }}>
-          <TouchableOpacity className="p-2 rounded-full bg-gray-100 active:bg-gray-200" onPress={() => {}}>
+          <TouchableOpacity 
+            className="p-2 rounded-full bg-gray-100 active:bg-gray-200" 
+            onPress={() => router.push('/Admin/AdminProfile/AEdit_Profile')}
+          >
             <MaterialIcons name="edit" size={24} color="#ff512f" />
           </TouchableOpacity>
         </View>
 
         {/* Contact Information Section */}
         <View className="bg-white m-4 rounded-2xl p-6 shadow-sm">
-          <Text className="text-lg font-bold text-gray-800 mb-4">Contact Information</Text>
+          <Text className="text-lg font-bold text-gray-800 mb-4">Admin Information</Text>
           <ProfileField icon="email" label="Email" value={profile.email} />
           <ProfileField icon="phone" label="Phone" value={profile.phone} />
-          <ProfileField icon="home" label="Address" value={profile.address} multiline />
-          <ProfileField icon="location-on" label="Barangay" value={profile.barangay} />
-          <ProfileField icon="event" label="Birthdate" value={profile.birthdate} />
-          <ProfileField icon="calendar-today" label="Age" value={getAge(profile.birthdate)} />
-          <ProfileField icon="person" label="Gender" value={profile.gender} />
-          <ProfileField icon="phone-android" label="Contact Number" value={profile.contactNumber} />
+          <ProfileField icon="check-circle" label="Status" value={profile.status} />
+          <ProfileField icon="wifi" label="Online Status" value={profile.isOnline ? 'Online' : 'Offline'} />
         </View>
 
         {/* Action Buttons */}

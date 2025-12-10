@@ -1002,26 +1002,44 @@ export default function RMap({ routingInfo }) {
         allAssignments.push(...responderAssignments);
       }
       
-      // 3. Also check responder_notifications for accepted assignments
+      // 3. Also check responder_notifications for ALL assignments (pending, accepted, completed)
+      // This matches the logic in RStatus.jsx to show the same reports
       const { data: notifications, error: notifError } = await supabase
         .from('responder_notifications')
-        .select('fire_report_id, created_at')
+        .select('fire_report_id, created_at, status, accepted_at')
         .eq('responder_id', responderId)
-        .in('status', ['accepted', 'completed']);
+        .in('status', ['pending', 'accepted', 'completed']); // Include pending like RStatus does
       
       if (!notifError && notifications) {
-        console.log('📋 Accepted notifications found:', notifications.length);
+        console.log('📋 Notifications found (pending/accepted/completed):', notifications.length);
+        console.log('📋 Notification details:', notifications.map(n => ({ 
+          report_id: n.fire_report_id, 
+          status: n.status, 
+          accepted_at: n.accepted_at 
+        })));
         // Add any reports from notifications that aren't already in assignments
         notifications.forEach(notif => {
           if (!allAssignments.some(a => String(a.report_id) === String(notif.fire_report_id))) {
             allAssignments.push({
               report_id: notif.fire_report_id,
               assigned_at: notif.created_at,
-              note: null
+              note: null,
+              notification_status: notif.status, // Store status for reference
+              notification_accepted_at: notif.accepted_at
             });
           }
         });
       }
+      
+      // Create a map of notifications by report_id for later use
+      const notificationMap = new Map();
+      (notifications || []).forEach(notif => {
+        notificationMap.set(String(notif.fire_report_id), {
+          status: notif.status,
+          accepted_at: notif.accepted_at,
+          created_at: notif.created_at
+        });
+      });
 
       if (allAssignments.length === 0) {
         console.log('⚠️ No assignments found (station, responder, or notification-based)');
@@ -1054,7 +1072,12 @@ export default function RMap({ routingInfo }) {
       }
 
       const allReports = await response.json();
-      console.log('🔥 All reports from API:', allReports.length);
+      console.log('🔥 All reports from API:', allReports?.length || 0);
+      
+      // Create a map of reports by ID (same approach as RStatus.jsx)
+      const reportsById = new Map((allReports || []).map(r => [String(r.id), r]));
+      console.log('🗺️ Reports by ID map size:', reportsById.size);
+      console.log('📋 Available report IDs in API:', Array.from(reportsById.keys()).slice(0, 10), '...');
       
       // Create a map of assignment info
       const assignmentMap = new Map();
@@ -1065,42 +1088,68 @@ export default function RMap({ routingInfo }) {
         });
       });
 
-      // Filter reports: must be assigned, have coordinates, NOT be "Fire Out" or "Under Control", and NOT be "No Fire" + "No Smoke"
-      console.log('🔍 Filtering reports from API...');
+      // Process each report ID individually (same approach as RStatus.jsx)
+      console.log('🔍 Processing report IDs individually...');
       console.log('📋 Looking for report IDs:', reportIds);
       
-      const assignedFireReports = allReports.filter(report => {
-        const reportIdStr = String(report.id);
-        const isAssigned = reportIds.includes(reportIdStr);
+      const assignedFireReports = reportIds.map(reportId => {
+        console.log(`🔍 Looking for report ID: ${reportId}`);
+        const report = reportsById.get(String(reportId));
+        
+        if (!report) {
+          console.warn(`⚠️ Report not found in API response: ${reportId}`);
+          return null;
+        }
+        
+        // Filter out Fire Out reports (but keep Under Control - responders should see those)
+        const status = (report.status || '').toString().toLowerCase();
+        console.log(`📊 Report ${reportId} status: "${status}"`);
+        
+        if (status === 'fire out') {
+          console.log(`⏭️ Skipping ${status} report: ${reportId}`);
+          return null;
+        }
+        
         const latNum = typeof report?.latitude === 'number' ? report.latitude : parseFloat(report?.latitude);
         const lngNum = typeof report?.longitude === 'number' ? report.longitude : parseFloat(report?.longitude);
         const hasValidCoordinates = !isNaN(latNum) && !isNaN(lngNum);
-        const status = (report.status || '').toString().toLowerCase();
         const isCancelled = status.includes('cancelled') || status.includes('canceled');
-        const isFireOut = status.includes('fire out') || status.includes('under control');
         const isNoFireNoSmokeReport = isNoFireNoSmoke(report);
         
-        if (isAssigned) {
-          console.log(`📊 Report ${reportIdStr}:`, {
-            isAssigned,
-            hasValidCoordinates,
-            coordinates: { lat: latNum, lng: lngNum },
-            status: report.status,
-            isCancelled,
-            isFireOut,
-            isNoFireNoSmoke: isNoFireNoSmokeReport,
-            willShow: hasValidCoordinates && !isCancelled && !isFireOut && !isNoFireNoSmokeReport
-          });
+        if (!hasValidCoordinates) {
+          console.warn(`⚠️ Report ${reportId} has invalid coordinates: lat=${latNum}, lng=${lngNum}`);
+          return null;
         }
         
-        return isAssigned && hasValidCoordinates && !isCancelled && !isFireOut && !isNoFireNoSmokeReport;
-      }).map(report => {
-        const assignmentInfo = assignmentMap.get(String(report.id));
+        if (isCancelled) {
+          console.log(`⏭️ Skipping cancelled report: ${reportId}`);
+          return null;
+        }
+        
+        if (isNoFireNoSmokeReport) {
+          console.log(`⏭️ Skipping No Fire/No Smoke report: ${reportId}`);
+          return null;
+        }
+        
+        console.log(`✅ Found active report: ${reportId} - ${report.address || report.geotag_location || report.location || 'Unknown location'}`);
+        console.log(`📍 Coordinates: lat=${latNum}, lng=${lngNum}`);
+        
+        const assignmentInfo = assignmentMap.get(String(reportId));
+        const notificationInfo = notificationMap.get(String(reportId));
+        
+        // Determine if assignment is accepted (same logic as RStatus.jsx)
+        const isAccepted = notificationInfo?.status === 'accepted' || !!notificationInfo?.accepted_at;
+        
+        if (notificationInfo) {
+          console.log(`🔔 Notification for report ${reportId}: status=${notificationInfo.status}, accepted_at=${notificationInfo.accepted_at}, isAccepted=${isAccepted}`);
+        }
         
         return {
           ...report,
-          assigned_at: assignmentInfo?.assigned_at || new Date().toISOString(),
+          assigned_at: assignmentInfo?.assigned_at || notificationInfo?.created_at || new Date().toISOString(),
           assignment_note: assignmentInfo?.note || null,
+          isAccepted: isAccepted, // Add accepted flag for marker styling
+          notification_status: notificationInfo?.status || null,
           // Add cause from report
           cause: report.cause || 
                  report.possible_cause || 
@@ -1108,7 +1157,7 @@ export default function RMap({ routingInfo }) {
                  report.cause_of_fire ||
                  'Not specified'
         };
-      });
+      }).filter(Boolean); // Remove null entries
 
       // Sort by assigned_at (latest first) to get the most recent assignment
       assignedFireReports.sort((a, b) => {
@@ -2169,21 +2218,12 @@ export default function RMap({ routingInfo }) {
                 </Text>
               </View>
               
-              {/* Structure */}
+              {/* AI Structure Analysis */}
               <View style={styles.modalFieldContainer}>
-                <Text style={styles.modalFieldLabel}>Structure</Text>
+                <Text style={styles.modalFieldLabel}>AI Structure Analysis</Text>
                 <Text style={styles.modalFieldValue}>
                   {toStr(selectedReport?.structure || selectedReport?.structure_type || 'Unknown')}
                   {selectedReport?.structure_confidence ? ` (${selectedReport.structure_confidence})` : ''}
-                </Text>
-              </View>
-              
-              {/* Structures Affected */}
-              <View style={styles.modalFieldContainer}>
-                <Text style={styles.modalFieldLabel}>Structures Affected</Text>
-                <Text style={styles.modalFieldValue}>
-                  {toStr(selectedReport?.number_of_structures_on_fire || selectedReport?.structures_affected || 'Unknown')}
-                  {selectedReport?.number_of_structures_on_fire && !selectedReport?.number_of_structures_on_fire.toString().includes('structure') && ' structure(s)'}
                 </Text>
               </View>
               

@@ -5,6 +5,7 @@ import { FaMapLocationDot } from "react-icons/fa6";
 import { IoIosNotifications } from "react-icons/io";
 import { Link, useLocation, useNavigate, Outlet } from 'react-router-dom';
 import { supabase } from '../../../../config/supabase';
+import { getProfilePictureUrl } from '../../../../services/profilePictureService';
 import StationNotificationToast from '../../../common/StationNotificationToast';
 
 const StationLayout = ({ children }) => {
@@ -18,6 +19,7 @@ const StationLayout = ({ children }) => {
     email: 'Loading...',
     address: 'Loading...'
   });
+  const [profilePictureUrl, setProfilePictureUrl] = useState(null);
   const location = useLocation();
   const profileRef = useRef(null);
   const notificationsRef = useRef(null);
@@ -49,11 +51,23 @@ const StationLayout = ({ children }) => {
         // If we have userData, try to fetch from Supabase for latest info
         const { data: stationInfo, error } = await supabase
           .from('station_users')
-          .select('station_name, email, address, lat, lng')
+          .select('station_name, email, address, lat, lng, profile_picture_url')
           .eq('id', userData.id)
           .single();
         
         console.log('🔍 Supabase query result:', { stationInfo, error });
+        
+        // Fetch profile picture
+        if (stationInfo) {
+          let picUrl = stationInfo.profile_picture_url;
+          if (!picUrl) {
+            picUrl = await getProfilePictureUrl(userData.id, 'station');
+          }
+          if (picUrl) {
+            setProfilePictureUrl(picUrl);
+            console.log('✅ Profile picture loaded:', picUrl);
+          }
+        }
         
         if (error) {
           console.error('Error fetching station data:', error);
@@ -508,9 +522,19 @@ const StationLayout = ({ children }) => {
                   onClick={toggleProfile}
                   className="flex items-center space-x-3 focus:outline-none hover:bg-gray-100 px-3 py-2 rounded-lg transition-colors duration-200"
                 >
-                  <div className="w-10 h-10 bg-red-700 rounded-full flex items-center justify-center text-white shadow-md hover:bg-red-800 transition-colors duration-200">
-                    <FiUser size={18} />
-                  </div>
+                  {profilePictureUrl ? (
+                    <div className="w-10 h-10 rounded-full overflow-hidden shadow-md ring-2 ring-red-600 hover:ring-red-700 transition-all duration-200">
+                      <img 
+                        src={profilePictureUrl} 
+                        alt="Profile" 
+                        className="w-full h-full object-cover"
+                      />
+                    </div>
+                  ) : (
+                    <div className="w-10 h-10 bg-red-700 rounded-full flex items-center justify-center text-white shadow-md hover:bg-red-800 transition-colors duration-200">
+                      <FiUser size={18} />
+                    </div>
+                  )}
                   {sidebarOpen && <span className="text-gray-800 font-medium truncate max-w-32">{stationData.station_name}</span>}
                 </button>
                 {profileOpen && (

@@ -1,9 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { View, Text, Image, ScrollView, TouchableOpacity, Alert, ActivityIndicator } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
-import { useRouter } from 'expo-router';
+import { useRouter, useFocusEffect } from 'expo-router';
 import { useAuth } from '../../config/AuthContext';
 import { supabase } from '../../config/supabase';
+import { getProfilePictureUrl } from '../../services/profilePictureService';
 
 const RProfile = () => {
   const router = useRouter();
@@ -11,18 +12,18 @@ const RProfile = () => {
   const [showDeactivate, setShowDeactivate] = useState(false);
   const [showLogoutModal, setShowLogoutModal] = useState(false);
   const [profile, setProfile] = useState(null);
+  const [profilePictureUrl, setProfilePictureUrl] = useState(null);
   const [loading, setLoading] = useState(true);
 
-  // Fetch responder profile data from Supabase
-  useEffect(() => {
-    const fetchProfile = async () => {
-      if (!userData?.id && !userData?.uid) {
-        console.log('No user ID available, userData:', userData);
-        setLoading(false);
-        return;
-      }
+  // Fetch responder profile data from Supabase whenever screen comes into focus
+  const fetchProfile = async () => {
+    if (!userData?.id && !userData?.uid) {
+      console.log('No user ID available, userData:', userData);
+      setLoading(false);
+      return;
+    }
 
-      try {
+    try {
         const userId = userData.id || userData.uid;
         console.log('Fetching responder profile for user:', { userId, userData });
         
@@ -90,6 +91,14 @@ const RProfile = () => {
             }
           }
           
+          // Get profile picture URL from Supabase Storage or database
+          let picUrl = responderData.profile_picture_url;
+          if (!picUrl) {
+            // Try to get from storage
+            picUrl = await getProfilePictureUrl(userId, 'responder');
+          }
+          setProfilePictureUrl(picUrl);
+
           setProfile({
             firstName: responderData.first_name || 'N/A',
             lastName: responderData.last_name || 'N/A',
@@ -106,18 +115,20 @@ const RProfile = () => {
         } else {
           console.log('No responder data found for user');
           Alert.alert('Error', 'Responder profile not found. Please contact administrator.');
-          setLoading(false);
         }
-      } catch (error) {
-        console.error('Error in fetchProfile:', error);
-        Alert.alert('Error', 'An error occurred while loading profile');
-      } finally {
-        setLoading(false);
-      }
-    };
+    } catch (error) {
+      console.error('Error in fetchProfile:', error);
+      Alert.alert('Error', 'An error occurred while loading profile');
+    } finally {
+      setLoading(false);
+    }
+  };
 
-    fetchProfile();
-  }, [userData?.id, userData?.uid, userData?.email]);
+  useFocusEffect(
+    React.useCallback(() => {
+      fetchProfile();
+    }, [userData?.id, userData?.uid, userData?.email])
+  );
 
   const handleLogout = () => {
     setShowLogoutModal(true);
@@ -164,11 +175,19 @@ const RProfile = () => {
       <ScrollView className="flex-1 pb-45" contentContainerStyle={{ flexGrow: 1 }}>
         {/* Profile Header */}
         <View className="bg-white py-8 items-center border-b border-gray-200 relative" pointerEvents="box-none">
-          <View className="w-24 h-24 rounded-full mb-4 items-center justify-center bg-fire mt-20">
-            <Text className="text-4xl font-bold text-white">
-              {profile.firstName[0]}{profile.lastName[0]}
-            </Text>
-          </View>
+          {profilePictureUrl ? (
+            <Image 
+              source={{ uri: profilePictureUrl }} 
+              className="w-24 h-24 rounded-full mb-4 mt-20 border-4 border-fire"
+              style={{ width: 96, height: 96, borderRadius: 48 }}
+            />
+          ) : (
+            <View className="w-24 h-24 rounded-full mb-4 items-center justify-center bg-fire mt-20">
+              <Text className="text-4xl font-bold text-white">
+                {profile.firstName[0]}{profile.lastName[0]}
+              </Text>
+            </View>
+          )}
           <Text className="text-2xl font-bold text-gray-800 mb-1">{profile.firstName} {profile.lastName}</Text>
           <Text className="text-base text-gray-500 mb-1">{profile.userPosition}</Text>
         </View>

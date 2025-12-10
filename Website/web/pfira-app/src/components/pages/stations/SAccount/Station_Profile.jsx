@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { FiEdit, FiSettings, FiLock, FiUnlock, FiSave, FiCamera, FiUser, FiLoader } from 'react-icons/fi';
 import { supabase } from '../../../../config/supabase';
+import { uploadProfilePicture, getProfilePictureUrl } from '../../../../services/profilePictureService';
 import Station_ChangePass from './Station_ChangePass.jsx';
 
 const Station_Profile = () => {
@@ -19,6 +20,7 @@ const Station_Profile = () => {
     position: '',
     num_firetrucks: '',
     firetruck_size: '',
+    profile_picture_url: '',
     role: 'stationUser',
     active: true,
     status: 'active',
@@ -26,6 +28,8 @@ const Station_Profile = () => {
     created_at: '',
     updated_at: ''
   });
+  const [selectedImageFile, setSelectedImageFile] = useState(null);
+  const [uploadingImage, setUploadingImage] = useState(false);
 
   // Fetch station user data from Supabase
   const fetchStationProfile = async () => {
@@ -55,7 +59,16 @@ const Station_Profile = () => {
       }
       
       if (stationData) {
-        setProfileData(stationData);
+        // Get profile picture URL if not in database
+        let profilePicUrl = stationData.profile_picture_url;
+        if (!profilePicUrl) {
+          profilePicUrl = await getProfilePictureUrl(stationData.id, 'station');
+        }
+        
+        setProfileData({
+          ...stationData,
+          profile_picture_url: profilePicUrl || ''
+        });
         setIsDisabled(!stationData.active);
         console.log('✅ Station profile loaded:', stationData);
       }
@@ -81,6 +94,21 @@ const Station_Profile = () => {
   const handleImageUpload = (e) => {
     const file = e.target.files[0];
     if (file) {
+      // Validate file type
+      if (!file.type.startsWith('image/')) {
+        setNotification({ visible: true, type: 'error', message: 'Please select an image file' });
+        return;
+      }
+      
+      // Validate file size (max 5MB)
+      if (file.size > 5 * 1024 * 1024) {
+        setNotification({ visible: true, type: 'error', message: 'Image size must be less than 5MB' });
+        return;
+      }
+      
+      setSelectedImageFile(file);
+      
+      // Preview the image
       const reader = new FileReader();
       reader.onloadend = () => {
         setProfileData(prev => ({ ...prev, profileImage: reader.result }));
@@ -93,6 +121,27 @@ const Station_Profile = () => {
     try {
       setSaving(true);
       
+      // Upload profile picture if a new one was selected
+      let profilePictureUrl = profileData.profile_picture_url;
+      if (selectedImageFile) {
+        setUploadingImage(true);
+        console.log('📤 Uploading profile picture...');
+        
+        const uploadResult = await uploadProfilePicture(selectedImageFile, profileData.id, 'station');
+        
+        if (uploadResult.success) {
+          profilePictureUrl = uploadResult.url;
+          console.log('✅ Profile picture uploaded:', profilePictureUrl);
+        } else {
+          console.error('❌ Failed to upload profile picture:', uploadResult.error);
+          setNotification({ visible: true, type: 'error', message: `Failed to upload profile picture: ${uploadResult.error}` });
+          setUploadingImage(false);
+          setSaving(false);
+          return;
+        }
+        setUploadingImage(false);
+      }
+      
       const { error } = await supabase
         .from('station_users')
         .update({
@@ -103,6 +152,7 @@ const Station_Profile = () => {
           position: profileData.position,
           num_firetrucks: profileData.num_firetrucks === '' ? null : Number(profileData.num_firetrucks),
           firetruck_size: profileData.firetruck_size || null,
+          profile_picture_url: profilePictureUrl,
           updated_at: new Date().toISOString()
         })
         .eq('id', profileData.id);
@@ -113,6 +163,14 @@ const Station_Profile = () => {
         return;
       }
       
+      // Update local state with new profile picture URL
+      setProfileData(prev => ({
+        ...prev,
+        profile_picture_url: profilePictureUrl,
+        profileImage: null
+      }));
+      setSelectedImageFile(null);
+      
       console.log('✅ Station profile updated successfully');
       setNotification({ visible: true, type: 'success', message: 'Profile updated successfully' });
       setIsEditing(false);
@@ -122,6 +180,7 @@ const Station_Profile = () => {
       setNotification({ visible: true, type: 'error', message: `Error updating profile: ${error.message}` });
     } finally {
       setSaving(false);
+      setUploadingImage(false);
     }
   };
 
@@ -218,8 +277,15 @@ const Station_Profile = () => {
             <div className="w-full md:w-1/3 flex flex-col items-center">
               <div className="relative mb-4">
                 <div className="w-40 h-40 rounded-full bg-gray-200 overflow-hidden border-4 border-white shadow-lg">
-                  {profileData.profileImage ? (
-                    <img src={profileData.profileImage} alt="Profile" className="w-full h-full object-cover" />
+                  {uploadingImage ? (
+                    <div className="w-full h-full flex flex-col items-center justify-center text-gray-400">
+                      <FiLoader className="w-8 h-8 animate-spin text-red-600 mb-2" />
+                      <span className="text-xs">Uploading...</span>
+                    </div>
+                  ) : profileData.profileImage ? (
+                    <img src={profileData.profileImage} alt="Profile Preview" className="w-full h-full object-cover" />
+                  ) : profileData.profile_picture_url ? (
+                    <img src={profileData.profile_picture_url} alt="Profile" className="w-full h-full object-cover" />
                   ) : (
                     <div className="w-full h-full flex items-center justify-center text-gray-400">
                       <FiUser className="w-20 h-20" />
@@ -227,13 +293,14 @@ const Station_Profile = () => {
                   )}
                 </div>
                 {isEditing && (
-                  <label className="absolute bottom-2 right-2 bg-white p-2 rounded-full shadow-md cursor-pointer hover:bg-gray-100">
-                    <FiCamera className="text-gray-700" />
+                  <label className="absolute bottom-2 right-2 bg-red-600 p-2 rounded-full shadow-md cursor-pointer hover:bg-red-700 transition-colors">
+                    <FiCamera className="text-white" />
                     <input 
                       type="file" 
                       className="hidden" 
                       accept="image/*" 
                       onChange={handleImageUpload}
+                      disabled={uploadingImage}
                     />
                   </label>
                 )}
@@ -268,11 +335,20 @@ const Station_Profile = () => {
                 ) : (
                   <button 
                     onClick={handleSave}
-                    disabled={saving}
+                    disabled={saving || uploadingImage}
                     className="px-3 py-1 bg-green-100 text-green-700 rounded-lg flex items-center hover:bg-green-200 disabled:opacity-50"
                   >
-                    <FiSave className="mr-2" />
-                    {saving ? 'Saving...' : 'Save Changes'}
+                    {saving || uploadingImage ? (
+                      <>
+                        <FiLoader className="mr-2 animate-spin" />
+                        {uploadingImage ? 'Uploading...' : 'Saving...'}
+                      </>
+                    ) : (
+                      <>
+                        <FiSave className="mr-2" />
+                        Save Changes
+                      </>
+                    )}
                   </button>
                 )}
               </div>

@@ -6,6 +6,8 @@ import { IoIosNotifications } from "react-icons/io";
 import { LuMessageCircleMore } from "react-icons/lu";
 import { FaUserFriends } from "react-icons/fa";
 import { Link, useLocation, useNavigate, Outlet } from 'react-router-dom';
+import { supabase } from '../../../../config/supabase';
+import { getProfilePictureUrl } from '../../../../services/profilePictureService';
 import { useNotifications } from '../../../../contexts/NotificationContext';
 import NotificationToast from '../../../common/NotificationToast';
 
@@ -13,6 +15,11 @@ const AdminLayout = ({ children }) => {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [profileOpen, setProfileOpen] = useState(false);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
+  const [profilePictureUrl, setProfilePictureUrl] = useState(null);
+  const [adminData, setAdminData] = useState({
+    display_name: 'Admin',
+    email: 'admin@fira.com'
+  });
   const location = useLocation();
   const navigate = useNavigate();
   const profileRef = useRef(null);
@@ -24,6 +31,54 @@ const AdminLayout = ({ children }) => {
   const toggleSidebar = () => setSidebarOpen(!sidebarOpen);
   const toggleProfile = () => setProfileOpen(!profileOpen);
   const toggleNotifications = () => setNotificationsOpen(!notificationsOpen);
+
+  // Fetch admin data and profile picture
+  const fetchAdminData = async () => {
+    try {
+      const userData = JSON.parse(sessionStorage.getItem('userData') || localStorage.getItem('userData') || '{}');
+      console.log('🔍 [Admin Layout] UserData from localStorage:', userData);
+
+      if (userData.id) {
+        console.log('🔍 [Admin Layout] Looking up admin with ID:', userData.id);
+        
+        const { data: adminInfo, error } = await supabase
+          .from('admin_users')
+          .select('display_name, email, profile_picture_url')
+          .eq('id', userData.id)
+          .single();
+        
+        console.log('🔍 [Admin Layout] Supabase query result:', { adminInfo, error });
+        
+        if (adminInfo) {
+          // Fetch profile picture
+          let picUrl = adminInfo.profile_picture_url;
+          if (!picUrl) {
+            picUrl = await getProfilePictureUrl(userData.id, 'admin');
+          }
+          if (picUrl) {
+            setProfilePictureUrl(picUrl);
+            console.log('✅ [Admin Layout] Profile picture loaded:', picUrl);
+          }
+          
+          setAdminData({
+            display_name: adminInfo.display_name || adminInfo.email?.split('@')[0] || 'Admin',
+            email: adminInfo.email || 'admin@fira.com'
+          });
+        }
+        
+        if (error) {
+          console.error('❌ [Admin Layout] Error fetching admin data:', error);
+        }
+      }
+    } catch (error) {
+      console.error('❌ [Admin Layout] Error in fetchAdminData:', error);
+    }
+  };
+
+  // Load admin data on mount
+  useEffect(() => {
+    fetchAdminData();
+  }, []);
 
 
   // Handle clicks outside dropdowns
@@ -260,17 +315,27 @@ const AdminLayout = ({ children }) => {
                   onClick={toggleProfile}
                   className="flex items-center space-x-3 focus:outline-none hover:bg-gray-100 px-3 py-2 rounded-lg transition-colors duration-200"
                 >
-                  <div className="w-10 h-10 bg-red-700 rounded-full flex items-center justify-center text-white shadow-md hover:bg-red-800 transition-colors duration-200">
-                    <FiUser size={18} />
-                  </div>
-                  {sidebarOpen && <span className="text-gray-800 font-medium">Admin</span>}
+                  {profilePictureUrl ? (
+                    <div className="w-10 h-10 rounded-full overflow-hidden shadow-md ring-2 ring-red-600 hover:ring-red-700 transition-all duration-200">
+                      <img 
+                        src={profilePictureUrl} 
+                        alt="Profile" 
+                        className="w-full h-full object-cover"
+                      />
+                    </div>
+                  ) : (
+                    <div className="w-10 h-10 bg-red-700 rounded-full flex items-center justify-center text-white shadow-md hover:bg-red-800 transition-colors duration-200">
+                      <FiUser size={18} />
+                    </div>
+                  )}
+                  {sidebarOpen && <span className="text-gray-800 font-medium truncate max-w-32">{adminData.display_name}</span>}
                 </button>
                 
                 {profileOpen && (
-                  <div className="absolute right-0 mt-3 w-56 bg-white rounded-xl shadow-2xl border border-gray-200 overflow-hidden z-20">
+                  <div className="absolute right-0 mt-3 w-64 bg-white rounded-xl shadow-2xl border border-gray-200 overflow-hidden z-20">
                     <div className="px-4 py-3 bg-gradient-to-r from-red-700 to-red-800 border-b border-red-900">
-                      <p className="text-white font-semibold text-sm">Admin Account</p>
-                      <p className="text-red-100 text-xs mt-0.5">System Administrator</p>
+                      <p className="text-white font-semibold text-sm truncate">{adminData.display_name}</p>
+                      <p className="text-red-100 text-xs mt-0.5 truncate">{adminData.email}</p>
                     </div>
                     <div className="py-2">
                       <Link to="/admin-dashboard/profile" className="flex items-center px-4 py-3 text-sm text-gray-700 hover:bg-red-50 hover:text-red-700 transition-colors duration-150 group">

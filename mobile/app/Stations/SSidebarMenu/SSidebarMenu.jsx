@@ -1,9 +1,11 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { View, TouchableOpacity, Text, Image, Animated, Dimensions, Alert, ScrollView } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { useAuth } from '../../config/AuthContext';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { supabase } from '../../config/supabase';
+import { getProfilePictureUrl } from '../../services/profilePictureService';
 
 const { width, height } = Dimensions.get('window');
 
@@ -26,6 +28,46 @@ const SSidebarMenu = ({ activeTab, setActiveTab, isOpen, onToggle }) => {
   const overlayOpacity = React.useRef(new Animated.Value(isOpen ? 0.3 : 0)).current;
   const [isAnimating, setIsAnimating] = React.useState(false);
   const [showLogoutModal, setShowLogoutModal] = useState(false);
+  const [profilePictureUrl, setProfilePictureUrl] = useState(null);
+  const [stationName, setStationName] = useState('');
+
+  // Fetch profile picture when sidebar opens or userData changes
+  useEffect(() => {
+    if (isOpen && userData?.id) {
+      fetchProfilePicture();
+    }
+  }, [isOpen, userData?.id]);
+
+  const fetchProfilePicture = async () => {
+    try {
+      const userId = userData?.id || userData?.uid;
+      if (!userId) return;
+
+      // Fetch station data from Supabase
+      const { data: stationData, error } = await supabase
+        .from('station_users')
+        .select('profile_picture_url, station_name')
+        .eq('id', userId)
+        .maybeSingle();
+
+      if (error) {
+        console.error('Error fetching profile picture:', error);
+        return;
+      }
+
+      if (stationData) {
+        // Get profile picture URL
+        let picUrl = stationData.profile_picture_url;
+        if (!picUrl) {
+          picUrl = await getProfilePictureUrl(userId, 'station');
+        }
+        setProfilePictureUrl(picUrl);
+        setStationName(stationData.station_name || '');
+      }
+    } catch (error) {
+      console.error('Error in fetchProfilePicture:', error);
+    }
+  };
 
   React.useEffect(() => {
     setIsAnimating(true);
@@ -106,11 +148,25 @@ const SSidebarMenu = ({ activeTab, setActiveTab, isOpen, onToggle }) => {
         {/* Profile Section */}
         <View className="bg-[#ff512f] pt-12 pb-6 px-6">
           <View className="items-center">
-            <View className="w-20 h-20 rounded-full bg-white items-center justify-center mb-3">
-              <MaterialIcons name="person" size={40} color="#ff512f" />
-            </View>
+            {profilePictureUrl ? (
+              <Image 
+                source={{ uri: profilePictureUrl }} 
+                style={{ 
+                  width: 80, 
+                  height: 80, 
+                  borderRadius: 40,
+                  borderWidth: 3,
+                  borderColor: '#ffffff',
+                  marginBottom: 12 
+                }}
+              />
+            ) : (
+              <View className="w-20 h-20 rounded-full bg-white items-center justify-center mb-3">
+                <MaterialIcons name="person" size={40} color="#ff512f" />
+              </View>
+            )}
             <Text className="text-white text-lg font-bold mb-1">
-              {userData?.displayName || userData?.firstName || userData?.station_name || 'Station User'}
+              {stationName || userData?.displayName || userData?.firstName || userData?.station_name || 'Station User'}
             </Text>
             <Text className="text-white/80 text-sm">
               {userData?.email || 'station@fira.com'}

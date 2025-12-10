@@ -6,6 +6,23 @@ import { supabase } from '../../../config/supabase';
 import * as Location from 'expo-location';
 import { scheduleLocalNotification } from '../../../services/pushNotificationService';
 
+// Format alarm level (same logic as RMap.jsx)
+const formatAlarm = (report) => {
+  // Prefer admin-set final alarm level, fall back to current alarm_level, then AI suggestion, then default 1st Alarm
+  const alarm =
+    report?.final_fire_alarm_level ||
+    report?.alarm_level ||
+    report?.recommended_alarm_level ||
+    report?.status ||
+    '1st Alarm';
+
+  const alarmText = (typeof alarm === 'string' ? alarm : String(alarm || '')).trim();
+  if (!alarmText || alarmText.toLowerCase().includes('unknown')) {
+    return '1st Alarm';
+  }
+  return alarmText;
+};
+
 export default function RNotifications({ onUnreadCountChange, onNavigateToMap }) {
 
  
@@ -17,6 +34,7 @@ export default function RNotifications({ onUnreadCountChange, onNavigateToMap })
   const [notifications, setNotifications] = useState([]);
   const [userLocation, setUserLocation] = useState(null);
   const notifiedNearbyIdsRef = useRef(new Set());
+  const [fireReportsMap, setFireReportsMap] = useState(new Map()); // Cache fire reports for alarm level formatting
 
   // NOTE: Sound/alarm management is handled by RAlertsWorker component
   // which is mounted at the app level for consistent playback across all screens
@@ -203,6 +221,38 @@ export default function RNotifications({ onUnreadCountChange, onNavigateToMap })
       }
       
       setNotifications(data || []);
+      
+      // Fetch fire reports for notifications that have fire_report_id to get accurate alarm levels
+      if (data && data.length > 0) {
+        const reportIds = data
+          .map(n => n.fire_report_id)
+          .filter(Boolean)
+          .map(String);
+        
+        if (reportIds.length > 0) {
+          try {
+            const response = await fetch('https://fire-detection-api-production-f55b.up.railway.app/get_reports');
+            if (response.ok) {
+              const allReports = await response.json();
+              const reportsMap = new Map();
+              
+              reportIds.forEach(reportId => {
+                const report = Array.isArray(allReports) 
+                  ? allReports.find(r => String(r.id) === String(reportId))
+                  : null;
+                if (report) {
+                  reportsMap.set(String(reportId), report);
+                }
+              });
+              
+              setFireReportsMap(reportsMap);
+              console.log(`✅ Loaded ${reportsMap.size} fire reports for alarm level formatting`);
+            }
+          } catch (error) {
+            console.error('❌ Error fetching fire reports for alarm levels:', error);
+          }
+        }
+      }
     } catch (err) {
       console.error('📱 Responder: Error loading notifications:', err);
       console.error('📱 Responder: Error stack:', err.stack);
@@ -212,12 +262,70 @@ export default function RNotifications({ onUnreadCountChange, onNavigateToMap })
   };
 
   const handleNotificationPress = async (notification) => {
+    // Mark as read first
     await markAsRead(notification.id);
-    if (onNavigateToMap && notification.fire_report_id) {
-      onNavigateToMap({
-        fireReportId: notification.fire_report_id,
-        focusOnly: true
-      });
+    
+    // If no fire_report_id, just mark as read and stay
+    if (!notification.fire_report_id) {
+      console.log('📋 Notification has no fire_report_id - staying in notifications');
+      return;
+    }
+    
+    // Fetch the actual fire report to check its status
+    try {
+      const response = await fetch('https://fire-detection-api-production-f55b.up.railway.app/get_reports');
+      if (!response.ok) {
+        console.error('❌ Failed to fetch fire reports');
+        return;
+      }
+      
+      const allReports = await response.json();
+      const fireReport = Array.isArray(allReports) 
+        ? allReports.find(r => String(r.id) === String(notification.fire_report_id))
+        : null;
+      
+      if (!fireReport) {
+        console.warn('⚠️ Fire report not found:', notification.fire_report_id);
+        // Still try to navigate even if report not found
+        if (onNavigateToMap) {
+          onNavigateToMap({
+            fireReportId: notification.fire_report_id,
+            focusOnly: true,
+            openModal: true
+          });
+        }
+        return;
+      }
+      
+      // Check the actual fire report status
+      const reportStatus = (fireReport.status || '').toLowerCase();
+      const isFireOut = reportStatus === 'fire out';
+      
+      // If it's Fire Out, just mark as read and stay in notifications
+      if (isFireOut) {
+        console.log('🔥 Fire Out report - marking as read, staying in notifications');
+        return;
+      }
+      
+      // For new reports, "Under Control", or any other status, navigate to map and open the report modal
+      console.log(`🗺️ Navigating to map with report: ${notification.fire_report_id} (status: ${fireReport.status})`);
+      if (onNavigateToMap) {
+        onNavigateToMap({
+          fireReportId: notification.fire_report_id,
+          focusOnly: true,
+          openModal: true // Open the "Assigned Fire Report" modal
+        });
+      }
+    } catch (error) {
+      console.error('❌ Error fetching fire report:', error);
+      // On error, still try to navigate
+      if (onNavigateToMap && notification.fire_report_id) {
+        onNavigateToMap({
+          fireReportId: notification.fire_report_id,
+          focusOnly: true,
+          openModal: true
+        });
+      }
     }
   };
 
@@ -614,7 +722,21 @@ export default function RNotifications({ onUnreadCountChange, onNavigateToMap })
                   )}
                   
                   <Text className="text-gray-600 text-sm mb-2 leading-5">
-                    {notification.message}
+                    {(() => {
+                      // If notification has fire_report_id, fetch and format alarm level
+                      if (notification.fire_report_id) {
+                        const report = fireReportsMap.get(String(notification.fire_report_id));
+                        if (report) {
+                          const formattedAlarm = formatAlarm(report);
+                          // Replace alarm level in message with formatted version
+                          let message = notification.message || '';
+                          // Replace "Alarm Level: ..." pattern with formatted alarm
+                          message = message.replace(/Alarm Level:\s*[^\n]*/i, `Alarm Level: ${formattedAlarm}`);
+                          return message;
+                        }
+                      }
+                      return notification.message;
+                    })()}
                   </Text>
                   
                   {/* Assignment Status Badge */}

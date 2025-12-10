@@ -1,20 +1,83 @@
-import React, { useState } from 'react';
-import { FiEdit, FiSettings, FiLock, FiUnlock, FiSave, FiCamera, FiUser } from 'react-icons/fi';
+import React, { useState, useEffect } from 'react';
+import { FiEdit, FiSettings, FiLock, FiUnlock, FiSave, FiCamera, FiUser, FiLoader } from 'react-icons/fi';
+import { supabase } from '../../../../config/supabase';
+import { uploadProfilePicture, getProfilePictureUrl } from '../../../../services/profilePictureService';
 import ChangePassword from './ChangePassword.jsx';
 
 const Admin_Profile = () => {
   const [isEditing, setIsEditing] = useState(false);
-  const [isDisabled, setIsDisabled] = useState(false);
   const [showChangePassword, setShowChangePassword] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [uploadingImage, setUploadingImage] = useState(false);
+  const [notification, setNotification] = useState({ visible: false, type: 'success', message: '' });
+  const [selectedImageFile, setSelectedImageFile] = useState(null);
   const [profileData, setProfileData] = useState({
-    name: 'Admin User',
-    email: 'admin@cebucity.gov.ph',
-    position: 'System Administrator',
-    department: 'Cebu City DRRMO',
-    mobile: '9123456789',
-    profileImage: null,
-    lastLogin: 'Today at 2:45 PM'
+    id: '',
+    display_name: '',
+    email: '',
+    phone: '',
+    address: '',
+    profile_picture_url: '',
+    status: 'active',
+    is_online: false,
+    created_at: '',
+    updated_at: ''
   });
+
+  // Fetch admin user data from Supabase
+  const fetchAdminProfile = async () => {
+    try {
+      setLoading(true);
+      
+      // Get current user data from localStorage
+      const userData = JSON.parse(sessionStorage.getItem('userData') || localStorage.getItem('userData') || '{}');
+      if (!userData.id) {
+        console.error('❌ No admin ID found in userData');
+        setNotification({ visible: true, type: 'error', message: 'Error: Unable to identify current admin. Please log in again.' });
+        return;
+      }
+
+      console.log('🔍 Fetching admin profile for ID:', userData.id);
+      
+      const { data: adminData, error } = await supabase
+        .from('admin_users')
+        .select('*')
+        .eq('id', userData.id)
+        .single();
+      
+      if (error) {
+        console.error('❌ Error fetching admin profile:', error);
+        setNotification({ visible: true, type: 'error', message: `Failed to fetch admin profile: ${error.message}` });
+        return;
+      }
+      
+      if (adminData) {
+        // Get profile picture URL if not in database
+        let profilePicUrl = adminData.profile_picture_url;
+        if (!profilePicUrl) {
+          profilePicUrl = await getProfilePictureUrl(adminData.id, 'admin');
+        }
+        
+        setProfileData({
+          ...adminData,
+          profile_picture_url: profilePicUrl || ''
+        });
+        console.log('✅ Admin profile loaded:', adminData);
+      }
+      
+    } catch (error) {
+      console.error('❌ Error fetching admin profile:', error);
+      setNotification({ visible: true, type: 'error', message: `Failed to fetch admin profile: ${error.message}` });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Load profile data on component mount
+  useEffect(() => {
+    fetchAdminProfile();
+  }, []);
 
   const handleInputChange = (e) => {
     const { name, value } = e.target;
@@ -24,6 +87,21 @@ const Admin_Profile = () => {
   const handleImageUpload = (e) => {
     const file = e.target.files[0];
     if (file) {
+      // Validate file type
+      if (!file.type.startsWith('image/')) {
+        setNotification({ visible: true, type: 'error', message: 'Please select an image file' });
+        return;
+      }
+      
+      // Validate file size (max 5MB)
+      if (file.size > 5 * 1024 * 1024) {
+        setNotification({ visible: true, type: 'error', message: 'Image size must be less than 5MB' });
+        return;
+      }
+      
+      setSelectedImageFile(file);
+      
+      // Preview the image
       const reader = new FileReader();
       reader.onloadend = () => {
         setProfileData(prev => ({ ...prev, profileImage: reader.result }));
@@ -32,13 +110,104 @@ const Admin_Profile = () => {
     }
   };
 
-  const handleSave = () => {
-    setIsEditing(false);
-    // Add your save logic here (API call, etc.)
+  const handleSave = async () => {
+    try {
+      setSaving(true);
+      
+      // Upload profile picture if a new one was selected
+      let profilePictureUrl = profileData.profile_picture_url;
+      if (selectedImageFile) {
+        setUploadingImage(true);
+        console.log('📤 Uploading profile picture...');
+        
+        const uploadResult = await uploadProfilePicture(selectedImageFile, profileData.id, 'admin');
+        
+        if (uploadResult.success) {
+          profilePictureUrl = uploadResult.url;
+          console.log('✅ Profile picture uploaded:', profilePictureUrl);
+        } else {
+          console.error('❌ Failed to upload profile picture:', uploadResult.error);
+          setNotification({ visible: true, type: 'error', message: `Failed to upload profile picture: ${uploadResult.error}` });
+          setUploadingImage(false);
+          setSaving(false);
+          return;
+        }
+        setUploadingImage(false);
+      }
+      
+      const { error } = await supabase
+        .from('admin_users')
+        .update({
+          display_name: profileData.display_name,
+          email: profileData.email,
+          phone: profileData.phone,
+          address: profileData.address,
+          profile_picture_url: profilePictureUrl,
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', profileData.id);
+      
+      if (error) {
+        console.error('❌ Error updating admin profile:', error);
+        setNotification({ visible: true, type: 'error', message: `Error updating profile: ${error.message}` });
+        return;
+      }
+      
+      // Update local state with new profile picture URL
+      setProfileData(prev => ({
+        ...prev,
+        profile_picture_url: profilePictureUrl,
+        profileImage: null
+      }));
+      setSelectedImageFile(null);
+      
+      console.log('✅ Admin profile updated successfully');
+      setNotification({ visible: true, type: 'success', message: 'Profile updated successfully' });
+      setIsEditing(false);
+      
+    } catch (error) {
+      console.error('❌ Error updating admin profile:', error);
+      setNotification({ visible: true, type: 'error', message: `Error updating profile: ${error.message}` });
+    } finally {
+      setSaving(false);
+      setUploadingImage(false);
+    }
   };
+
+  if (loading) {
+    return (
+      <div className="p-6 bg-gray-100 min-h-screen flex items-center justify-center">
+        <div className="bg-white rounded-xl shadow-md p-8 flex items-center space-x-4">
+          <FiLoader className="w-8 h-8 animate-spin text-red-600" />
+          <span className="text-gray-600">Loading admin profile...</span>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="p-6 bg-gray-100 min-h-screen">
+      {/* Toast Notification */}
+      {notification.visible && (
+        <div className={`fixed top-4 right-4 z-50 transition transform ${notification.type === 'success' ? 'bg-green-600' : 'bg-red-600'} text-white shadow-lg rounded-lg max-w-sm w-full`}
+             onAnimationEnd={() => {}}>
+          <div className="px-4 py-3 flex items-start">
+            <div className="flex-1">
+              <p className="font-medium">
+                {notification.type === 'success' ? 'Success' : 'Error'}
+              </p>
+              <p className="text-sm opacity-95">{notification.message}</p>
+            </div>
+            <button
+              className="ml-3 text-white/90 hover:text-white"
+              onClick={() => setNotification(prev => ({ ...prev, visible: false }))}
+              aria-label="Close notification"
+            >
+              ×
+            </button>
+          </div>
+        </div>
+      )}
       <div className="bg-white rounded-xl shadow-md overflow-hidden">
         {/* Profile Header */}
         <div className="bg-red-600 p-6 text-white">
@@ -56,8 +225,15 @@ const Admin_Profile = () => {
             <div className="w-full md:w-1/3 flex flex-col items-center">
               <div className="relative mb-4">
                 <div className="w-40 h-40 rounded-full bg-gray-200 overflow-hidden border-4 border-white shadow-lg">
-                  {profileData.profileImage ? (
-                    <img src={profileData.profileImage} alt="Profile" className="w-full h-full object-cover" />
+                  {uploadingImage ? (
+                    <div className="w-full h-full flex flex-col items-center justify-center text-gray-400">
+                      <FiLoader className="w-8 h-8 animate-spin text-red-600 mb-2" />
+                      <span className="text-xs">Uploading...</span>
+                    </div>
+                  ) : profileData.profileImage ? (
+                    <img src={profileData.profileImage} alt="Profile Preview" className="w-full h-full object-cover" />
+                  ) : profileData.profile_picture_url ? (
+                    <img src={profileData.profile_picture_url} alt="Profile" className="w-full h-full object-cover" />
                   ) : (
                     <div className="w-full h-full flex items-center justify-center text-gray-400">
                       <FiUser className="w-20 h-20" />
@@ -65,21 +241,29 @@ const Admin_Profile = () => {
                   )}
                 </div>
                 {isEditing && (
-                  <label className="absolute bottom-2 right-2 bg-white p-2 rounded-full shadow-md cursor-pointer hover:bg-gray-100">
-                    <FiCamera className="text-gray-700" />
+                  <label className="absolute bottom-2 right-2 bg-red-600 p-2 rounded-full shadow-md cursor-pointer hover:bg-red-700 transition-colors">
+                    <FiCamera className="text-white" />
                     <input 
                       type="file" 
                       className="hidden" 
                       accept="image/*" 
                       onChange={handleImageUpload}
+                      disabled={uploadingImage}
                     />
                   </label>
                 )}
               </div>
               <div className="text-center">
-                <h2 className="text-xl font-bold text-gray-800">{profileData.name}</h2>
-                <p className="text-gray-600">{profileData.position}</p>
-                <p className="text-sm text-gray-500 mt-2">Last login: {profileData.lastLogin}</p>
+                <h2 className="text-xl font-bold text-gray-800">{profileData.display_name || profileData.email?.split('@')[0] || 'Admin User'}</h2>
+                <p className="text-gray-600">Administrator</p>
+                <p className="text-sm text-gray-500 mt-2">
+                  Status: <span className={`font-medium ${profileData.status === 'active' ? 'text-green-600' : 'text-red-600'}`}>
+                    {profileData.status || 'Unknown'}
+                  </span>
+                </p>
+                <p className="text-sm text-gray-500">
+                  Last updated: {profileData.updated_at ? new Date(profileData.updated_at).toLocaleDateString() : 'Unknown'}
+                </p>
               </div>
             </div>
             {/* Profile Information Section */}
@@ -99,26 +283,37 @@ const Admin_Profile = () => {
                 ) : (
                   <button 
                     onClick={handleSave}
-                    className="px-3 py-1 bg-green-100 text-green-700 rounded-lg flex items-center hover:bg-green-200"
+                    disabled={saving || uploadingImage}
+                    className="px-3 py-1 bg-green-100 text-green-700 rounded-lg flex items-center hover:bg-green-200 disabled:opacity-50"
                   >
-                    <FiSave className="mr-2" />
-                    Save Changes
+                    {saving || uploadingImage ? (
+                      <>
+                        <FiLoader className="mr-2 animate-spin" />
+                        {uploadingImage ? 'Uploading...' : 'Saving...'}
+                      </>
+                    ) : (
+                      <>
+                        <FiSave className="mr-2" />
+                        Save Changes
+                      </>
+                    )}
                   </button>
                 )}
               </div>
               <div className="space-y-4">
                 <div>
-                  <label className="block text-sm font-medium text-gray-500 mb-1">Full Name</label>
+                  <label className="block text-sm font-medium text-gray-500 mb-1">Display Name</label>
                   {isEditing ? (
                     <input
                       type="text"
-                      name="name"
-                      value={profileData.name}
+                      name="display_name"
+                      value={profileData.display_name || ''}
                       onChange={handleInputChange}
                       className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:border-red-500"
+                      placeholder="Enter display name"
                     />
                   ) : (
-                    <p className="text-gray-800">{profileData.name}</p>
+                    <p className="text-gray-800">{profileData.display_name || 'Not specified'}</p>
                   )}
                 </div>
                 <div>
@@ -127,78 +322,45 @@ const Admin_Profile = () => {
                     <input
                       type="email"
                       name="email"
-                      value={profileData.email}
+                      value={profileData.email || ''}
                       onChange={handleInputChange}
                       className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:border-red-500"
+                      placeholder="Enter email"
                     />
                   ) : (
-                    <p className="text-gray-800">{profileData.email}</p>
+                    <p className="text-gray-800">{profileData.email || 'Not specified'}</p>
                   )}
-                </div>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-sm font-medium text-gray-500 mb-1">Position</label>
-                    {isEditing ? (
-                      <input
-                        type="text"
-                        name="position"
-                        value={profileData.position}
-                        onChange={handleInputChange}
-                        className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:border-red-500"
-                      />
-                    ) : (
-                      <p className="text-gray-800">{profileData.position}</p>
-                    )}
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-gray-500 mb-1">Department</label>
-                    {isEditing ? (
-                      <select
-                        name="department"
-                        value={profileData.department}
-                        onChange={handleInputChange}
-                        className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:border-red-500"
-                      >
-                        <option value="Cebu City DRRMO">Cebu City DRRMO</option>
-                        <option value="CCPO">Cebu City Police Office</option>
-                        <option value="BFP Cebu">Bureau of Fire Protection</option>
-                        <option value="City Health">City Health Department</option>
-                      </select>
-                    ) : (
-                      <p className="text-gray-800">{profileData.department}</p>
-                    )}
-                  </div>
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-500 mb-1">Mobile Number</label>
+                  <label className="block text-sm font-medium text-gray-500 mb-1">Contact Number</label>
                   {isEditing ? (
-                    <div className="flex">
-                      <span className="inline-flex items-center px-3 rounded-l-lg border border-r-0 border-gray-300 bg-gray-50 text-gray-500">+63</span>
-                      <input
-                        type="tel"
-                        name="mobile"
-                        value={profileData.mobile}
-                        onChange={handleInputChange}
-                        className="w-full px-4 py-2 rounded-r-lg border border-gray-300 focus:ring-2 focus:ring-red-500 focus:border-red-500"
-                        pattern="[0-9]{10}"
-                      />
-                    </div>
+                    <input
+                      type="tel"
+                      name="phone"
+                      value={profileData.phone || ''}
+                      onChange={handleInputChange}
+                      className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:border-red-500"
+                      placeholder="Enter contact number"
+                    />
                   ) : (
-                    <p className="text-gray-800">+63{profileData.mobile}</p>
+                    <p className="text-gray-800">{profileData.phone || 'Not specified'}</p>
                   )}
                 </div>
-                {isDisabled && (
-                  <div className="bg-yellow-50 border-l-4 border-yellow-400 p-4 rounded-r-lg">
-                    <div className="flex">
-                      <div className="ml-3">
-                        <h3 className="text-sm font-medium text-yellow-800">Account Disabled</h3>
-                        <p className="text-sm text-yellow-700 mt-1">
-                          This account is currently disabled and cannot access the system.
-                        </p>
-                      </div>
-                    </div>
-                  </div>
-                )}
+                <div>
+                  <label className="block text-sm font-medium text-gray-500 mb-1">Address</label>
+                  {isEditing ? (
+                    <input
+                      type="text"
+                      name="address"
+                      value={profileData.address || ''}
+                      onChange={handleInputChange}
+                      className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:border-red-500"
+                      placeholder="Enter address"
+                    />
+                  ) : (
+                    <p className="text-gray-800">{profileData.address || 'Not specified'}</p>
+                  )}
+                </div>
               </div>
             </div>
           </div>
@@ -215,13 +377,6 @@ const Admin_Profile = () => {
                 className="px-3 py-1 bg-blue-100 text-blue-700 rounded-lg text-sm hover:bg-blue-200"
               >
                 Change Password
-              </button>
-            </div>
-            <div className="border border-gray-200 rounded-lg p-4">
-              <h4 className="font-medium text-gray-800 mb-2">Two-Factor Authentication</h4>
-              <p className="text-gray-600 mb-3">Currently not enabled</p>
-              <button className="px-3 py-1 bg-blue-100 text-blue-700 rounded-lg text-sm hover:bg-blue-200">
-                Enable 2FA
               </button>
             </div>
           </div>

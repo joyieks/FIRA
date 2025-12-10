@@ -1,9 +1,11 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { View, TouchableOpacity, Text, Image, Animated, Dimensions, Alert, Pressable, ScrollView } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { useAuth } from '../../config/AuthContext';
+import { supabase } from '../../config/supabase';
+import { getProfilePictureUrl } from '../../services/profilePictureService';
 
 const { width, height } = Dimensions.get('window');
 
@@ -21,11 +23,85 @@ const MENU_ITEMS = [
 const ASidebarMenu = ({ activeTab, setActiveTab, isOpen, onToggle }) => {
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const { logout } = useAuth();
+  const { logout, userData } = useAuth();
   const slideAnim = React.useRef(new Animated.Value(isOpen ? 0 : -width * 0.8)).current;
   const overlayOpacity = React.useRef(new Animated.Value(isOpen ? 0.5 : 0)).current;
   const [overlayInteractive, setOverlayInteractive] = React.useState(false);
   const [showLogoutModal, setShowLogoutModal] = useState(false);
+  const [profilePictureUrl, setProfilePictureUrl] = useState(null);
+  const [adminName, setAdminName] = useState('');
+
+  // Fetch profile picture when sidebar opens or userData changes
+  useEffect(() => {
+    console.log('🔄 [Admin Sidebar] useEffect triggered - isOpen:', isOpen, 'userData:', userData);
+    if (isOpen && (userData?.id || userData?.uid || userData?.email)) {
+      console.log('✅ [Admin Sidebar] Calling fetchProfilePicture');
+      fetchProfilePicture();
+    } else {
+      console.log('⚠️ [Admin Sidebar] Conditions not met for fetch');
+    }
+  }, [isOpen, userData]);
+
+  const fetchProfilePicture = async () => {
+    try {
+      const userId = userData?.id || userData?.uid;
+      const userEmail = userData?.email;
+      console.log('🔍 [Admin Sidebar] Fetching profile for userId:', userId, 'email:', userEmail);
+      
+      if (!userId && !userEmail) {
+        console.log('❌ [Admin Sidebar] No userId or email found');
+        return;
+      }
+
+      // Fetch admin data from Supabase - try by ID first, then by email
+      let query = supabase
+        .from('admin_users')
+        .select('id, profile_picture_url, display_name, email');
+      
+      if (userId) {
+        query = query.eq('id', userId);
+      } else if (userEmail) {
+        query = query.eq('email', userEmail);
+      }
+
+      const { data: adminData, error } = await query.maybeSingle();
+
+      if (error) {
+        console.error('❌ [Admin Sidebar] Error fetching profile picture:', error);
+        return;
+      }
+
+      console.log('📦 [Admin Sidebar] Admin data received:', adminData);
+
+      if (adminData) {
+        console.log('📦 [Admin Sidebar] Raw admin data:', JSON.stringify(adminData, null, 2));
+        
+        // Get profile picture URL
+        let picUrl = adminData.profile_picture_url;
+        console.log('🖼️ [Admin Sidebar] Profile picture from DB:', picUrl);
+        
+        if (!picUrl) {
+          const adminId = adminData.id || userId;
+          if (adminId) {
+            picUrl = await getProfilePictureUrl(adminId, 'admin');
+            console.log('🖼️ [Admin Sidebar] Profile picture from service:', picUrl);
+          }
+        }
+        
+        setProfilePictureUrl(picUrl);
+        console.log('🎨 [Admin Sidebar] Set profilePictureUrl to:', picUrl);
+        
+        const name = adminData.display_name || adminData.email?.split('@')[0] || 'Admin User';
+        console.log('👤 [Admin Sidebar] Display name calculated:', name);
+        setAdminName(name);
+        console.log('✅ [Admin Sidebar] State updated - name:', name, 'pic:', picUrl);
+      } else {
+        console.log('⚠️ [Admin Sidebar] No admin data found');
+      }
+    } catch (error) {
+      console.error('❌ [Admin Sidebar] Error in fetchProfilePicture:', error);
+    }
+  };
 
   React.useEffect(() => {
     setOverlayInteractive(false); // disable taps during transition
@@ -113,11 +189,29 @@ const ASidebarMenu = ({ activeTab, setActiveTab, isOpen, onToggle }) => {
         {/* Profile Section */}
         <View className="bg-[#ff512f] pt-12 pb-6 px-6">
           <View className="items-center">
-            <View className="w-20 h-20 rounded-full bg-white items-center justify-center mb-3">
-              <MaterialIcons name="admin-panel-settings" size={40} color="#ff512f" />
-            </View>
-            <Text className="text-white text-lg font-bold mb-1">Admin User</Text>
-            <Text className="text-white/80 text-sm">admin@fira.com</Text>
+            {profilePictureUrl ? (
+              <Image 
+                source={{ uri: profilePictureUrl }} 
+                style={{ 
+                  width: 80, 
+                  height: 80, 
+                  borderRadius: 40,
+                  borderWidth: 3,
+                  borderColor: '#ffffff',
+                  marginBottom: 12 
+                }}
+              />
+            ) : (
+              <View className="w-20 h-20 rounded-full bg-white items-center justify-center mb-3">
+                <MaterialIcons name="admin-panel-settings" size={40} color="#ff512f" />
+              </View>
+            )}
+            <Text className="text-white text-lg font-bold mb-1" numberOfLines={1}>
+              {adminName || userData?.displayName || userData?.email?.split('@')[0] || 'Admin User'}
+            </Text>
+            <Text className="text-white/80 text-sm" numberOfLines={1}>
+              {userData?.email || 'admin@fira.com'}
+            </Text>
           </View>
         </View>
 

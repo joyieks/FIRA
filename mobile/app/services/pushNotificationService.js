@@ -97,9 +97,33 @@ export async function scheduleLocalNotification(title, body, data = {}) {
     
     // Check permissions before scheduling
     const { status } = await Notifications.getPermissionsAsync();
+    console.log('📱 Current notification permission status:', status);
+    
     if (status !== 'granted') {
-      console.warn('⚠️ Notification permission not granted, cannot schedule notification');
-      return false;
+      console.warn('⚠️ Notification permission not granted, requesting permission...');
+      const { status: newStatus } = await Notifications.requestPermissionsAsync();
+      console.log('📱 New permission status after request:', newStatus);
+      
+      if (newStatus !== 'granted') {
+        console.error('❌ Notification permission denied by user');
+        return false;
+      }
+    }
+    
+    // Configure Android channel if needed
+    if (Platform.OS === 'android') {
+      try {
+        await Notifications.setNotificationChannelAsync('default', {
+          name: 'default',
+          importance: Notifications.AndroidImportance.MAX,
+          vibrationPattern: [0, 250, 250, 250],
+          lightColor: '#FF231F7C',
+          sound: 'default',
+        });
+        console.log('✅ Android notification channel configured');
+      } catch (channelError) {
+        console.warn('⚠️ Error configuring Android channel (may already exist):', channelError);
+      }
     }
     
     const notificationId = await Notifications.scheduleNotificationAsync({
@@ -116,11 +140,19 @@ export async function scheduleLocalNotification(title, body, data = {}) {
     
     console.log('✅ Local notification scheduled successfully:', title);
     console.log('✅ Notification ID:', notificationId);
+    
+    // Verify the notification was actually scheduled
+    if (!notificationId) {
+      console.error('❌ Notification ID is null - notification may not have been scheduled');
+      return false;
+    }
+    
     return true;
   } catch (error) {
     console.error('❌ Error scheduling notification:', error);
     console.error('❌ Error details:', JSON.stringify(error, null, 2));
     console.error('❌ Error message:', error.message);
+    console.error('❌ Error stack:', error.stack);
     return false;
   }
 }

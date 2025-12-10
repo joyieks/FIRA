@@ -3,25 +3,23 @@ import { View, Text, TextInput, TouchableOpacity, Image, Modal, ScrollView, Keyb
 import { MaterialIcons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
 import { useRouter } from 'expo-router';
-import { useAuth } from '../../../config/AuthContext';
-import { supabase } from '../../../config/supabase';
-import { uploadProfilePicture, getProfilePictureUrl } from '../../../services/profilePictureService';
+import { useAuth } from '../../config/AuthContext';
+import { supabase } from '../../config/supabase';
+import { uploadProfilePicture, getProfilePictureUrl } from '../../services/profilePictureService';
 
-const CEdit_Profile = () => {
+const SEdit_Profile = () => {
   const router = useRouter();
   const { userData } = useAuth();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [profile, setProfile] = useState({
-    firstName: '',
-    lastName: '',
+    stationName: '',
     email: '',
     phone: '',
     address: '',
-    barangay: '',
-    birthdate: '',
-    gender: '',
-    contactNumber: '',
+    position: '',
+    num_firetrucks: '',
+    firetruck_size: '',
     photo: null,
     photoUrl: null,
   });
@@ -40,11 +38,11 @@ const CEdit_Profile = () => {
 
       try {
         const userId = userData.id || userData.uid;
-        console.log('Fetching citizen profile for edit:', userId);
+        console.log('Fetching station profile for edit:', userId);
 
-        // Fetch citizen data
-        let { data: citizenData, error } = await supabase
-          .from('citizen_users')
+        // Fetch station data
+        let { data: stationData, error } = await supabase
+          .from('station_users')
           .select('*')
           .eq('id', userId)
           .maybeSingle();
@@ -56,33 +54,29 @@ const CEdit_Profile = () => {
           return;
         }
 
-        if (citizenData) {
+        if (stationData) {
           // Get profile picture URL from Supabase Storage
-          const profilePicUrl = await getProfilePictureUrl(userId, 'citizen');
+          const profilePicUrl = await getProfilePictureUrl(userId, 'station');
 
           setProfile({
-            firstName: citizenData.first_name || '',
-            lastName: citizenData.last_name || '',
-            email: citizenData.email || '',
-            phone: citizenData.phone || citizenData.phone_number || '',
-            address: citizenData.address || '', // Keep in UI but won't save if column doesn't exist
-            barangay: citizenData.barangay || '', // Keep in UI but won't save if column doesn't exist
-            birthdate: citizenData.birthdate || '', // Keep in UI but won't save if column doesn't exist
-            gender: citizenData.gender || '', // Keep in UI but won't save if column doesn't exist
-            contactNumber: citizenData.phone_number || citizenData.phone || '',
+            stationName: stationData.station_name || '',
+            email: stationData.email || '',
+            phone: stationData.phone || '',
+            address: stationData.address || '',
+            position: stationData.position || '',
+            num_firetrucks: stationData.num_firetrucks?.toString() || '',
+            firetruck_size: stationData.firetruck_size || '',
             photo: null,
             photoUrl: profilePicUrl,
           });
           setTempProfile({
-            firstName: citizenData.first_name || '',
-            lastName: citizenData.last_name || '',
-            email: citizenData.email || '',
-            phone: citizenData.phone || citizenData.phone_number || '',
-            address: citizenData.address || '', // Keep in UI but won't save if column doesn't exist
-            barangay: citizenData.barangay || '', // Keep in UI but won't save if column doesn't exist
-            birthdate: citizenData.birthdate || '', // Keep in UI but won't save if column doesn't exist
-            gender: citizenData.gender || '', // Keep in UI but won't save if column doesn't exist
-            contactNumber: citizenData.phone_number || citizenData.phone || '',
+            stationName: stationData.station_name || '',
+            email: stationData.email || '',
+            phone: stationData.phone || '',
+            address: stationData.address || '',
+            position: stationData.position || '',
+            num_firetrucks: stationData.num_firetrucks?.toString() || '',
+            firetruck_size: stationData.firetruck_size || '',
             photo: null,
             photoUrl: profilePicUrl,
           });
@@ -136,7 +130,7 @@ const CEdit_Profile = () => {
       let profilePictureUrl = tempProfile.photoUrl;
       if (tempProfile.photo?.uri) {
         console.log('Uploading new profile picture...');
-        const uploadResult = await uploadProfilePicture(tempProfile.photo.uri, userId, 'citizen');
+        const uploadResult = await uploadProfilePicture(tempProfile.photo.uri, userId, 'station');
         if (uploadResult.success) {
           profilePictureUrl = uploadResult.url;
           console.log('Profile picture uploaded:', profilePictureUrl);
@@ -146,28 +140,21 @@ const CEdit_Profile = () => {
         }
       }
 
-      // Update citizen data in Supabase
-      // Only include fields that exist in the database schema
+      // Update station data in Supabase
       const updateData = {
-        first_name: tempProfile.firstName,
-        last_name: tempProfile.lastName,
+        station_name: tempProfile.stationName,
         email: tempProfile.email,
-        phone: tempProfile.phone || tempProfile.contactNumber,
-        display_name: `${tempProfile.firstName} ${tempProfile.lastName}`.trim(),
+        phone: tempProfile.phone,
+        address: tempProfile.address,
+        position: tempProfile.position,
+        num_firetrucks: tempProfile.num_firetrucks ? parseInt(tempProfile.num_firetrucks) : null,
+        firetruck_size: tempProfile.firetruck_size,
         profile_picture_url: profilePictureUrl,
         updated_at: new Date().toISOString(),
       };
 
-      // Note: phone_number, address, barangay, birthdate, and gender columns don't exist in citizen_users table
-      // If you need these fields, add them to the database first:
-      // ALTER TABLE citizen_users ADD COLUMN IF NOT EXISTS phone_number TEXT;
-      // ALTER TABLE citizen_users ADD COLUMN IF NOT EXISTS address TEXT;
-      // ALTER TABLE citizen_users ADD COLUMN IF NOT EXISTS barangay TEXT;
-      // ALTER TABLE citizen_users ADD COLUMN IF NOT EXISTS birthdate TEXT;
-      // ALTER TABLE citizen_users ADD COLUMN IF NOT EXISTS gender TEXT;
-
       const { error: updateError } = await supabase
-        .from('citizen_users')
+        .from('station_users')
         .update(updateData)
         .eq('id', userId);
 
@@ -217,7 +204,7 @@ const CEdit_Profile = () => {
               <Image source={{ uri: tempProfile.photoUrl }} className="w-28 h-28 rounded-full border-4 border-fire shadow-md" />
             ) : (
               <View className="w-28 h-28 rounded-full border-4 border-fire shadow-md bg-gray-200 items-center justify-center">
-                <MaterialIcons name="person" size={48} color="#9ca3af" />
+                <MaterialIcons name="business" size={48} color="#9ca3af" />
               </View>
             )}
             <TouchableOpacity className="absolute bottom-1 right-1 bg-fire p-2 rounded-full" onPress={handleChangePhoto}>
@@ -227,15 +214,13 @@ const CEdit_Profile = () => {
         </View>
         {/* Card Form */}
         <View className="bg-white mx-4 mt-10 mb-8 rounded-2xl p-6 shadow space-y-6">
-          <Field label="First Name" value={tempProfile.firstName} onChangeText={v => handleChange('firstName', v)} />
-          <Field label="Last Name" value={tempProfile.lastName} onChangeText={v => handleChange('lastName', v)} />
+          <Field label="Station Name" value={tempProfile.stationName} onChangeText={v => handleChange('stationName', v)} />
+          <Field label="Position" value={tempProfile.position} onChangeText={v => handleChange('position', v)} />
           <Field label="Email" value={tempProfile.email} onChangeText={v => handleChange('email', v)} keyboardType="email-address" />
           <Field label="Phone" value={tempProfile.phone} onChangeText={v => handleChange('phone', v)} keyboardType="phone-pad" />
           <Field label="Address" value={tempProfile.address} onChangeText={v => handleChange('address', v)} multiline />
-          <Field label="Barangay" value={tempProfile.barangay} onChangeText={v => handleChange('barangay', v)} />
-          <Field label="Birthdate" value={tempProfile.birthdate} onChangeText={v => handleChange('birthdate', v)} />
-          <Field label="Gender" value={tempProfile.gender} onChangeText={v => handleChange('gender', v)} />
-          <Field label="Contact Number" value={tempProfile.contactNumber} onChangeText={v => handleChange('contactNumber', v)} keyboardType="phone-pad" />
+          <Field label="Number of Fire Trucks" value={tempProfile.num_firetrucks} onChangeText={v => handleChange('num_firetrucks', v)} keyboardType="numeric" />
+          <Field label="Fire Truck Size" value={tempProfile.firetruck_size} onChangeText={v => handleChange('firetruck_size', v)} />
         </View>
       </ScrollView>
       {/* Sticky Save Button */}
@@ -274,7 +259,7 @@ const CEdit_Profile = () => {
           <View className="bg-white rounded-2xl p-8 w-80 items-center">
             <MaterialIcons name="check-circle" size={48} color="#ff512f" />
             <Text className="text-lg font-bold mt-4 mb-2">Profile updated successfully!</Text>
-            <TouchableOpacity className="bg-fire px-8 py-2 rounded-xl mt-4" onPress={() => setShowSuccess(false)}>
+            <TouchableOpacity className="bg-fire px-8 py-2 rounded-xl mt-4" onPress={() => { setShowSuccess(false); router.back(); }}>
               <Text className="text-white font-semibold">OK</Text>
             </TouchableOpacity>
           </View>
@@ -299,4 +284,5 @@ const Field = ({ label, value, onChangeText, keyboardType, multiline }) => (
   </View>
 );
 
-export default CEdit_Profile;
+export default SEdit_Profile;
+

@@ -1,25 +1,80 @@
-import React, { useState } from 'react';
-import { View, Text, Image, ScrollView, TouchableOpacity, Alert } from 'react-native';
+import React, { useState, useEffect } from 'react';
+import { View, Text, Image, ScrollView, TouchableOpacity, Alert, ActivityIndicator } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
-import { useRouter } from 'expo-router';
+import { useRouter, useFocusEffect } from 'expo-router';
 import { useAuth } from '../../../config/AuthContext';
+import { supabase } from '../../../config/supabase';
+import { getProfilePictureUrl } from '../../../services/profilePictureService';
 
 const CProfile = () => {
   const router = useRouter();
   const { logout, userData } = useAuth();
   const [showDeactivate, setShowDeactivate] = useState(false);
   const [showLogoutModal, setShowLogoutModal] = useState(false);
-  
-  // Use actual user data from AuthContext if available, otherwise use default
-  const profile = {
-    name: userData?.firstName && userData?.lastName ? `${userData.firstName} ${userData.lastName}` : 'John Doe',
-    email: userData?.email || 'john.doe@example.com',
-    phone: userData?.phoneNumber || '+1 (555) 123-4567',
-    address: '123 Safety St, Firetown, FT 12345',
-    barangay: 'Guadalupe',
-    birthdate: '1995-08-15',
-    gender: 'Male',
-    contactNumber: '09123456789',
+  const [profile, setProfile] = useState(null);
+  const [profilePictureUrl, setProfilePictureUrl] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  // Fetch citizen profile data from Supabase whenever screen comes into focus
+  useFocusEffect(
+    React.useCallback(() => {
+      fetchProfile();
+    }, [userData?.id, userData?.uid, userData?.email])
+  );
+
+  const fetchProfile = async () => {
+    if (!userData?.id && !userData?.uid) {
+      console.log('No user ID available');
+      setLoading(false);
+      return;
+    }
+
+    try {
+      const userId = userData.id || userData.uid;
+      console.log('Fetching citizen profile:', userId);
+
+      let { data: citizenData, error } = await supabase
+        .from('citizen_users')
+        .select('*')
+        .eq('id', userId)
+        .maybeSingle();
+
+      if (error) {
+        console.error('Error fetching profile:', error);
+        Alert.alert('Error', 'Failed to load profile data');
+        setLoading(false);
+        return;
+      }
+
+      if (citizenData) {
+        // Get profile picture URL
+        let picUrl = citizenData.profile_picture_url;
+        if (!picUrl) {
+          picUrl = await getProfilePictureUrl(userId, 'citizen');
+        }
+        setProfilePictureUrl(picUrl);
+
+        setProfile({
+          firstName: citizenData.first_name || 'N/A',
+          lastName: citizenData.last_name || 'N/A',
+          email: citizenData.email || 'N/A',
+          phone: citizenData.phone || citizenData.phone_number || 'N/A',
+          address: citizenData.address || 'N/A', // May be N/A if column doesn't exist
+          barangay: citizenData.barangay || 'N/A', // May be N/A if column doesn't exist
+          birthdate: citizenData.birthdate || 'N/A', // May be N/A if column doesn't exist
+          gender: citizenData.gender || 'N/A', // May be N/A if column doesn't exist
+          contactNumber: citizenData.phone_number || citizenData.phone || 'N/A',
+        });
+      } else {
+        console.log('No citizen data found');
+        Alert.alert('Error', 'Profile not found');
+      }
+    } catch (error) {
+      console.error('Error in fetchProfile:', error);
+      Alert.alert('Error', 'An error occurred while loading profile');
+    } finally {
+      setLoading(false);
+    }
   };
 
   // Calculate age from birthdate
@@ -51,6 +106,24 @@ const CProfile = () => {
     }
   };
 
+  if (loading) {
+    return (
+      <View className="flex-1 bg-gray-100 justify-center items-center">
+        <ActivityIndicator size="large" color="#ff512f" />
+        <Text className="text-gray-600 mt-4">Loading profile...</Text>
+      </View>
+    );
+  }
+
+  if (!profile) {
+    return (
+      <View className="flex-1 bg-gray-100 justify-center items-center">
+        <MaterialIcons name="error-outline" size={64} color="#ef4444" />
+        <Text className="text-gray-600 mt-4">Failed to load profile</Text>
+      </View>
+    );
+  }
+
   return (
     <ScrollView className="flex-1 bg-gray-100 pb-6 pt-12">
       {/* Profile Header */}
@@ -61,12 +134,20 @@ const CProfile = () => {
             <MaterialIcons name="edit" size={24} color="#ff512f" />
           </TouchableOpacity>
         </View>
-        <View className="w-24 h-24 rounded-full mb-4 items-center justify-center bg-fire mt-12">
-          <Text className="text-4xl font-bold text-white">
-            {profile.name.split(' ').map(n => n[0]).join('')}
-          </Text>
-        </View>
-        <Text className="text-2xl font-bold text-gray-800 mb-1">{profile.name}</Text>
+        {profilePictureUrl ? (
+          <Image 
+            source={{ uri: profilePictureUrl }} 
+            className="w-24 h-24 rounded-full mb-4 mt-12 border-4 border-fire"
+            style={{ width: 96, height: 96, borderRadius: 48 }}
+          />
+        ) : (
+          <View className="w-24 h-24 rounded-full mb-4 items-center justify-center bg-fire mt-12">
+            <Text className="text-4xl font-bold text-white">
+              {profile.firstName[0]}{profile.lastName[0]}
+            </Text>
+          </View>
+        )}
+        <Text className="text-2xl font-bold text-gray-800 mb-1">{profile.firstName} {profile.lastName}</Text>
       </View>
 
       {/* Contact Information Section */}
