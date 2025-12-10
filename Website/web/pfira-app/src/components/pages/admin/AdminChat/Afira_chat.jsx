@@ -17,6 +17,7 @@ const Afira_chat = () => {
   const messagesEndRef = useRef(null);
   const imageInputRef = useRef(null);
   const [isUploadingImage, setIsUploadingImage] = useState(false);
+  const pollingIntervalsRef = useRef(new Set());
   const [activeIncidentId, setActiveIncidentId] = useState(null);
   const [ongoingIncidents, setOngoingIncidents] = useState([]);
   const [currentAdminName, setCurrentAdminName] = useState('Admin');
@@ -261,9 +262,10 @@ const Afira_chat = () => {
     fetchIncidents();
   }, []);
 
-  // Realtime subscription for unread counters (messages to admin)
+  // Realtime subscription for unread counters (messages to admin) and AI analysis updates
   useEffect(() => {
     if (!currentAdminId) return;
+    
     const channel = supabase
       .channel(`unread:admin:${currentAdminId}`)
       .on('postgres_changes', {
@@ -272,29 +274,135 @@ const Afira_chat = () => {
         table: 'messages',
         filter: `receiver_id=eq.${currentAdminId}`
       }, (payload) => {
-        // increment unread badge for that station
-        const stationId = payload.new.sender_id;
-        const applyAndSort = (arr) => sortContacts(arr.map((s) => s.id === stationId ? { ...s, unreadCount: (s.unreadCount || 0) + 1, lastMessage: payload.new.text || s.lastMessage, lastMessageTime: payload.new.created_at } : s));
-        setStations((prev) => applyAndSort(prev));
-        setFilteredStations((prev) => applyAndSort(prev));
-        setUnreadStations((prev) => {
-          const exists = prev.find((s) => s.id === stationId);
-          const updatedStation = (stations.find((s) => s.id === stationId) || {}).id ? (stations.find((s) => s.id === stationId)) : null;
-          if (!updatedStation) return prev;
-          const withIncrement = { ...updatedStation, unreadCount: (updatedStation.unreadCount || 0) + 1 };
-          const others = prev.filter((s) => s.id !== stationId);
-          return [withIncrement, ...others];
+        const newMessage = payload.new;
+        const stationId = newMessage.sender_id;
+        
+        console.log('📨 New message received from station:', stationId, newMessage);
+        
+        // If we're currently viewing this station, add message to thread immediately
+        if (selectedStation && selectedStation.id === stationId) {
+          setMessages(prev => {
+            // Check if message already exists to avoid duplicates
+            const exists = prev.find(m => m.id === newMessage.id);
+            if (exists) return prev;
+            return [...prev, newMessage];
+          });
+          setTimeout(scrollToBottom, 100);
+          
+          // Mark as read since we're viewing it
+          supabase
+            .from('messages')
+            .update({ is_read: true })
+            .eq('id', newMessage.id)
+            .then(() => {
+              // Refresh unread counts after marking as read
+              setStations(prev => {
+                const updated = prev.map(s => 
+                  s.id === stationId 
+                    ? { ...s, unreadCount: Math.max(0, (s.unreadCount || 0) - 1), lastMessage: newMessage.text || s.lastMessage, lastMessageTime: newMessage.created_at }
+                    : s
+                );
+                return sortContacts(updated);
+              });
+            });
+          return;
+        }
+        
+        // Update station list with new message info
+        setStations((prev) => {
+          const updated = prev.map((s) => {
+            if (s.id === stationId) {
+              return {
+                ...s,
+                unreadCount: (s.unreadCount || 0) + 1,
+                lastMessage: newMessage.text || s.lastMessage || '',
+                lastMessageTime: newMessage.created_at || s.lastMessageTime
+              };
+            }
+            return s;
+          });
+          const sorted = sortContacts(updated);
+          
+          // Update unread stations list
+          const unreadList = sorted.filter(s => s.unreadCount > 0);
+          setUnreadStations(unreadList);
+          setFilteredUnreadStations(unreadList);
+          
+          return sorted;
         });
-        setFilteredUnreadStations((prev) => prev.length ? prev : stations.filter((s) => (s.unreadCount || 0) > 0));
+        
+        setFilteredStations((prev) => {
+          const updated = prev.map((s) => {
+            if (s.id === stationId) {
+              return {
+                ...s,
+                unreadCount: (s.unreadCount || 0) + 1,
+                lastMessage: newMessage.text || s.lastMessage || '',
+                lastMessageTime: newMessage.created_at || s.lastMessageTime
+              };
+            }
+            return s;
+          });
+          return sortContacts(updated);
+        });
       })
-      .subscribe();
+      .on('postgres_changes', {
+        event: 'UPDATE',
+        schema: 'public',
+        table: 'messages',
+        filter: `receiver_id=eq.${currentAdminId}`
+      }, (payload) => {
+        const updatedMsg = payload.new;
+        const stationId = updatedMsg.sender_id;
+        
+        console.log('🔄 Global: Message updated with AI analysis:', updatedMsg);
+        
+        // If we're currently viewing this station, update the message in the conversation
+        if (selectedStation && selectedStation.id === stationId) {
+          setMessages(prev => {
+            const updated = prev.map(msg => 
+              msg.id === updatedMsg.id ? { ...msg, ...updatedMsg } : msg
+            );
+            // If message doesn't exist yet, add it
+            const exists = updated.find(m => m.id === updatedMsg.id);
+            if (!exists && updatedMsg.ai_suggested_alarm) {
+              console.log('➕ Adding updated message with AI analysis to conversation');
+              return [...updated, updatedMsg];
+            }
+            if (exists && updatedMsg.ai_suggested_alarm) {
+              console.log('✅ Updated message in conversation with AI analysis');
+            }
+            return updated;
+          });
+        }
+        
+        // Update station list with new last message if AI analysis was added
+        if (updatedMsg.ai_suggested_alarm) {
+          setStations((prev) => {
+            const updated = prev.map((s) => {
+              if (s.id === stationId) {
+                return {
+                  ...s,
+                  lastMessage: updatedMsg.text || s.lastMessage || '',
+                  lastMessageTime: updatedMsg.created_at || s.lastMessageTime
+                };
+              }
+              return s;
+            });
+            return sortContacts(updated);
+          });
+        }
+      })
+      .subscribe((status) => {
+        console.log('📡 Admin unread subscription status:', status);
+      });
 
     return () => {
       channel.unsubscribe();
     };
-  }, [currentAdminId, stations]);
+  }, [currentAdminId, selectedStation]);
 
-  // Real-time subscription for new messages
+  // Real-time subscription for new messages and updates (including AI analysis)
   useEffect(() => {
     if (!selectedStation || !currentAdminId) return;
 
@@ -307,7 +415,12 @@ const Afira_chat = () => {
         filter: `or(and(sender_id.eq.${selectedStation.id},receiver_id.eq.${currentAdminId}),and(sender_id.eq.${currentAdminId},receiver_id.eq.${selectedStation.id}))`
       }, (payload) => {
         const newMsg = payload.new;
-        setMessages(prev => [...prev, newMsg]);
+        setMessages(prev => {
+          // Check if message already exists to avoid duplicates
+          const exists = prev.find(m => m.id === newMsg.id);
+          if (exists) return prev;
+          return [...prev, newMsg];
+        });
         setTimeout(scrollToBottom, 100);
 
         // Auto-analyze messages sent to admin for quick visibility
@@ -317,17 +430,86 @@ const Afira_chat = () => {
               const analysis = await analyzeMessageForFireAlarm(newMsg.text);
               if (analysis) {
                 await updateMessageWithAIAnalysis(newMsg.id, analysis, supabase);
+                
+                // Poll for AI analysis completion with multiple attempts
+                let attempts = 0;
+                const maxAttempts = 10;
+                const pollInterval = 1000; // Check every 1 second
+                
+                const pollForAIUpdate = setInterval(async () => {
+                  attempts++;
+                  const { data: updatedMessage } = await supabase
+                    .from('messages')
+                    .select('*')
+                    .eq('id', newMsg.id)
+                    .single();
+                  
+                  if (updatedMessage && updatedMessage.ai_suggested_alarm) {
+                    console.log('🔄 Polled and found message with AI analysis:', updatedMessage);
+                    setMessages(prev => {
+                      const updated = prev.map(msg => 
+                        msg.id === updatedMessage.id ? { ...msg, ...updatedMessage } : msg
+                      );
+                      return updated;
+                    });
+                    clearInterval(pollForAIUpdate);
+                    pollingIntervalsRef.current.delete(pollForAIUpdate);
+                  } else if (attempts >= maxAttempts) {
+                    console.log('⏱️ Stopped polling for AI analysis after', maxAttempts, 'attempts');
+                    clearInterval(pollForAIUpdate);
+                    pollingIntervalsRef.current.delete(pollForAIUpdate);
+                  }
+                }, pollInterval);
+                
+                pollingIntervalsRef.current.add(pollForAIUpdate);
               }
             } catch (_) {}
           })();
         }
       })
-      .subscribe();
+      .on('postgres_changes', {
+        event: 'UPDATE',
+        schema: 'public',
+        table: 'messages',
+        filter: `or(and(sender_id.eq.${selectedStation.id},receiver_id.eq.${currentAdminId}),and(sender_id.eq.${currentAdminId},receiver_id.eq.${selectedStation.id}))`
+      }, (payload) => {
+        const updatedMsg = payload.new;
+        console.log('🔄 Message updated (AI analysis) in conversation:', updatedMsg);
+        
+        // Update the message in the messages array with AI analysis
+        setMessages(prev => {
+          const updated = prev.map(msg => 
+            msg.id === updatedMsg.id ? { ...msg, ...updatedMsg } : msg
+          );
+          // If message doesn't exist yet, add it
+          const exists = updated.find(m => m.id === updatedMsg.id);
+          if (!exists) {
+            console.log('➕ Adding updated message to conversation:', updatedMsg);
+            return [...updated, updatedMsg];
+          }
+          console.log('✅ Updated message in conversation with AI analysis');
+          return updated;
+        });
+      })
+      .subscribe((status) => {
+        console.log('📡 Admin message subscription status:', status);
+      });
 
     return () => {
       subscription.unsubscribe();
+      // Clean up any polling intervals
+      pollingIntervalsRef.current.forEach(interval => clearInterval(interval));
+      pollingIntervalsRef.current.clear();
     };
   }, [selectedStation, currentAdminId]);
+
+  // Cleanup polling intervals on unmount
+  useEffect(() => {
+    return () => {
+      pollingIntervalsRef.current.forEach(interval => clearInterval(interval));
+      pollingIntervalsRef.current.clear();
+    };
+  }, []);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
