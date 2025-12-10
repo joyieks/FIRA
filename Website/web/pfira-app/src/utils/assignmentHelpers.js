@@ -262,14 +262,9 @@ export const handleAssignmentResponse = async (reportId, stationId, response) =>
       return { success: false, error: error.message };
     }
 
-    // Notify responders when accepted (web-side implementation to avoid cross-bundle imports)
-    if (response === 'accepted') {
-      try {
-        await notifyRespondersOnStationAcceptanceWeb(stationId, reportId);
-      } catch (notifyErr) {
-        console.error('⚠️ Failed to notify responders on station acceptance:', notifyErr);
-      }
-    }
+    // NOTE: Responders are NOT automatically assigned when a station accepts an assignment.
+    // Stations must manually assign responders via checkboxes in the Station Overall page.
+    // Removed automatic responder notification/assignment on station acceptance.
 
     // If declined, we might want to notify admin (handled in component)
     return { success: true };
