@@ -219,6 +219,7 @@ const Sdashboard = () => {
   const [selectedStation, setSelectedStation] = useState(null); // Selected station for details modal
   const [stationResponders, setStationResponders] = useState([]); // Responders for selected station
   const [loadingResponders, setLoadingResponders] = useState(false); // Loading state for responders
+  const [isStationInfoMinimized, setIsStationInfoMinimized] = useState(false); // Track if station info card is minimized
   // Load Google Maps API once to avoid duplicate script injection when navigating
   const { isLoaded: isMapsLoaded, loadError: mapsLoadError } = useJsApiLoader({
     id: 'google-map-script',
@@ -2009,47 +2010,73 @@ const Sdashboard = () => {
       </div>
 
       {/* Station Location Status Display */}
-      <div className="absolute top-20 right-4 bg-white bg-opacity-95 p-4 rounded-lg shadow-lg z-20 max-w-xs border-l-4 border-red-500">
-        {stationLocation ? (
-          <div className="text-sm">
-            <p className="font-semibold text-red-600 text-base">🏢 {(stationData?.station_name || fallbackStationData?.station_name) || 'Fire Station'}</p>
-            <p className="text-gray-700 text-xs mt-1">
-              📍 {(stationData?.address || fallbackStationData?.address) || 'Address not specified'}
-            </p>
-            <p className="text-gray-500 text-xs mt-2">
-              Lat: {stationLocation.lat.toFixed(6)}
-            </p>
-            <p className="text-gray-500 text-xs">
-              Lng: {stationLocation.lng.toFixed(6)}
-            </p>
-            <p className="text-green-600 text-xs mt-2 font-medium">
-              ✅ Station Located
-            </p>
-          </div>
-        ) : geocodingError ? (
-          <div className="text-sm">
-            <p className="font-semibold text-red-600">❌ Station Location Error</p>
-            <p className="text-gray-700 text-xs">{geocodingError}</p>
-            <p className="text-gray-500 text-xs mt-1">
-              Address: {stationData?.address || 'Not specified'}
-            </p>
-          </div>
-        ) : (stationData?.address || fallbackStationData?.address) && (stationData?.address !== 'Loading...' && stationData?.address !== 'Address not specified') ? (
-          <div className="text-sm">
-            <p className="font-semibold text-yellow-600">🔄 Locating Station...</p>
-            <p className="text-gray-700 text-xs">
-              {(stationData?.address || fallbackStationData?.address)}
-            </p>
-          </div>
-        ) : (
-          <div className="text-sm">
-            <p className="font-semibold text-gray-600">🏢 Station Info</p>
-            <p className="text-gray-700 text-xs">
-              {(stationData?.station_name || fallbackStationData?.station_name) || 'Station Name'}
-            </p>
-            <p className="text-gray-500 text-xs">
-              No address specified
-            </p>
+      <div className="absolute top-20 right-4 bg-white bg-opacity-95 rounded-lg shadow-lg z-20 max-w-xs border-l-4 border-red-500 overflow-hidden transition-all duration-300">
+        {/* Header with minimize button */}
+        <div className="flex items-center justify-between p-3 border-b border-gray-200">
+          <p className="font-semibold text-red-600 text-base">
+            🏢 {(stationData?.station_name || fallbackStationData?.station_name) || 'Fire Station'}
+          </p>
+          <button
+            onClick={() => setIsStationInfoMinimized(!isStationInfoMinimized)}
+            className="text-gray-500 hover:text-gray-700 transition-colors p-1 rounded hover:bg-gray-100"
+            title={isStationInfoMinimized ? "Expand" : "Minimize"}
+          >
+            {isStationInfoMinimized ? (
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+              </svg>
+            ) : (
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 15l7-7 7 7" />
+              </svg>
+            )}
+          </button>
+        </div>
+
+        {/* Content (hidden when minimized) */}
+        {!isStationInfoMinimized && (
+          <div className="p-4">
+            {stationLocation ? (
+              <div className="text-sm">
+                <p className="text-gray-700 text-xs mt-1">
+                  📍 {(stationData?.address || fallbackStationData?.address) || 'Address not specified'}
+                </p>
+                <p className="text-gray-500 text-xs mt-2">
+                  Lat: {stationLocation.lat.toFixed(6)}
+                </p>
+                <p className="text-gray-500 text-xs">
+                  Lng: {stationLocation.lng.toFixed(6)}
+                </p>
+                <p className="text-green-600 text-xs mt-2 font-medium">
+                  ✅ Station Located
+                </p>
+              </div>
+            ) : geocodingError ? (
+              <div className="text-sm">
+                <p className="font-semibold text-red-600">❌ Station Location Error</p>
+                <p className="text-gray-700 text-xs">{geocodingError}</p>
+                <p className="text-gray-500 text-xs mt-1">
+                  Address: {stationData?.address || 'Not specified'}
+                </p>
+              </div>
+            ) : (stationData?.address || fallbackStationData?.address) && (stationData?.address !== 'Loading...' && stationData?.address !== 'Address not specified') ? (
+              <div className="text-sm">
+                <p className="font-semibold text-yellow-600">🔄 Locating Station...</p>
+                <p className="text-gray-700 text-xs">
+                  {(stationData?.address || fallbackStationData?.address)}
+                </p>
+              </div>
+            ) : (
+              <div className="text-sm">
+                <p className="font-semibold text-gray-600">🏢 Station Info</p>
+                <p className="text-gray-700 text-xs">
+                  {(stationData?.station_name || fallbackStationData?.station_name) || 'Station Name'}
+                </p>
+                <p className="text-gray-500 text-xs">
+                  No address specified
+                </p>
+              </div>
+            )}
           </div>
         )}
       </div>

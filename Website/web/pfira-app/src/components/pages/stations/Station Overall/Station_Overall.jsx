@@ -53,13 +53,71 @@ const Station_Overview = () => {
     return null;
   };
 
-  // Helper function to clean alarm level text
-  const cleanAlarmLevel = (alarmLevel) => {
+  // Helper function to normalize alarm level from JSON/database format to display format
+  const normalizeAlarmLevel = (alarmLevel) => {
     if (!alarmLevel) return alarmLevel;
+    
+    // First, clean up any "- structure count not provided" suffix
+    let cleaned = alarmLevel;
     if (typeof alarmLevel === 'string' && alarmLevel.includes('- structure count not provided')) {
-      return alarmLevel.split('- structure count not provided')[0].trim();
+      cleaned = alarmLevel.split('- structure count not provided')[0].trim();
     }
-    return alarmLevel;
+    
+    // Convert to lowercase for mapping
+    const lower = String(cleaned).toLowerCase().trim();
+    
+    // Map JSON/database format to display format
+    const map = {
+      none: 'Under Control',
+      first: '1st Alarm',
+      'first_alarm': '1st Alarm',
+      '1st alarm': '1st Alarm',
+      '1st_alarm': '1st Alarm',
+      second: '2nd Alarm',
+      'second_alarm': '2nd Alarm',
+      '2nd alarm': '2nd Alarm',
+      '2nd_alarm': '2nd Alarm',
+      third: '3rd Alarm',
+      'third_alarm': '3rd Alarm',
+      '3rd alarm': '3rd Alarm',
+      '3rd_alarm': '3rd Alarm',
+      fourth: '4th Alarm',
+      'fourth_alarm': '4th Alarm',
+      '4th alarm': '4th Alarm',
+      '4th_alarm': '4th Alarm',
+      fifth: '5th Alarm',
+      'fifth_alarm': '5th Alarm',
+      '5th alarm': '5th Alarm',
+      '5th_alarm': '5th Alarm',
+      'task force alpha': 'TASK FORCE ALPHA',
+      'task_force_alpha': 'TASK FORCE ALPHA',
+      'task force bravo': 'TASK FORCE BRAVO',
+      'task_force_bravo': 'TASK FORCE BRAVO',
+      'task force charlie': 'TASK FORCE CHARLIE',
+      'task_force_charlie': 'TASK FORCE CHARLIE',
+      'task force delta': 'TASK FORCE DELTA',
+      'task_force_delta': 'TASK FORCE DELTA',
+      'task_force_delta_echo_hotel_india': 'TASK FORCE DELTA',
+      general: 'GENERAL ALARM',
+      'general alarm': 'GENERAL ALARM',
+      'general_alarm': 'GENERAL ALARM',
+      'under control': 'Under Control',
+      'under_control': 'Under Control'
+    };
+    
+    // Check if it's already in display format (contains numbers like "1st", "2nd", etc.)
+    if (cleaned.match(/^\d+(st|nd|rd|th)\s+Alarm$/i) || 
+        cleaned.match(/^TASK FORCE|^GENERAL ALARM|^Under Control$/i)) {
+      return cleaned;
+    }
+    
+    // Return mapped value or original if not found
+    return map[lower] || cleaned;
+  };
+
+  // Helper function to clean alarm level text (kept for backward compatibility)
+  const cleanAlarmLevel = (alarmLevel) => {
+    return normalizeAlarmLevel(alarmLevel);
   };
 
   const formatTime = (timestamp) => {
@@ -300,7 +358,7 @@ const Station_Overview = () => {
             reporter: r.reporter || 'Unknown Reporter',
             location: r.address || r.geotag_location || 'Location unavailable',
             status: r.status || 'On Going',
-            suggestedAlarmLevel: aiOverride || r.recommended_alarm_level || r.alarm_level || determineSuggestedAlarm(r.number_of_structures_on_fire),
+            suggestedAlarmLevel: normalizeAlarmLevel(aiOverride || r.recommended_alarm_level || r.alarm_level || determineSuggestedAlarm(r.number_of_structures_on_fire)),
             finalAlarmLevel: r.final_fire_alarm_level || '1st Alarm',
             description: r.cause_of_fire || 'No cause specified',
             picture: r.image_url,
@@ -538,7 +596,7 @@ const Station_Overview = () => {
     if (!reports || Object.keys(chatAlarmByReport).length === 0) return;
     setReports(prev => prev.map(r => ({
       ...r,
-      suggestedAlarmLevel: chatAlarmByReport[String(r.id)] || r.suggestedAlarmLevel
+      suggestedAlarmLevel: normalizeAlarmLevel(chatAlarmByReport[String(r.id)] || r.suggestedAlarmLevel)
     })));
   }, [chatAlarmByReport]);
 
