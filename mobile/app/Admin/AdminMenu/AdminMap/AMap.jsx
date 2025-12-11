@@ -108,13 +108,14 @@ export default function AMap({ isSidebarOpen = false }) {
         const data = await response.json();
         console.log('📊 Fetched fire reports for mobile admin dashboard:', data.length);
         
-        // Filter reports that have valid coordinates AND are not cancelled or fire out (and not no-fire/no-smoke)
+        // Filter reports that have valid coordinates AND are not cancelled or fire out (and not no-fire/no-smoke or invalidated)
         const reportsWithCoords = data.filter(report => {
           const hasCoords = report.latitude && report.longitude && !isNaN(parseFloat(report.latitude)) && !isNaN(parseFloat(report.longitude));
           const statusText = (report.status || '').toString().toLowerCase();
           const isCancelled = statusText.includes('cancelled') || statusText.includes('canceled');
           const isFireOut = statusText.includes('fire out');
-          return hasCoords && !isCancelled && !isFireOut && !isNoFireNoSmoke(report);
+          const isInvalidated = report.invalidated === true;
+          return hasCoords && !isCancelled && !isFireOut && !isInvalidated && !isNoFireNoSmoke(report);
         });
         
         console.log('🔥 Reports with valid coordinates (excluding cancelled/fire out):', reportsWithCoords.length);
@@ -189,6 +190,12 @@ export default function AMap({ isSidebarOpen = false }) {
             if (reportRes.ok) {
               const allReports = await reportRes.json();
               reportData = allReports.find(r => String(r.id) === String(assignment.report_id));
+              
+              // Skip if report is invalidated
+              if (reportData && reportData.invalidated === true) {
+                console.log('⚠️ Skipping invalidated report for declined assignment:', assignment.report_id);
+                return;
+              }
             }
           } catch (err) {
             console.error('Error fetching report data:', err);
@@ -517,6 +524,12 @@ export default function AMap({ isSidebarOpen = false }) {
           if (reportRes.ok) {
             const allReports = await reportRes.json();
             reportData = allReports.find(r => String(r.id) === String(assignment.report_id));
+            
+            // Skip if report is invalidated
+            if (reportData && reportData.invalidated === true) {
+              console.log('⚠️ Skipping invalidated report for assignment:', assignment.report_id);
+              return;
+            }
           }
         } catch (err) {
           console.error('Error fetching report data:', err);
@@ -787,6 +800,12 @@ export default function AMap({ isSidebarOpen = false }) {
               if (reportRes.ok) {
                 const allReports = await reportRes.json();
                 reportData = allReports.find(r => String(r.id) === String(assignment.report_id));
+                
+                // Skip if report is invalidated
+                if (reportData && reportData.invalidated === true) {
+                  console.log('⚠️ Skipping invalidated report for backup assignment:', assignment.report_id);
+                  return;
+                }
               }
             } catch (err) {
               console.error('Error fetching report data:', err);
@@ -2297,97 +2316,62 @@ export default function AMap({ isSidebarOpen = false }) {
                           };
                           setPendingAssignment(pendingAssign);
                           
-                          // COPY EXACT LOGIC FROM WEB ADMIN (lines 2939-3033)
+                          // QUERY ALL STATIONS DIRECTLY - NO FILTERS EXCEPT EXCLUDING CURRENT
                           try {
                             const lat = parseFloat(selectedReport.latitude);
                             const lng = parseFloat(selectedReport.longitude);
                             
-                            console.log('🔍 Forwarding: Fetching stations for report at:', lat, lng);
-                            console.log('🔍 Forwarding: Excluding station:', currentAssignment.id);
+                            console.log('🔍 Forwarding: Querying ALL stations (excluding current)...');
                             
-                            if (!isNaN(lat) && !isNaN(lng)) {
-                              // Find nearest stations to the incident location (active only)
-                              const stations = await findNearestStations(
-                                lat,
-                                lng,
-                                currentAssignment.id, // Exclude current station
-                                10, // Get more stations
-                                { lat, lng } // Incident location for distance calculation
-                              );
+                            // Query ALL stations directly - NO status filters
+                            const { data: allStationsData, error: allStationsError } = await supabase
+                              .from('station_users')
+                              .select('id, station_name, lat, lng')
+                              .neq('id', currentAssignment.id);
+                            
+                            console.log('🔍 Query result:', allStationsData?.length || 0, 'stations, error:', allStationsError);
+                            
+                            if (allStationsError) {
+                              console.error('❌ Error fetching stations:', allStationsError);
+                              Alert.alert('Error', `Failed to fetch stations: ${allStationsError.message}`);
+                              setNearestStations([]);
+                            } else if (allStationsData && allStationsData.length > 0) {
+                              console.log('✅ Found', allStationsData.length, 'stations');
                               
-                              console.log('🔍 Forwarding: findNearestStations returned:', stations?.length || 0, 'stations');
-                              
-                              if (stations && stations.length > 0) {
-                                setNearestStations(stations);
-                              } else {
-                                console.log('⚠️ Forwarding: findNearestStations returned empty, trying fallback...');
-                                // Fallback: directly query all stations (less restrictive)
-                                const { data: allStationsData, error: allStationsError } = await supabase
-                                  .from('station_users')
-                                  .select('id, station_name, lat, lng, status')
-                                  .eq('status', 'active')
-                                  .neq('id', currentAssignment.id);
-                                
-                                if (allStationsError) {
-                                  console.error('❌ Error fetching all stations:', allStationsError);
-                                  setNearestStations([]);
-                                } else if (allStationsData && allStationsData.length > 0) {
-                                  console.log('✅ Forwarding: Found', allStationsData.length, 'stations in fallback');
-                                  const stationsWithDistance = allStationsData
-                                    .filter(station => {
-                                      const stationLat = parseFloat(station.lat);
-                                      const stationLng = parseFloat(station.lng);
-                                      return !isNaN(stationLat) && !isNaN(stationLng);
-                                    })
-                                    .map(station => {
-                                      const stationLat = parseFloat(station.lat);
-                                      const stationLng = parseFloat(station.lng);
-                                      let distanceToIncident = null;
-                                      
-                                      if (!isNaN(lat) && !isNaN(lng)) {
-                                        distanceToIncident = calculateDistance(lat, lng, stationLat, stationLng);
-                                      }
-                                      
-                                      return {
-                                        ...station,
-                                        distanceToIncident: distanceToIncident,
-                                        distanceToIncidentKm: distanceToIncident ? (distanceToIncident / 1000).toFixed(2) : null
-                                      };
-                                    })
-                                    .sort((a, b) => {
-                                      if (a.distanceToIncident === null || a.distanceToIncident === Infinity) return 1;
-                                      if (b.distanceToIncident === null || b.distanceToIncident === Infinity) return -1;
-                                      return a.distanceToIncident - b.distanceToIncident;
-                                    });
+                              // Calculate distances and sort
+                              const stationsWithDistance = allStationsData
+                                .map(station => {
+                                  const stationLat = parseFloat(station.lat);
+                                  const stationLng = parseFloat(station.lng);
+                                  let distanceToIncident = null;
+                                  let distanceToIncidentKm = null;
                                   
-                                  setNearestStations(stationsWithDistance);
-                                } else {
-                                  console.warn('⚠️ Forwarding: No stations found in fallback');
-                                  setNearestStations([]);
-                                }
-                              }
+                                  if (!isNaN(stationLat) && !isNaN(stationLng) && !isNaN(lat) && !isNaN(lng)) {
+                                    distanceToIncident = calculateDistance(lat, lng, stationLat, stationLng);
+                                    distanceToIncidentKm = (distanceToIncident / 1000).toFixed(2);
+                                  }
+                                  
+                                  return {
+                                    ...station,
+                                    distanceToIncident: distanceToIncident,
+                                    distanceToIncidentKm: distanceToIncidentKm
+                                  };
+                                })
+                                .sort((a, b) => {
+                                  if (a.distanceToIncident === null || a.distanceToIncident === Infinity) return 1;
+                                  if (b.distanceToIncident === null || b.distanceToIncident === Infinity) return -1;
+                                  return a.distanceToIncident - b.distanceToIncident;
+                                });
+                              
+                              console.log('✅ Setting', stationsWithDistance.length, 'stations to state');
+                              setNearestStations(stationsWithDistance);
                             } else {
-                              // No coordinates, get all stations
-                              const { data: allStationsData, error: allStationsError } = await supabase
-                                .from('station_users')
-                                .select('id, station_name, lat, lng')
-                                .neq('id', currentAssignment.id);
-                              
-                              if (allStationsError) {
-                                console.error('❌ Error fetching all stations (no coords):', allStationsError);
-                              }
-                              
-                              if (allStationsData && allStationsData.length > 0) {
-                                setNearestStations(allStationsData.map(s => ({
-                                  ...s,
-                                  distanceToIncidentKm: null
-                                })));
-                              } else {
-                                setNearestStations([]);
-                              }
+                              console.warn('⚠️ No stations found');
+                              setNearestStations([]);
                             }
                           } catch (error) {
-                            console.error('Error fetching stations for forwarding:', error);
+                            console.error('❌ Error fetching stations:', error);
+                            Alert.alert('Error', `Failed to fetch stations: ${error.message}`);
                             setNearestStations([]);
                           }
                           

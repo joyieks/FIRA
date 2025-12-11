@@ -238,6 +238,7 @@ const Station_Overview = () => {
   };
 
   useEffect(() => {
+    let isMounted = true;
     const load = async () => {
       try {
         setIsLoading(true);
@@ -246,18 +247,42 @@ const Station_Overview = () => {
         setCurrentStationId(stationId || null);
         if (!stationId) { setReports([]); return; }
         
-        // Fetch assigned reports for this station directly (exclude declined)
+        // Fetch ALL assigned reports for this station (we'll filter declined in JavaScript)
+        // IMPORTANT: Don't filter by status in the query - get everything and filter in JS
         const { data: stationAssignments, error: stationErr } = await supabase
           .from('report_assignments')
-          .select('report_id, status')
+          .select('report_id, status, assignment_source, assigned_at, assignment_role')
           .eq('assignee_type', 'station')
           .eq('assignee_id', stationId);
-        if (stationErr) throw stationErr;
+        if (stationErr) {
+          console.error('❌ Error fetching station assignments:', stationErr);
+          throw stationErr;
+        }
         
-        // Filter out declined assignments
+        console.log(`🔍 Raw assignments from DB:`, stationAssignments);
+        
+        // Filter out ONLY declined assignments - include pending, accepted, and null status
         const activeAssignments = (stationAssignments || []).filter(
-          a => !a.status || a.status !== 'declined'
+          a => {
+            const isDeclined = a.status === 'declined';
+            if (isDeclined) {
+              console.log(`⏭️ Filtering out declined assignment for report ${a.report_id}`);
+            }
+            return !isDeclined;
+          }
         );
+        
+        console.log(`📋 Station Overall: Found ${stationAssignments?.length || 0} total assignments, ${activeAssignments.length} active (${activeAssignments.filter(a => a.status === 'pending').length} pending, ${activeAssignments.filter(a => a.status === 'accepted').length} accepted, ${activeAssignments.filter(a => !a.status).length} null status, ${activeAssignments.filter(a => a.assignment_source === 'automatic').length} automatic)`);
+        
+        // Log all assignment details for debugging
+        if (activeAssignments.length === 0) {
+          console.warn('⚠️ WARNING: No active assignments found! This might indicate a problem.');
+          console.log('📊 All assignments (including declined):', stationAssignments);
+        } else {
+          activeAssignments.forEach(a => {
+            console.log(`  ✅ Report ${a.report_id}: status=${a.status || 'null'}, source=${a.assignment_source || 'unknown'}, role=${a.assignment_role || 'unknown'}, assigned_at=${a.assigned_at || 'unknown'}`);
+          });
+        }
 
         // Fetch responders for this station, then their assigned reports
         const { data: stationResponders, error: respErr } = await supabase
@@ -343,12 +368,40 @@ const Station_Overview = () => {
         const forwardedIds = new Set((forwarded||[]).map(f=>String(f.report_id)));
         const ids = new Set([...assignedIds, ...forwardedIds]);
         
-        console.log(`Station Overall: ${assignedIds.size} assigned, ${forwardedIds.size} forwarded`);
+        console.log(`📊 Station Overall: ${assignedIds.size} assigned, ${forwardedIds.size} forwarded, ${ids.size} total unique report IDs`);
+        console.log(`📋 Report IDs to fetch:`, Array.from(ids).slice(0, 10), ids.size > 10 ? '...' : '');
         
-        if (!ids.size) { setReports([]); return; }
+        if (!ids.size) { 
+          console.log('⚠️ No report IDs found, setting empty reports');
+          setReports([]); 
+          return; 
+        }
+        
         const resp = await fetch(`${API_URL}/get_reports`);
+        if (!resp.ok) {
+          console.error('❌ Failed to fetch reports from API:', resp.status);
+          setReports([]);
+          return;
+        }
         const data = resp.ok ? await resp.json() : [];
-        const filtered = (data||[]).filter(r=>ids.has(String(r.id)));
+        console.log(`📥 Fetched ${data.length} reports from API`);
+        
+        // Filter to only assigned reports AND exclude invalidated reports
+        const filtered = (data||[]).filter(r => {
+          const reportId = String(r.id);
+          const isAssigned = ids.has(reportId);
+          const isInvalidated = r.invalidated === true;
+          
+          if (isAssigned && !isInvalidated) {
+            console.log(`✅ Including report ${reportId}: ${r.address || r.geotag_location || 'Unknown location'}`);
+          } else if (isAssigned && isInvalidated) {
+            console.log(`⏭️ Skipping invalidated report ${reportId}`);
+          }
+          
+          return isAssigned && !isInvalidated;
+        });
+        
+        console.log(`✅ Filtered to ${filtered.length} valid reports`);
         const mapped = filtered.map(r=>{
           const aiOverride = chatAlarmByReport[String(r.id)];
           const forwardingInfo = forwardedMetadata.get(String(r.id));
@@ -381,18 +434,39 @@ const Station_Overview = () => {
             original_assignee: forwardingInfo?.original_assignee
           };
         });
-        setReports(mapped.sort((a,b)=> new Date(b.timestamp||0)-new Date(a.timestamp||0)));
+        if (isMounted) {
+          setReports(mapped.sort((a,b)=> new Date(b.timestamp||0)-new Date(a.timestamp||0)));
+        }
       } catch (e) {
         console.error('Station Overall load error:', e);
-        setReports([]);
-      } finally { setIsLoading(false); }
+        if (isMounted) {
+          setReports([]);
+        }
+      } finally { 
+        if (isMounted) {
+          setIsLoading(false);
+        }
+      }
     };
     load();
     
-    // Real-time listener for assignment status changes (to remove declined reports)
+    // Real-time listener for assignment status changes (to add new assignments and remove declined reports)
     if (currentStationId) {
       const channel = supabase
         .channel(`station-assignments-${currentStationId}`)
+        .on('postgres_changes', {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'report_assignments',
+          filter: `assignee_type=eq.station&assignee_id=eq.${currentStationId}`
+        }, async (payload) => {
+          const assignment = payload.new;
+          // If new assignment is not declined, reload to show it
+          if (assignment.status !== 'declined' && isMounted) {
+            console.log('➕ New assignment detected (status:', assignment.status, '), reloading reports:', assignment.report_id);
+            load();
+          }
+        })
         .on('postgres_changes', {
           event: 'UPDATE',
           schema: 'public',
@@ -401,14 +475,19 @@ const Station_Overview = () => {
         }, (payload) => {
           const assignment = payload.new;
           // If assignment was declined, remove it from the list
-          if (assignment.status === 'declined') {
+          if (assignment.status === 'declined' && isMounted) {
             setReports(prev => prev.filter(r => String(r.id) !== String(assignment.report_id)));
             console.log('🗑️ Removed declined report from list:', assignment.report_id);
+          } else if ((assignment.status === 'accepted' || assignment.status === 'pending') && isMounted) {
+            // If assignment was accepted or is pending, reload to ensure it's shown
+            console.log('🔄 Assignment status changed to', assignment.status, '- reloading reports');
+            load();
           }
         })
         .subscribe();
       
       return () => {
+        isMounted = false;
         supabase.removeChannel(channel);
       };
     }

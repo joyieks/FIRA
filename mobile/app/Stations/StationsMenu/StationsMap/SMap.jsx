@@ -271,6 +271,14 @@ export default function SMap({ reportIdToOpen, onReportOpened }) {
         const existingReport = assignedReports.find(r => String(r.id) === String(reportIdToOpen));
         
         if (existingReport) {
+          // Check if report is invalidated
+          if (existingReport.invalidated === true) {
+            console.error('❌ Report is invalidated:', existingReport.id);
+            alert('This report has been invalidated and is no longer available.');
+            if (onReportOpened) onReportOpened();
+            return;
+          }
+          
           console.log('✅ Found report in local data:', existingReport);
           
           // Center map on the fire location
@@ -305,6 +313,14 @@ export default function SMap({ reportIdToOpen, onReportOpened }) {
         if (!report) {
           console.error('❌ Report not found in API');
           alert('Report not found');
+          if (onReportOpened) onReportOpened();
+          return;
+        }
+        
+        // Check if report is invalidated
+        if (report.invalidated === true) {
+          console.error('❌ Report is invalidated:', report.id);
+          alert('This report has been invalidated and is no longer available.');
           if (onReportOpened) onReportOpened();
           return;
         }
@@ -474,12 +490,13 @@ export default function SMap({ reportIdToOpen, onReportOpened }) {
             is_forwarded: false
           };
         }).filter(Boolean).filter(r => {
-          // Filter out reports with invalid coordinates, cancelled reports, fire out reports, or no-fire/no-smoke
+          // Filter out reports with invalid coordinates, cancelled reports, fire out reports, invalidated reports, or no-fire/no-smoke
           const hasValidCoords = !isNaN(parseFloat(r.latitude)) && !isNaN(parseFloat(r.longitude));
           const statusText = (r.status || '').toString().toLowerCase();
           const isCancelled = statusText.includes('cancelled') || statusText.includes('canceled');
           const isFireOut = statusText.includes('fire out');
-          return hasValidCoords && !isCancelled && !isFireOut && !isNoFireNoSmoke(r);
+          const isInvalidated = r.invalidated === true;
+          return hasValidCoords && !isCancelled && !isFireOut && !isInvalidated && !isNoFireNoSmoke(r);
         });
 
         setAssignedReports(merged);
@@ -508,6 +525,12 @@ export default function SMap({ reportIdToOpen, onReportOpened }) {
             const response = await fetch('https://fire-detection-api-production-f55b.up.railway.app/get_reports');
             const reports = response.ok ? await response.json() : [];
             const reportData = reports.find(r => String(r.id) === String(row.report_id));
+
+            // Skip if report is invalidated
+            if (reportData && reportData.invalidated === true) {
+              console.log('⚠️ Skipping invalidated report assignment:', row.report_id);
+              return;
+            }
 
             // Check if assignment is pending (needs approval)
             if (row.status === 'pending') {
@@ -564,6 +587,12 @@ export default function SMap({ reportIdToOpen, onReportOpened }) {
               const response = await fetch('https://fire-detection-api-production-f55b.up.railway.app/get_reports');
               const reports = response.ok ? await response.json() : [];
               const reportData = reports.find(r => String(r.id) === String(row.report_id));
+
+              // Skip if report is invalidated
+              if (reportData && reportData.invalidated === true) {
+                console.log('⚠️ Skipping invalidated report assignment update:', row.report_id);
+                return;
+              }
 
               // Check if station is busy
               const busyCheck = await checkStationIsBusy(currentStationId);

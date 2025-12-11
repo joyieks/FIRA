@@ -517,6 +517,13 @@ const Sdashboard = () => {
       try {
         console.log('🔍 Geocoding station address:', currentStationData.address);
         
+        // Check if Google Maps API is fully loaded
+        if (!window.google || !window.google.maps || !window.google.maps.Geocoder) {
+          console.warn('⚠️ Google Maps Geocoder not available yet, skipping geocoding');
+          setGeocodingError('Google Maps API not fully loaded');
+          return;
+        }
+        
         const geocoder = new window.google.maps.Geocoder();
         geocoder.geocode({ address: currentStationData.address }, (results, status) => {
           if (status === 'OK' && results[0]) {
@@ -797,23 +804,103 @@ const Sdashboard = () => {
         withCoords = withCoords.filter((r) => !r.invalidated && (!isNoFireNoSmoke(r) || r.validated));
 
         // 4) Fallback to snapshot table for any report IDs missing in external API
+        // BUT: Only use snapshots if the report still exists in the API (to avoid ghost markers)
         const missingIds = Array.from(allReportIds).filter(id => !withCoords.find(r => String(r.id) === id));
         if (missingIds.length > 0) {
-          const { data: snaps, error: snapErr } = await supabase
-            .from('assigned_report_snapshots')
-            .select('report_id, lat, lng, address, snapshot_json')
-            .in('report_id', missingIds);
-          if (!snapErr && Array.isArray(snaps)) {
-            const snapAsReports = snaps
-              .filter(s => typeof s.lat === 'number' && typeof s.lng === 'number')
-              .map(s => ({
-                ...(typeof s.snapshot_json === 'object' && s.snapshot_json !== null ? s.snapshot_json : {}),
-                id: s.report_id,
-                latitude: s.lat,
-                longitude: s.lng,
-                address: s.address
-              }));
-            withCoords = withCoords.concat(snapAsReports);
+          console.log(`🔍 Checking ${missingIds.length} missing report IDs against API and snapshots...`);
+          
+          // First, double-check the API for these IDs (they might have been filtered out)
+          const missingFromApi = reports.filter(r => {
+            const rid = r?.id != null ? String(r.id) : '';
+            return missingIds.includes(rid);
+          });
+          
+          // Add any that were found in API but filtered out (if they're valid)
+          missingFromApi.forEach(r => {
+            const rid = String(r.id);
+            if (allReportIds.has(rid) && 
+                r.latitude && r.longitude && 
+                !isNaN(r.latitude) && !isNaN(r.longitude) &&
+                !r.invalidated && 
+                (!isNoFireNoSmoke(r) || r.validated)) {
+              console.log(`✅ Found missing report ${rid} in API after re-check`);
+              withCoords.push(r);
+            }
+          });
+          
+          // Update missingIds to exclude ones we just found
+          const stillMissingIds = missingIds.filter(id => !withCoords.find(r => String(r.id) === id));
+          
+          if (stillMissingIds.length > 0) {
+            console.log(`📸 Checking snapshots for ${stillMissingIds.length} report IDs...`);
+            const { data: snaps, error: snapErr } = await supabase
+              .from('assigned_report_snapshots')
+              .select('report_id, lat, lng, address, snapshot_json')
+              .in('report_id', stillMissingIds);
+            
+            if (!snapErr && Array.isArray(snaps)) {
+              // CRITICAL: Verify each snapshot report still exists in the API before using it
+              // This prevents ghost markers from deleted reports
+              const validSnaps = [];
+              
+              for (const snap of snaps) {
+                const snapReportId = String(snap.report_id);
+                
+                // Check if this report still exists in the API
+                const existsInApi = reports.find(r => String(r.id) === snapReportId);
+                
+                if (existsInApi) {
+                  // Report exists in API - use API version (more up-to-date)
+                  console.log(`✅ Snapshot report ${snapReportId} found in API, using API version`);
+                  if (existsInApi.latitude && existsInApi.longitude && 
+                      !isNaN(existsInApi.latitude) && !isNaN(existsInApi.longitude) &&
+                      !existsInApi.invalidated &&
+                      (!isNoFireNoSmoke(existsInApi) || existsInApi.validated)) {
+                    validSnaps.push(existsInApi);
+                  }
+                } else {
+                  // Report doesn't exist in API - check if assignment still exists
+                  const assignmentStillExists = activeAssignments.find(a => String(a.report_id) === snapReportId) ||
+                                                forwarded.find(f => String(f.report_id) === snapReportId);
+                  
+                  if (!assignmentStillExists) {
+                    console.log(`⚠️ Skipping snapshot for ${snapReportId} - report not in API and assignment doesn't exist (ghost marker prevention)`);
+                    continue; // Skip this snapshot - it's a ghost
+                  }
+                  
+                  // Assignment exists but report not in API - verify snapshot data is valid
+                  if (typeof snap.lat === 'number' && typeof snap.lng === 'number' && !isNaN(snap.lat) && !isNaN(snap.lng)) {
+                    const snapData = typeof snap.snapshot_json === 'object' && snap.snapshot_json !== null 
+                      ? snap.snapshot_json 
+                      : (typeof snap.snapshot_json === 'string' ? (() => { try { return JSON.parse(snap.snapshot_json); } catch { return {}; } })() : {});
+                    
+                    // Check if snapshot indicates invalidated
+                    if (snapData.invalidated === true) {
+                      console.log(`⚠️ Skipping snapshot for ${snapReportId} - marked as invalidated`);
+                      continue;
+                    }
+                    
+                    // Check if snapshot is no-fire/no-smoke and not validated
+                    if (isNoFireNoSmoke(snapData) && !snapData.validated) {
+                      console.log(`⚠️ Skipping snapshot for ${snapReportId} - unvalidated no-fire/no-smoke`);
+                      continue;
+                    }
+                    
+                    console.log(`📸 Using snapshot for ${snapReportId} (report not in API but assignment exists)`);
+                    validSnaps.push({
+                      ...snapData,
+                      id: snap.report_id,
+                      latitude: snap.lat,
+                      longitude: snap.lng,
+                      address: snap.address || snapData.address
+                    });
+                  }
+                }
+              }
+              
+              withCoords = withCoords.concat(validSnaps);
+              console.log(`✅ Added ${validSnaps.length} valid snapshot reports (filtered out ${snaps.length - validSnaps.length} invalid/ghost reports)`);
+            }
           }
         }
 
@@ -846,12 +933,39 @@ const Sdashboard = () => {
         console.log('📨 Forwarded report IDs:', Array.from(forwardedIds));
         console.log('📍 Total reports on map (assigned + forwarded):', reportsWithMetadata.map(r => ({ id: r.id, lat: r.latitude, lng: r.longitude, forwarded: r.is_forwarded })));
         
+        // Final validation: Remove any reports that don't have active assignments (ghost marker cleanup)
+        const finalValidReports = reportsWithMetadata.filter(report => {
+          const reportId = String(report.id);
+          const hasActiveAssignment = assignedIds.has(reportId) || forwardedIds.has(reportId);
+          
+          if (!hasActiveAssignment) {
+            console.log(`⚠️ Removing ghost marker for report ${reportId} - no active assignment found`);
+            return false;
+          }
+          
+          // Double-check the report exists in the API (not just snapshot)
+          const existsInApi = reports.find(r => String(r.id) === reportId);
+          if (!existsInApi) {
+            // Report not in API - verify assignment still exists
+            const assignmentExists = activeAssignments.find(a => String(a.report_id) === reportId) ||
+                                    forwarded.find(f => String(f.report_id) === reportId);
+            if (!assignmentExists) {
+              console.log(`⚠️ Removing ghost marker for report ${reportId} - not in API and no assignment`);
+              return false;
+            }
+          }
+          
+          return true;
+        });
+        
+        console.log(`✅ Final validation: ${finalValidReports.length} valid reports (removed ${reportsWithMetadata.length - finalValidReports.length} ghost markers)`);
+        
         // Cluster reports before setting them
-        const clusteredReports = clusterReports(reportsWithMetadata);
+        const clusteredReports = clusterReports(finalValidReports);
         setAssignedReports(clusteredReports);
         try {
           // Detect new report IDs compared to last refresh and trigger alert/notification
-          const currentIds = new Set(reportsWithMetadata.map(r => String(r.id)));
+          const currentIds = new Set(finalValidReports.map(r => String(r.id)));
           const previousIds = previousReportIdsRef.current;
           const newIds = Array.from(currentIds).filter(id => !previousIds.has(id));
           // Update ref for next cycle
@@ -1067,6 +1181,31 @@ const Sdashboard = () => {
               }
             } catch (e) {
               console.error('❌ Station: RT assignment update handler error:', e);
+            }
+          })
+          .on('postgres_changes', { 
+            event: 'DELETE', 
+            schema: 'public', 
+            table: 'report_assignments',
+            filter: `assignee_type=eq.station&assignee_id=eq.${stationId}`
+          }, async (payload) => {
+            try {
+              const row = payload?.old;
+              if (!row) return;
+              
+              // If assignment was deleted, remove the report from the map (ghost marker cleanup)
+              console.log('🗑️ Assignment deleted, removing report from map:', row.report_id);
+              setAssignedReports(prev => prev.filter(r => String(r.id) !== String(row.report_id)));
+              
+              // Close info window if this report is currently selected
+              setSelectedAssignedReport(prev => {
+                if (prev && String(prev.id) === String(row.report_id)) {
+                  return null;
+                }
+                return prev;
+              });
+            } catch (e) {
+              console.error('❌ Station: RT assignment delete handler error:', e);
             }
           })
           .subscribe((status) => {

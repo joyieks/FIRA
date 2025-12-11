@@ -912,6 +912,9 @@ export default function RMap({ routingInfo }) {
       
       const nearby = allReports
         .filter(report => {
+          // Exclude invalidated reports
+          if (report.invalidated === true) return false;
+          
           // Exclude "No Fire/No Smoke" reports
           if (isNoFireNoSmoke(report)) return false;
           
@@ -1107,6 +1110,12 @@ export default function RMap({ routingInfo }) {
         
         if (status === 'fire out') {
           console.log(`⏭️ Skipping ${status} report: ${reportId}`);
+          return null;
+        }
+        
+        // Skip invalidated reports
+        if (report.invalidated === true) {
+          console.log(`⏭️ Skipping invalidated report: ${reportId}`);
           return null;
         }
         
@@ -1516,6 +1525,17 @@ export default function RMap({ routingInfo }) {
           : null;
 
         if (currentReport) {
+          // Skip if report is invalidated
+          if (currentReport.invalidated === true) {
+            console.log(`⚠️ Assigned report is invalidated, clearing routes...`);
+            setAcceptedAssignment(null);
+            setRouteCoordinates([]);
+            setRouteInfo(null);
+            setAllRoutes([]);
+            fetchAssignedReports();
+            return;
+          }
+          
           const reportStatus = (currentReport.status || '').toLowerCase();
           if (reportStatus === 'fire out' || reportStatus === 'under control') {
             console.log(`🔥 Assigned report is now "${currentReport.status}", clearing routes...`);
@@ -1567,7 +1587,13 @@ export default function RMap({ routingInfo }) {
 
         if (!fireReport) {
           console.error('❌ Fire report not found:', fireReportId);
-          Alert.alert('Error', 'Fire report not found');
+          return;
+        }
+        
+        // Skip if report is invalidated
+        if (fireReport.invalidated === true) {
+          console.log('⚠️ Fire report is invalidated:', fireReportId);
+          Alert.alert('Report Unavailable', 'This report has been invalidated and is no longer available.');
           return;
         }
 

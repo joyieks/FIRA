@@ -122,7 +122,8 @@ export default function CMap({ reportIdToFocus, setReportIdToFocus }) {
         const statusText = (report.status || '').toString().toLowerCase();
         const isCancelled = statusText.includes('cancelled') || statusText.includes('canceled');
         const isFireOut = statusText.includes('fire out');
-        return hasCoords && !isCancelled && !isFireOut && !isNoFireNoSmoke(report);
+        const isInvalidated = report.invalidated === true;
+        return hasCoords && !isCancelled && !isFireOut && !isInvalidated && !isNoFireNoSmoke(report);
       });
       if (isMountedRef.current) setReports(reportsWithCoords);
     } catch (error) {
@@ -398,13 +399,14 @@ export default function CMap({ reportIdToFocus, setReportIdToFocus }) {
             const allReports = await response.json();
             reportToFocus = allReports.find(r => String(r.id) === String(reportIdToFocus));
             
-            // If found, add it to reports if it's not cancelled/fire out
+            // If found, add it to reports if it's not cancelled/fire out/invalidated
             if (reportToFocus) {
               const statusText = (reportToFocus.status || '').toString().toLowerCase();
               const isCancelled = statusText.includes('cancelled') || statusText.includes('canceled');
               const isFireOut = statusText.includes('fire out');
+              const isInvalidated = reportToFocus.invalidated === true;
               
-              if (!isCancelled && !isFireOut && reportToFocus.latitude && reportToFocus.longitude) {
+              if (!isCancelled && !isFireOut && !isInvalidated && reportToFocus.latitude && reportToFocus.longitude) {
                 setReports(prev => {
                   const exists = prev.some(r => String(r.id) === String(reportToFocus.id));
                   return exists ? prev : [...prev, reportToFocus];
