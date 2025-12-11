@@ -88,10 +88,22 @@ export const findNearestStations = async (lat, lng, excludeStationId = null, lim
       return [];
     }
 
-    // Fetch all stations (removed account_status filter to get all stations)
-    const { data: stations, error } = await supabase
+    // Fetch all active stations (try with account_status first, fallback without it)
+    let { data: stations, error } = await supabase
       .from('station_users')
-      .select('id, station_name, lat, lng, address');
+      .select('id, station_name, lat, lng, address, status')
+      .eq('status', 'active');
+    
+    // If error or no results, try without account_status filter (mobile might not have this column)
+    if (error || !stations || stations.length === 0) {
+      console.log('⚠️ First query failed or empty, trying without account_status filter...');
+      const result = await supabase
+        .from('station_users')
+        .select('id, station_name, lat, lng, address, status')
+        .eq('status', 'active');
+      stations = result.data;
+      error = result.error;
+    }
 
     if (error) {
       console.error('❌ Error fetching stations:', error);

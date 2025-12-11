@@ -56,15 +56,24 @@ export default function AMap({ isSidebarOpen = false }) {
   const [assignmentNote, setAssignmentNote] = useState('');
   const [redirectTarget, setRedirectTarget] = useState('');
   const [redirectNote, setRedirectNote] = useState('');
+  
+  // Assignment tracking states (for displaying current assignments and backup stations)
+  const [currentAssignment, setCurrentAssignment] = useState(null);
+  const [allAssignedStations, setAllAssignedStations] = useState([]);
+  const [backupStationId, setBackupStationId] = useState(null);
+  const [showWaitingBackupModal, setShowWaitingBackupModal] = useState(false);
+  const [pendingBackupAssignment, setPendingBackupAssignment] = useState(null);
 
   // Dashboard states
   const [showDashboard, setShowDashboard] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [showWaitingApprovalModal, setShowWaitingApprovalModal] = useState(false);
   const [showRerouteModal, setShowRerouteModal] = useState(false);
+  const [isRerouteForForwarding, setIsRerouteForForwarding] = useState(false);
   const [nearestStations, setNearestStations] = useState([]);
   const [pendingAssignment, setPendingAssignment] = useState(null);
   const [selectedRerouteStation, setSelectedRerouteStation] = useState('');
+  const [rerouteNote, setRerouteNote] = useState('');
   const [stationActiveCounts, setStationActiveCounts] = useState({}); // {stationId: busyCount} for reroute modal
 
   // Drawer gesture is disabled for this screen via exported options below.
@@ -396,6 +405,51 @@ export default function AMap({ isSidebarOpen = false }) {
       supabase.removeChannel(channel);
     };
   }, [pendingAssignment, selectedReport]);
+
+  // Real-time listener for backup assignment responses
+  useEffect(() => {
+    if (!pendingBackupAssignment) return;
+
+    const channel = supabase
+      .channel(`backup-assignment-responses-${pendingBackupAssignment.reportId}`)
+      .on('postgres_changes', {
+        event: 'UPDATE',
+        schema: 'public',
+        table: 'report_assignments',
+        filter: `report_id=eq.${pendingBackupAssignment.reportId}`
+      }, async (payload) => {
+        const assignment = payload.new;
+        if (assignment.assignee_type === 'station' && 
+            String(assignment.assignee_id) === String(pendingBackupAssignment.stationId) &&
+            assignment.assignment_role === 'backup') {
+          
+          if (assignment.status === 'accepted') {
+            setShowWaitingBackupModal(false);
+            Alert.alert('✅ Backup Accepted', `${pendingBackupAssignment.stationName} has accepted the backup assignment.`);
+            setPendingBackupAssignment(null);
+            
+            // Reload assignments
+            if (selectedReport?.id) {
+              loadAssignmentInfo(selectedReport.id);
+            }
+          } else if (assignment.status === 'declined') {
+            setShowWaitingBackupModal(false);
+            Alert.alert('⚠️ Backup Declined', `${pendingBackupAssignment.stationName} has declined the backup assignment.`);
+            setPendingBackupAssignment(null);
+            
+            // Reload assignments
+            if (selectedReport?.id) {
+              loadAssignmentInfo(selectedReport.id);
+            }
+          }
+        }
+      })
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [pendingBackupAssignment, selectedReport, loadAssignmentInfo]);
 
   // Global listener for declined assignments (works even if admin closed waiting modal)
   useEffect(() => {
@@ -853,29 +907,14 @@ export default function AMap({ isSidebarOpen = false }) {
     }
   }, [nearestStations, showRerouteModal]);
 
-  // Handle reroute to selected station
+  // Handle reroute/forward to selected station
   const handleReroute = async () => {
     if (!selectedRerouteStation || !pendingAssignment) {
-      Alert.alert('Error', 'Please select a station to reroute to.');
+      Alert.alert('Error', `Please select a station to ${isRerouteForForwarding ? 'forward to' : 'reroute to'}.`);
       return;
     }
 
     try {
-      // Remove the declined assignment
-      await supabase
-        .from('report_assignments')
-        .delete()
-        .eq('report_id', pendingAssignment.reportId)
-        .eq('assignee_type', 'station')
-        .eq('assignee_id', pendingAssignment.stationId);
-
-      // Ensure any other existing assignments for this report are also removed to prevent conflicts
-      await supabase
-        .from('report_assignments')
-        .delete()
-        .eq('report_id', pendingAssignment.reportId)
-        .neq('assignee_id', pendingAssignment.stationId); // Delete any other assignments for this report
-
       // Get new station name
       const { data: newStationData } = await supabase
         .from('station_users')
@@ -885,71 +924,172 @@ export default function AMap({ isSidebarOpen = false }) {
 
       const newStationName = newStationData?.station_name || 'Station';
 
-      // Create new assignment to the selected station (always pending for reroutes)
-      // Use insert instead of upsert to ensure it triggers INSERT listener on station side
-      const payload = {
-        report_id: pendingAssignment.reportId,
-        assignee_type: 'station',
-        assignee_id: selectedRerouteStation,
-        assigned_at: new Date().toISOString(),
-        status: 'pending', // Always require approval for rerouted assignments
-        assignment_source: 'manual',
-        note: `Rerouted from ${pendingAssignment.stationName}`
-      };
+      if (isRerouteForForwarding) {
+        // Forwarding: Replace the current primary assignment with the new one
+        // First, delete the current primary assignment
+        await supabase
+          .from('report_assignments')
+          .delete()
+          .eq('report_id', pendingAssignment.reportId)
+          .eq('assignee_type', 'station')
+          .eq('assignee_id', pendingAssignment.stationId)
+          .eq('assignment_role', 'primary');
 
-      const { error } = await supabase
-        .from('report_assignments')
-        .insert(payload);
-
-      if (error) {
-        // Check if error is due to missing columns (migration not run)
-        if (error.message && (error.message.includes('column') && error.message.includes('does not exist'))) {
-          Alert.alert('Database Migration Required', 'Please run the migration SQL file (assignment-status-migration.sql) in your Supabase SQL Editor first.');
-          return;
-        }
-        throw error;
-      }
-
-      // Update pendingAssignment to track the new station
-      setPendingAssignment({
-        reportId: pendingAssignment.reportId,
-        stationId: selectedRerouteStation,
-        stationName: newStationName
-      });
-
-      // Show waiting modal
-      setShowRerouteModal(false);
-      setShowWaitingApprovalModal(true);
-      setSelectedRerouteStation('');
-      setStationActiveCounts({});
-
-      // Create notification for new station
-      if (selectedReport) {
-        const locationInfo = selectedReport.address || selectedReport.geotag_location || 'Location unavailable';
-        const reporterName = selectedReport.reporter_name || selectedReport.reporter || 'Unknown Reporter';
-        const title = `🚨 Fire Report Rerouted to Your Station - Action Required`;
-        const message = `Command Center is rerouting a fire report to your station.\n\nLocation: ${locationInfo}\nReporter: ${reporterName}\nPrevious station: ${pendingAssignment.stationName}\n\nWill you accept this assignment?`;
+        // Keep backup assignments, just replace the primary
+        const busyCheck = await checkStationIsBusy(selectedRerouteStation);
         
-        const { error: notifError } = await supabase
-          .from('notifications')
-          .insert({
-            user_id: selectedRerouteStation,
-            user_type: 'station',
-            type: 'assignment',
-            related_report_id: String(pendingAssignment.reportId),
-            title: title,
-            message: message,
-            priority: 'urgent',
-            is_read: false
-          });
+        const payload = {
+          report_id: pendingAssignment.reportId,
+          assignee_type: 'station',
+          assignee_id: selectedRerouteStation,
+          assigned_at: new Date().toISOString(),
+          status: busyCheck.isBusy ? 'pending' : 'accepted',
+          assignment_source: 'manual',
+          assignment_role: 'primary',
+          note: rerouteNote && rerouteNote.trim() 
+            ? `Forwarded from ${pendingAssignment.stationName}. ${rerouteNote.trim()}`
+            : `Forwarded from ${pendingAssignment.stationName}`
+        };
 
-        if (notifError) {
-          console.error('❌ Error creating reroute notification:', notifError);
+        const { error } = await supabase
+          .from('report_assignments')
+          .insert(payload);
+
+        if (error) {
+          if (error.message && (error.message.includes('column') && error.message.includes('does not exist'))) {
+            Alert.alert('Database Migration Required', 'Please run the migration SQL file in your Supabase SQL Editor first.');
+            return;
+          }
+          throw error;
+        }
+
+        // Update pendingAssignment to track the new station
+        setPendingAssignment({
+          reportId: pendingAssignment.reportId,
+          stationId: selectedRerouteStation,
+          stationName: newStationName
+        });
+
+        if (busyCheck.isBusy) {
+          // Show waiting modal
+          setShowRerouteModal(false);
+          setShowWaitingApprovalModal(true);
+        } else {
+          Alert.alert('✅ Forwarded', `Report successfully forwarded to ${newStationName}.`);
+          setShowRerouteModal(false);
+        }
+
+        // Create notification for new station
+        if (selectedReport) {
+          const locationInfo = selectedReport.address || selectedReport.geotag_location || 'Location unavailable';
+          const reporterName = selectedReport.reporter_name || selectedReport.reporter || 'Unknown Reporter';
+          const title = busyCheck.isBusy 
+            ? `🚨 Fire Report Forwarded to Your Station - Action Required`
+            : `🚨 Fire Report Forwarded to Your Station`;
+          const message = busyCheck.isBusy
+            ? `Command Center is forwarding a fire report to your station.\n\nLocation: ${locationInfo}\nReporter: ${reporterName}\nPrevious station: ${pendingAssignment.stationName}\n\nWill you accept this assignment?`
+            : `A fire report has been forwarded to your station.\n\nLocation: ${locationInfo}\nReporter: ${reporterName}\nPrevious station: ${pendingAssignment.stationName}`;
+          
+          await supabase
+            .from('notifications')
+            .insert({
+              user_id: selectedRerouteStation,
+              user_type: 'station',
+              type: 'assignment',
+              related_report_id: String(pendingAssignment.reportId),
+              title: title,
+              message: message,
+              priority: 'urgent',
+              is_read: false
+            });
+        }
+
+        // Reload assignment info
+        if (selectedReport?.id) {
+          loadAssignmentInfo(selectedReport.id);
+        }
+      } else {
+        // Rerouting: Remove the declined assignment and create new one
+        await supabase
+          .from('report_assignments')
+          .delete()
+          .eq('report_id', pendingAssignment.reportId)
+          .eq('assignee_type', 'station')
+          .eq('assignee_id', pendingAssignment.stationId);
+
+        // Ensure any other existing assignments for this report are also removed to prevent conflicts
+        await supabase
+          .from('report_assignments')
+          .delete()
+          .eq('report_id', pendingAssignment.reportId)
+          .neq('assignee_id', pendingAssignment.stationId);
+
+        // Create new assignment to the selected station (always pending for reroutes)
+        const payload = {
+          report_id: pendingAssignment.reportId,
+          assignee_type: 'station',
+          assignee_id: selectedRerouteStation,
+          assigned_at: new Date().toISOString(),
+          status: 'pending', // Always require approval for rerouted assignments
+          assignment_source: 'manual',
+          assignment_role: 'primary',
+          note: rerouteNote && rerouteNote.trim() 
+            ? `Rerouted from ${pendingAssignment.stationName}. ${rerouteNote.trim()}`
+            : `Rerouted from ${pendingAssignment.stationName}`
+        };
+
+        const { error } = await supabase
+          .from('report_assignments')
+          .insert(payload);
+
+        if (error) {
+          if (error.message && (error.message.includes('column') && error.message.includes('does not exist'))) {
+            Alert.alert('Database Migration Required', 'Please run the migration SQL file in your Supabase SQL Editor first.');
+            return;
+          }
+          throw error;
+        }
+
+        // Update pendingAssignment to track the new station
+        setPendingAssignment({
+          reportId: pendingAssignment.reportId,
+          stationId: selectedRerouteStation,
+          stationName: newStationName
+        });
+
+        // Show waiting modal
+        setShowRerouteModal(false);
+        setShowWaitingApprovalModal(true);
+
+        // Create notification for new station
+        if (selectedReport) {
+          const locationInfo = selectedReport.address || selectedReport.geotag_location || 'Location unavailable';
+          const reporterName = selectedReport.reporter_name || selectedReport.reporter || 'Unknown Reporter';
+          const title = `🚨 Fire Report Rerouted to Your Station - Action Required`;
+          const message = `Command Center is rerouting a fire report to your station.\n\nLocation: ${locationInfo}\nReporter: ${reporterName}\nPrevious station: ${pendingAssignment.stationName}\n\nWill you accept this assignment?`;
+          
+          await supabase
+            .from('notifications')
+            .insert({
+              user_id: selectedRerouteStation,
+              user_type: 'station',
+              type: 'assignment',
+              related_report_id: String(pendingAssignment.reportId),
+              title: title,
+              message: message,
+              priority: 'urgent',
+              is_read: false
+            });
         }
       }
+
+      setSelectedRerouteStation('');
+      setRerouteNote('');
+      setStationActiveCounts({});
+      setIsRerouteForForwarding(false);
     } catch (e) {
-      console.error('❌ Reroute failed:', e);
-      Alert.alert('Error', 'Failed to reroute report. Check console.');
+      console.error(`❌ ${isRerouteForForwarding ? 'Forward' : 'Reroute'} failed:`, e);
+      Alert.alert('Error', `Failed to ${isRerouteForForwarding ? 'forward' : 'reroute'} report. Check console.`);
     }
   };
 
@@ -1108,6 +1248,7 @@ export default function AMap({ isSidebarOpen = false }) {
             assigned_at: new Date().toISOString(),
             status: 'pending',
             assignment_source: 'manual',
+            assignment_role: assigneeType === 'station' ? 'primary' : null,
             note: assignmentNote && assignmentNote.trim() ? assignmentNote.trim() : null
           };
           
@@ -1172,6 +1313,7 @@ export default function AMap({ isSidebarOpen = false }) {
           assigned_at: new Date().toISOString(),
           status: 'accepted',
           assignment_source: 'manual',
+          assignment_role: assigneeType === 'station' ? 'primary' : null,
           note: assignmentNote && assignmentNote.trim() ? assignmentNote.trim() : null
         };
         
@@ -1212,6 +1354,11 @@ export default function AMap({ isSidebarOpen = false }) {
 
         setAssignmentNote('');
         Alert.alert('✅ Assignment Successful', `Assignment successfully assigned to ${stationName}.`);
+        
+        // Reload assignment info
+        if (selectedReport?.id) {
+          loadAssignmentInfo(selectedReport.id);
+        }
         return;
       }
 
@@ -1232,6 +1379,11 @@ export default function AMap({ isSidebarOpen = false }) {
       if (error) throw error;
 
       setAssignmentNote('');
+      
+      // Reload assignment info
+      if (selectedReport?.id) {
+        loadAssignmentInfo(selectedReport.id);
+      }
     } catch (e) {
       console.error('Assign failed (mobile):', e);
       Alert.alert('Error', 'Failed to assign report.');
@@ -1256,6 +1408,241 @@ export default function AMap({ isSidebarOpen = false }) {
     } catch (e) {
       console.error('Redirect failed (mobile):', e);
       Alert.alert('Error', 'Failed to forward report.');
+    }
+  };
+
+  // Load assignment info (current assignment and all assigned stations including backups)
+  const loadAssignmentInfo = useCallback(async (reportId) => {
+    try {
+      setCurrentAssignment(null);
+      setAllAssignedStations([]);
+
+      if (!reportId) return;
+
+      // Fetch ALL station assignments (primary + backups)
+      const { data: assignments, error } = await supabase
+        .from('report_assignments')
+        .select('assignee_id, status, assignment_role, assigned_at, note')
+        .eq('report_id', reportId)
+        .eq('assignee_type', 'station')
+        .in('status', ['accepted', 'pending'])
+        .order('assignment_role', { ascending: true }) // primary first
+        .order('assigned_at', { ascending: false });
+
+      if (error) {
+        if (error.code !== 'PGRST116') {
+          console.error('Error fetching station assignments:', error);
+        }
+        return;
+      }
+
+      if (assignments && assignments.length > 0) {
+        // Fetch all station names
+        const stationIds = assignments.map(a => a.assignee_id);
+        const { data: stationsData } = await supabase
+          .from('station_users')
+          .select('id, station_name')
+          .in('id', stationIds);
+
+        const stationMap = {};
+        (stationsData || []).forEach(s => {
+          stationMap[s.id] = s.station_name;
+        });
+
+        const allStations = assignments.map(a => ({
+          id: a.assignee_id,
+          name: stationMap[a.assignee_id] || 'Unknown Station',
+          status: a.status,
+          role: a.assignment_role || 'primary',
+          assigned_at: a.assigned_at,
+          note: a.note
+        }));
+
+        setAllAssignedStations(allStations);
+
+        // Set primary station as current assignment
+        const primary = allStations.find(s => s.role === 'primary');
+        if (primary) {
+          setCurrentAssignment({
+            id: primary.id,
+            name: primary.name,
+            status: primary.status,
+            assigned_at: primary.assigned_at,
+            note: primary.note
+          });
+        } else if (allStations.length > 0) {
+          // Fallback to first station if no primary found
+          setCurrentAssignment({
+            id: allStations[0].id,
+            name: allStations[0].name,
+            status: allStations[0].status,
+            assigned_at: allStations[0].assigned_at,
+            note: allStations[0].note
+          });
+        }
+      }
+    } catch (e) {
+      console.error('Failed loading assignment info:', e);
+      setCurrentAssignment(null);
+      setAllAssignedStations([]);
+    }
+  }, []);
+
+  // Load assignment info when a report is selected
+  useEffect(() => {
+    if (selectedReport?.id) {
+      loadAssignmentInfo(selectedReport.id);
+      setBackupStationId(null); // Reset backup station selection when report changes
+    } else {
+      setCurrentAssignment(null);
+      setAllAssignedStations([]);
+      setBackupStationId(null);
+    }
+  }, [selectedReport, loadAssignmentInfo]);
+
+  // Handle backup station assignment (for alarm level 2+ incidents)
+  const handleAssignBackup = async () => {
+    try {
+      if (!selectedReport) {
+        Alert.alert('Error', 'Select a fire report first.');
+        return;
+      }
+      if (!backupStationId) {
+        Alert.alert('Error', 'Choose a backup station.');
+        return;
+      }
+
+      // Validate alarm level - must be 2 or higher
+      const alarmLevel = resolveAlarmLevel(selectedReport);
+      const alarmLevelCleaned = alarmLevel || '';
+      const alarmLevelLower = alarmLevelCleaned.toLowerCase();
+      const isAlarmLevel2Plus = alarmLevelCleaned && (
+        alarmLevelLower.includes('second alarm') ||
+        alarmLevelLower.includes('2nd alarm') ||
+        alarmLevelLower.includes('third alarm') ||
+        alarmLevelLower.includes('3rd alarm') ||
+        alarmLevelLower.includes('fourth alarm') ||
+        alarmLevelLower.includes('4th alarm') ||
+        alarmLevelLower.includes('fifth alarm') ||
+        alarmLevelLower.includes('5th alarm') ||
+        alarmLevelLower.includes('task force alpha') ||
+        alarmLevelLower.includes('task force bravo') ||
+        alarmLevelLower.includes('task force charlie') ||
+        alarmLevelLower.includes('task force delta') ||
+        alarmLevelLower.includes('general alarm')
+      );
+
+      if (!isAlarmLevel2Plus) {
+        Alert.alert('Cannot Assign Backup', `Backup stations can only be assigned to incidents with Alarm Level 2 or higher.\n\nCurrent alarm level: ${alarmLevelCleaned}`);
+        return;
+      }
+
+      // Check if this station is already assigned with active status
+      const { data: existingAssignments, error: checkError } = await supabase
+        .from('report_assignments')
+        .select('assignment_role, status')
+        .eq('report_id', selectedReport.id)
+        .eq('assignee_type', 'station')
+        .eq('assignee_id', backupStationId)
+        .in('status', ['pending', 'accepted']);
+
+      if (checkError) {
+        console.error('Error checking existing backup assignment:', checkError);
+        Alert.alert('Error', 'Failed to check station assignment status. Please try again.');
+        return;
+      }
+
+      if (existingAssignments && existingAssignments.length > 0) {
+        const activeAssignment = existingAssignments[0];
+        const role = activeAssignment.assignment_role === 'primary' ? 'primary station' : 'backup station';
+        Alert.alert('Already Assigned', `This station is already assigned as ${role} for this incident.`);
+        return;
+      }
+
+      // Delete old declined assignments for this station
+      await supabase
+        .from('report_assignments')
+        .delete()
+        .eq('report_id', selectedReport.id)
+        .eq('assignee_type', 'station')
+        .eq('assignee_id', backupStationId)
+        .neq('status', 'pending')
+        .neq('status', 'accepted');
+
+      // Check if station is busy
+      const busyCheck = await checkStationIsBusy(backupStationId);
+      
+      const backupAssignment = {
+        report_id: selectedReport.id,
+        assignee_type: 'station',
+        assignee_id: backupStationId,
+        assigned_at: new Date().toISOString(),
+        status: busyCheck.isBusy ? 'pending' : 'accepted',
+        assignment_source: 'manual',
+        assignment_role: 'backup',
+        note: `Backup for ${alarmLevelCleaned} incident`
+      };
+
+      const { error } = await supabase
+        .from('report_assignments')
+        .upsert(backupAssignment, { 
+          onConflict: 'report_id,assignee_type,assignee_id',
+          ignoreDuplicates: false 
+        });
+
+      if (error) {
+        console.error('Backup assignment error:', error);
+        Alert.alert('Error', 'Failed to assign backup station: ' + error.message);
+        return;
+      }
+
+      // Get station name
+      const { data: stationData } = await supabase
+        .from('station_users')
+        .select('station_name')
+        .eq('id', backupStationId)
+        .single();
+
+      const stationName = stationData?.station_name || 'Station';
+
+      if (busyCheck.isBusy) {
+        // Show waiting modal
+        setPendingBackupAssignment({
+          reportId: selectedReport.id,
+          stationId: backupStationId,
+          stationName
+        });
+        setShowWaitingBackupModal(true);
+
+        // Send notification
+        const locationInfo = selectedReport.address || selectedReport.geotag_location || 'Location unavailable';
+        const reporterName = selectedReport.reporter_name || selectedReport.reporter || 'Unknown Reporter';
+        
+        await supabase
+          .from('notifications')
+          .insert({
+            user_id: backupStationId,
+            user_type: 'station',
+            type: 'assignment',
+            related_report_id: String(selectedReport.id),
+            title: `🚨 Backup Assistance Request - ${alarmLevelCleaned}`,
+            message: `Command Center is requesting your station as BACKUP for a ${alarmLevelCleaned} incident.\n\nLocation: ${locationInfo}\nReporter: ${reporterName}\n\nNote: You will provide support but cannot change the fire status. Only the primary station can update the incident status.\n\nWill you accept this backup assignment?`,
+            priority: 'urgent',
+            is_read: false
+          });
+      } else {
+        Alert.alert('Success', `✅ ${stationName} has been assigned as backup station.`);
+      }
+
+      // Reload assignments
+      if (selectedReport?.id) {
+        loadAssignmentInfo(selectedReport.id);
+      }
+
+      setBackupStationId(null);
+    } catch (error) {
+      console.error('Error assigning backup:', error);
+      Alert.alert('Error', 'Failed to assign backup station');
     }
   };
 
@@ -1639,27 +2026,57 @@ export default function AMap({ isSidebarOpen = false }) {
                   {selectedReport.prediction ? (
                     <View style={styles.modalRow}>
                       <Text style={styles.modalLabel}>AI Fire Analysis:</Text>
-                      <View style={[styles.badge, { backgroundColor: '#fee2e2' }]}>
-                        <Text style={[styles.badgeText, { color: '#991b1b' }]}>{formatPredictionBadge(selectedReport)}</Text>
+                      <View style={{
+                        paddingHorizontal: 12,
+                        paddingVertical: 4,
+                        borderRadius: 9999,
+                        backgroundColor: selectedReport.prediction === 'Fire' ? '#dc2626' : '#f97316'
+                      }}>
+                        <Text style={{
+                          fontSize: 12,
+                          fontWeight: '700',
+                          color: '#ffffff'
+                        }}>
+                          {selectedReport.prediction}{selectedReport.confidence ? ` (${selectedReport.confidence})` : ''}
+                        </Text>
                       </View>
                     </View>
                   ) : null}
 
-                  {/* AI Smoke Analysis */}
-                  {selectedReport.smoke_intensity ? (
+                  {/* Smoke Analysis */}
+                  {(selectedReport.smoke_detection || selectedReport.smoke_confidence) && (
                     <View style={styles.modalRow}>
-                      <Text style={styles.modalLabel}>AI Smoke Analysis:</Text>
-                      <Text style={styles.modalValue}>{selectedReport.smoke_intensity}{selectedReport.smoke_confidence ? ` ${selectedReport.smoke_confidence}` : ''}</Text>
+                      <Text style={styles.modalLabel}>Smoke Analysis:</Text>
+                      <View style={{
+                        paddingHorizontal: 12,
+                        paddingVertical: 4,
+                        borderRadius: 9999,
+                        backgroundColor: '#e0f2fe',
+                        borderWidth: 1,
+                        borderColor: '#bae6fd'
+                      }}>
+                        <Text style={{
+                          fontSize: 12,
+                          fontWeight: '700',
+                          color: '#0f172a'
+                        }}>
+                          {selectedReport.smoke_detection || 'Smoke'}
+                          {selectedReport.smoke_confidence ? ` (${selectedReport.smoke_confidence})` : ''}
+                        </Text>
+                      </View>
                     </View>
-                  ) : null}
+                  )}
 
-                  {/* Structure Analysis */}
-                  {selectedReport.structure ? (
+                  {/* AI Structure Analysis */}
+                  {selectedReport.structure && (
                     <View style={styles.modalRow}>
-                      <Text style={styles.modalLabel}>Structure Analysis:</Text>
-                      <Text style={styles.modalValue}>{selectedReport.structure}</Text>
+                      <Text style={styles.modalLabel}>AI Structure Analysis:</Text>
+                      <Text style={styles.modalValue}>
+                        {selectedReport.structure}
+                        {selectedReport.structure_confidence ? ` (${selectedReport.structure_confidence})` : ''}
+                      </Text>
                     </View>
-                  ) : null}
+                  )}
 
                   {/* Estimated Structures Affected */}
                   {selectedReport.number_of_structures_on_fire ? (
@@ -1712,8 +2129,114 @@ export default function AMap({ isSidebarOpen = false }) {
                     </View>
                   )}
 
-                  {/* Assignment controls */}
-                  <View style={[styles.modalSection, { marginTop: 12 }]}> 
+                  {/* Current Assignment Display */}
+                  {currentAssignment && (
+                    <View style={[styles.modalSection, { 
+                      marginTop: 12, 
+                      backgroundColor: currentAssignment.status === 'pending' ? '#fef3c7' : '#dbeafe',
+                      borderLeftWidth: 4,
+                      borderLeftColor: currentAssignment.status === 'pending' ? '#f59e0b' : '#2563eb',
+                      borderRadius: 8,
+                      padding: 12
+                    }]}>
+                      <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 8 }}>
+                        <Text style={{ fontSize: 18, marginRight: 8 }}>
+                          {currentAssignment.status === 'pending' ? '⏳' : '📍'}
+                        </Text>
+                        <Text style={{ 
+                          fontSize: 14, 
+                          fontWeight: '700',
+                          color: currentAssignment.status === 'pending' ? '#92400e' : '#1e40af'
+                        }}>
+                          {currentAssignment.status === 'pending' 
+                            ? 'Awaiting Station Confirmation' 
+                            : 'Currently Assigned To:'}
+                        </Text>
+                      </View>
+                      <Text style={{ 
+                        fontSize: 16, 
+                        fontWeight: '600',
+                        color: currentAssignment.status === 'pending' ? '#78350f' : '#1e3a8a',
+                        marginBottom: 4
+                      }}>
+                        {currentAssignment.name}
+                      </Text>
+                      <Text style={{ 
+                        fontSize: 12,
+                        color: currentAssignment.status === 'pending' ? '#92400e' : '#1e40af'
+                      }}>
+                        {currentAssignment.status === 'pending' 
+                          ? 'Waiting for station to accept or decline...' 
+                          : `Assigned: ${formatDate(currentAssignment.assigned_at)}`}
+                      </Text>
+                      {currentAssignment.note && (
+                        <Text style={{ 
+                          fontSize: 12,
+                          fontStyle: 'italic',
+                          color: currentAssignment.status === 'pending' ? '#92400e' : '#1e40af',
+                          marginTop: 4
+                        }}>
+                          Note: {currentAssignment.note}
+                        </Text>
+                      )}
+                    </View>
+                  )}
+
+                  {/* All Assigned Stations Display (Primary + Backups) */}
+                  {allAssignedStations.length > 1 && (
+                    <View style={[styles.modalSection, { 
+                      marginTop: 12,
+                      backgroundColor: '#f0fdf4',
+                      borderLeftWidth: 4,
+                      borderLeftColor: '#22c55e',
+                      borderRadius: 8,
+                      padding: 12
+                    }]}>
+                      <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 8 }}>
+                        <Text style={{ fontSize: 18, marginRight: 8 }}>🚒</Text>
+                        <Text style={{ fontSize: 14, fontWeight: '700', color: '#166534' }}>
+                          All Assigned Stations:
+                        </Text>
+                      </View>
+                      {allAssignedStations.map((station, index) => (
+                        <View key={index} style={{ 
+                          marginTop: index > 0 ? 8 : 0,
+                          paddingTop: index > 0 ? 8 : 0,
+                          borderTopWidth: index > 0 ? 1 : 0,
+                          borderTopColor: '#bbf7d0'
+                        }}>
+                          <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <Text style={{ fontSize: 14, fontWeight: '600', color: '#15803d' }}>
+                              {station.name}
+                            </Text>
+                            <View style={{ 
+                              backgroundColor: station.role === 'primary' ? '#3b82f6' : '#a855f7',
+                              paddingHorizontal: 8,
+                              paddingVertical: 4,
+                              borderRadius: 12
+                            }}>
+                              <Text style={{ fontSize: 10, color: 'white', fontWeight: '700' }}>
+                                {station.role === 'primary' ? '⭐ PRIMARY' : '🔧 BACKUP'}
+                              </Text>
+                            </View>
+                          </View>
+                          {station.note && (
+                            <Text style={{ fontSize: 12, color: '#166534', fontStyle: 'italic', marginTop: 4 }}>
+                              Note: {station.note}
+                            </Text>
+                          )}
+                          <Text style={{ fontSize: 12, color: '#16a34a', marginTop: 4 }}>
+                            Assigned: {formatDate(station.assigned_at)}
+                            {station.status === 'pending' && ' • ⏳ Pending approval'}
+                          </Text>
+                        </View>
+                      ))}
+                    </View>
+                  )}
+
+                  {/* Assignment controls - Only show if no station is assigned */}
+                  {!currentAssignment && (
+                    <View style={[styles.modalSection, { marginTop: 12 }]}> 
                     <Text style={styles.modalLabel}>Assignment</Text>
                     <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 6 }}>
                       <TouchableOpacity onPress={() => setAssigneeType('station')} style={{ padding: 8, backgroundColor: assigneeType==='station'?'#ef4444':'#e5e7eb', borderRadius: 6, marginRight: 8 }}>
@@ -1744,34 +2267,258 @@ export default function AMap({ isSidebarOpen = false }) {
                         />
                       </View>
                       <TouchableOpacity onPress={handleAssign} style={{ marginTop: 8, paddingVertical: 10, backgroundColor: '#2563eb', borderRadius: 8, alignItems: 'center' }}>
-                        <Text style={{ color: 'white', fontWeight: 'bold' }}>Assign</Text>
+                        <Text style={{ color: 'white', fontWeight: 'bold' }}>Assign Station</Text>
                       </TouchableOpacity>
                     </View>
                   </View>
+                  )}
 
-                  {/* Redirect controls */}
-                  <View style={[styles.modalSection, { marginTop: 12 }]}> 
-                    <Text style={styles.modalLabel}>Redirect / Forward</Text>
-                    <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-                      {(stations||[]).map(s => (
-                        <TouchableOpacity key={`rt-${s.id}`} onPress={() => setRedirectTarget(`station:${s.id}`)} style={{ paddingVertical: 6, paddingHorizontal: 10, backgroundColor: redirectTarget===`station:${s.id}`?'#f59e0b':'#f3f4f6', borderRadius: 16, marginRight: 8 }}>
-                          <Text style={{ color: redirectTarget===`station:${s.id}`?'white':'#111827' }}>{s.station_name || 'Station'}</Text>
+                  {/* Forward to Station - Only show if a station is already assigned */}
+                  {currentAssignment && (
+                    <View style={[styles.modalSection, { marginTop: 12 }]}>
+                      <Text style={styles.modalLabel}>Forward to Station</Text>
+                      <Text style={{ fontSize: 12, color: '#6b7280', marginBottom: 8 }}>
+                        Forward this report to another station.
+                      </Text>
+                      <TouchableOpacity 
+                        onPress={async () => {
+                          // Open forwarding modal
+                          if (!selectedReport) return;
+                          
+                          setIsRerouteForForwarding(true);
+                          setSelectedRerouteStation('');
+                          setRerouteNote('');
+                          
+                          // Set pendingAssignment for forwarding context
+                          const pendingAssign = {
+                            reportId: selectedReport.id,
+                            stationId: currentAssignment.id,
+                            stationName: currentAssignment.name
+                          };
+                          setPendingAssignment(pendingAssign);
+                          
+                          // COPY EXACT LOGIC FROM WEB ADMIN (lines 2939-3033)
+                          try {
+                            const lat = parseFloat(selectedReport.latitude);
+                            const lng = parseFloat(selectedReport.longitude);
+                            
+                            console.log('🔍 Forwarding: Fetching stations for report at:', lat, lng);
+                            console.log('🔍 Forwarding: Excluding station:', currentAssignment.id);
+                            
+                            if (!isNaN(lat) && !isNaN(lng)) {
+                              // Find nearest stations to the incident location (active only)
+                              const stations = await findNearestStations(
+                                lat,
+                                lng,
+                                currentAssignment.id, // Exclude current station
+                                10, // Get more stations
+                                { lat, lng } // Incident location for distance calculation
+                              );
+                              
+                              console.log('🔍 Forwarding: findNearestStations returned:', stations?.length || 0, 'stations');
+                              
+                              if (stations && stations.length > 0) {
+                                setNearestStations(stations);
+                              } else {
+                                console.log('⚠️ Forwarding: findNearestStations returned empty, trying fallback...');
+                                // Fallback: directly query all stations (less restrictive)
+                                const { data: allStationsData, error: allStationsError } = await supabase
+                                  .from('station_users')
+                                  .select('id, station_name, lat, lng, status')
+                                  .eq('status', 'active')
+                                  .neq('id', currentAssignment.id);
+                                
+                                if (allStationsError) {
+                                  console.error('❌ Error fetching all stations:', allStationsError);
+                                  setNearestStations([]);
+                                } else if (allStationsData && allStationsData.length > 0) {
+                                  console.log('✅ Forwarding: Found', allStationsData.length, 'stations in fallback');
+                                  const stationsWithDistance = allStationsData
+                                    .filter(station => {
+                                      const stationLat = parseFloat(station.lat);
+                                      const stationLng = parseFloat(station.lng);
+                                      return !isNaN(stationLat) && !isNaN(stationLng);
+                                    })
+                                    .map(station => {
+                                      const stationLat = parseFloat(station.lat);
+                                      const stationLng = parseFloat(station.lng);
+                                      let distanceToIncident = null;
+                                      
+                                      if (!isNaN(lat) && !isNaN(lng)) {
+                                        distanceToIncident = calculateDistance(lat, lng, stationLat, stationLng);
+                                      }
+                                      
+                                      return {
+                                        ...station,
+                                        distanceToIncident: distanceToIncident,
+                                        distanceToIncidentKm: distanceToIncident ? (distanceToIncident / 1000).toFixed(2) : null
+                                      };
+                                    })
+                                    .sort((a, b) => {
+                                      if (a.distanceToIncident === null || a.distanceToIncident === Infinity) return 1;
+                                      if (b.distanceToIncident === null || b.distanceToIncident === Infinity) return -1;
+                                      return a.distanceToIncident - b.distanceToIncident;
+                                    });
+                                  
+                                  setNearestStations(stationsWithDistance);
+                                } else {
+                                  console.warn('⚠️ Forwarding: No stations found in fallback');
+                                  setNearestStations([]);
+                                }
+                              }
+                            } else {
+                              // No coordinates, get all stations
+                              const { data: allStationsData, error: allStationsError } = await supabase
+                                .from('station_users')
+                                .select('id, station_name, lat, lng')
+                                .neq('id', currentAssignment.id);
+                              
+                              if (allStationsError) {
+                                console.error('❌ Error fetching all stations (no coords):', allStationsError);
+                              }
+                              
+                              if (allStationsData && allStationsData.length > 0) {
+                                setNearestStations(allStationsData.map(s => ({
+                                  ...s,
+                                  distanceToIncidentKm: null
+                                })));
+                              } else {
+                                setNearestStations([]);
+                              }
+                            }
+                          } catch (error) {
+                            console.error('Error fetching stations for forwarding:', error);
+                            setNearestStations([]);
+                          }
+                          
+                          setShowRerouteModal(true);
+                        }}
+                        style={{ marginTop: 8, paddingVertical: 10, backgroundColor: '#f59e0b', borderRadius: 8, alignItems: 'center' }}
+                      >
+                        <Text style={{ color: 'white', fontWeight: 'bold' }}>Forward Station</Text>
+                      </TouchableOpacity>
+                    </View>
+                  )}
+
+                  {/* Backup Station Assignment - Only show if alarm level 2+ and primary station exists */}
+                  {currentAssignment && (() => {
+                    const alarmLevel = resolveAlarmLevel(selectedReport);
+                    const alarmLevelCleaned = alarmLevel || '';
+                    const alarmLevelLower = alarmLevelCleaned.toLowerCase();
+                    const isAlarmLevel2Plus = alarmLevelCleaned && (
+                      alarmLevelLower.includes('second alarm') ||
+                      alarmLevelLower.includes('2nd alarm') ||
+                      alarmLevelLower.includes('third alarm') ||
+                      alarmLevelLower.includes('3rd alarm') ||
+                      alarmLevelLower.includes('fourth alarm') ||
+                      alarmLevelLower.includes('4th alarm') ||
+                      alarmLevelLower.includes('fifth alarm') ||
+                      alarmLevelLower.includes('5th alarm') ||
+                      alarmLevelLower.includes('task force alpha') ||
+                      alarmLevelLower.includes('task force bravo') ||
+                      alarmLevelLower.includes('task force charlie') ||
+                      alarmLevelLower.includes('task force delta') ||
+                      alarmLevelLower.includes('general alarm')
+                    );
+
+                    return isAlarmLevel2Plus && (
+                      <View style={[styles.modalSection, { 
+                        marginTop: 12,
+                        backgroundColor: '#faf5ff',
+                        borderLeftWidth: 4,
+                        borderLeftColor: '#a855f7',
+                        borderRadius: 8,
+                        padding: 12
+                      }]}>
+                        <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 8 }}>
+                          <Text style={{ fontSize: 20, marginRight: 8 }}>🚨</Text>
+                          <Text style={{ fontSize: 16, fontWeight: '700', color: '#7e22ce' }}>
+                            {alarmLevelCleaned} - Assign Backup Station
+                          </Text>
+                        </View>
+                        <Text style={{ fontSize: 12, color: '#6b21a8', marginBottom: 12 }}>
+                          This incident requires backup support. Backup stations can view and support but cannot change the fire status.
+                        </Text>
+
+                        {/* Show all assigned stations */}
+                        {allAssignedStations.length > 0 && (
+                          <View style={{ backgroundColor: '#f3e8ff', borderRadius: 6, padding: 10, marginBottom: 12 }}>
+                            <Text style={{ fontSize: 14, fontWeight: '600', color: '#7e22ce', marginBottom: 6 }}>
+                              All Assigned Stations:
+                            </Text>
+                            {allAssignedStations.map((station, idx) => (
+                              <View key={idx} style={{ 
+                                flexDirection: 'row', 
+                                justifyContent: 'space-between', 
+                                marginTop: idx > 0 ? 8 : 0, 
+                                paddingTop: idx > 0 ? 8 : 0, 
+                                borderTopWidth: idx > 0 ? 1 : 0, 
+                                borderTopColor: '#e9d5ff' 
+                              }}>
+                                <Text style={{ fontSize: 14, color: '#581c87', fontWeight: '600' }}>
+                                  {station.name}
+                                </Text>
+                                <View style={{ 
+                                  backgroundColor: station.role === 'primary' ? '#3b82f6' : '#a855f7', 
+                                  paddingHorizontal: 8, 
+                                  paddingVertical: 2, 
+                                  borderRadius: 4 
+                                }}>
+                                  <Text style={{ fontSize: 10, color: 'white', fontWeight: '700' }}>
+                                    {station.role === 'primary' ? 'PRIMARY' : 'BACKUP'}
+                                  </Text>
+                                </View>
+                              </View>
+                            ))}
+                          </View>
+                        )}
+
+                        <View style={{ borderWidth: 1, borderColor: '#d8b4fe', borderRadius: 8, overflow: 'hidden', marginBottom: 10 }}>
+                          <ScrollView 
+                            style={{ maxHeight: 120 }} 
+                            nestedScrollEnabled={true}
+                            showsVerticalScrollIndicator={true}
+                          >
+                            {(stations || [])
+                              .filter(s => !allAssignedStations.some(assigned => assigned.id === s.id))
+                              .map((s) => (
+                              <TouchableOpacity
+                                key={s.id}
+                                onPress={() => setBackupStationId(s.id)}
+                                style={{ 
+                                  paddingVertical: 10, 
+                                  paddingHorizontal: 12, 
+                                  backgroundColor: backupStationId === s.id ? '#e9d5ff' : 'white', 
+                                  borderBottomWidth: 1, 
+                                  borderBottomColor: '#e9d5ff' 
+                                }}
+                              >
+                                <Text style={{ color: '#581c87', fontWeight: backupStationId === s.id ? '700' : '500' }}>
+                                  {s.station_name || 'Station'}
+                                </Text>
+                              </TouchableOpacity>
+                            ))}
+                          </ScrollView>
+                        </View>
+
+                        <TouchableOpacity
+                          onPress={handleAssignBackup}
+                          disabled={!backupStationId}
+                          style={{ 
+                            backgroundColor: !backupStationId ? '#9ca3af' : '#a855f7', 
+                            paddingVertical: 10, 
+                            borderRadius: 8, 
+                            alignItems: 'center' 
+                          }}
+                        >
+                          <Text style={{ color: 'white', fontWeight: '700' }}>
+                            Assign Backup Station
+                          </Text>
                         </TouchableOpacity>
-                      ))}
-                      <TouchableOpacity onPress={() => setRedirectTarget('agency:police')} style={{ paddingVertical: 6, paddingHorizontal: 10, backgroundColor: redirectTarget==='agency:police'?'#f59e0b':'#f3f4f6', borderRadius: 16, marginRight: 8 }}>
-                        <Text style={{ color: redirectTarget==='agency:police'?'white':'#111827' }}>Police</Text>
-                      </TouchableOpacity>
-                      <TouchableOpacity onPress={() => setRedirectTarget('agency:utilities')} style={{ paddingVertical: 6, paddingHorizontal: 10, backgroundColor: redirectTarget==='agency:utilities'?'#f59e0b':'#f3f4f6', borderRadius: 16, marginRight: 8 }}>
-                        <Text style={{ color: redirectTarget==='agency:utilities'?'white':'#111827' }}>Utilities</Text>
-                      </TouchableOpacity>
-                      <TouchableOpacity onPress={() => setRedirectTarget('agency:barangay')} style={{ paddingVertical: 6, paddingHorizontal: 10, backgroundColor: redirectTarget==='agency:barangay'?'#f59e0b':'#f3f4f6', borderRadius: 16, marginRight: 8 }}>
-                        <Text style={{ color: redirectTarget==='agency:barangay'?'white':'#111827' }}>Barangay</Text>
-                      </TouchableOpacity>
-                    </ScrollView>
-                    <TouchableOpacity onPress={handleRedirect} style={{ marginTop: 8, paddingVertical: 10, backgroundColor: '#f59e0b', borderRadius: 8, alignItems: 'center' }}>
-                      <Text style={{ color: 'white', fontWeight: 'bold' }}>Forward</Text>
-                    </TouchableOpacity>
-                  </View>
+                      </View>
+                    );
+                  })()}
+
                 </ScrollView>
               </>
             )}
@@ -1816,41 +2563,108 @@ export default function AMap({ isSidebarOpen = false }) {
         </View>
       </Modal>
 
-      {/* Reroute Modal - Station Too Busy */}
+      {/* Waiting for Backup Station Approval Modal */}
       <Modal
-        visible={showRerouteModal}
+        visible={showWaitingBackupModal}
         transparent={true}
         animationType="fade"
         onRequestClose={() => {
-          setShowRerouteModal(false);
-          setSelectedRerouteStation('');
-          setPendingAssignment(null);
+          setShowWaitingBackupModal(false);
+          setPendingBackupAssignment(null);
         }}
       >
         <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center', padding: 20 }}>
-          <View style={{ backgroundColor: 'white', borderRadius: 16, padding: 24, width: '100%', maxWidth: 500, maxHeight: '80%' }}>
+          <View style={{ backgroundColor: 'white', borderRadius: 16, padding: 24, width: '100%', maxWidth: 400 }}>
             <View style={{ alignItems: 'center', marginBottom: 16 }}>
-              <View style={{ backgroundColor: '#fed7aa', borderRadius: 50, padding: 12 }}>
-                <MaterialIcons name="warning" size={32} color="#ea580c" />
+              <View style={{ backgroundColor: '#f3e8ff', borderRadius: 50, padding: 12 }}>
+                <MaterialIcons name="schedule" size={32} color="#a855f7" />
               </View>
             </View>
             <Text style={{ fontSize: 24, fontWeight: 'bold', color: '#111827', textAlign: 'center', marginBottom: 8 }}>
-              Station Declined Assignment
+              Waiting for Backup Station Approval
             </Text>
-            <Text style={{ fontSize: 16, color: '#6b7280', textAlign: 'center', marginBottom: 16 }}>
-              <Text style={{ fontWeight: '600' }}>{pendingAssignment?.stationName}</Text> has declined this assignment and is unable to handle this report. 
-              Please reroute the incident to one of the nearest stations:
+            <Text style={{ fontSize: 16, color: '#6b7280', textAlign: 'center', marginBottom: 24 }}>
+              The backup assignment has been sent to <Text style={{ fontWeight: '600' }}>{pendingBackupAssignment?.stationName}</Text>. 
+              Please wait for their response.
             </Text>
-            {selectedReport && (
-              <View style={{ backgroundColor: '#dbeafe', borderLeftWidth: 4, borderLeftColor: '#2563eb', padding: 12, borderRadius: 8, marginBottom: 16 }}>
-                <Text style={{ fontSize: 14, color: '#1e40af', fontWeight: '600', marginBottom: 4 }}>Report Location:</Text>
-                <Text style={{ fontSize: 14, color: '#1e3a8a' }}>
-                  {selectedReport.address || selectedReport.geotag_location || 'Location unavailable'}
+            <TouchableOpacity
+              onPress={() => {
+                setShowWaitingBackupModal(false);
+                setPendingBackupAssignment(null);
+              }}
+              style={{ backgroundColor: '#a855f7', paddingVertical: 12, borderRadius: 8, alignItems: 'center' }}
+            >
+              <Text style={{ color: 'white', fontWeight: 'bold', fontSize: 16 }}>Okay</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Reroute/Forward Modal */}
+      <Modal
+        visible={showRerouteModal}
+        transparent={true}
+        animationType="slide"
+        onRequestClose={() => {
+          setShowRerouteModal(false);
+          setSelectedRerouteStation('');
+          setRerouteNote('');
+          setPendingAssignment(null);
+          setIsRerouteForForwarding(false);
+        }}
+      >
+        <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' }}>
+          <View style={{ backgroundColor: 'white', borderTopLeftRadius: 20, borderTopRightRadius: 20, maxHeight: height * 0.9 }}>
+            {/* Header */}
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 20, borderBottomWidth: 1, borderBottomColor: '#e5e7eb' }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                <View style={{ backgroundColor: isRerouteForForwarding ? '#f97316' : '#fed7aa', borderRadius: 25, padding: 8, marginRight: 12 }}>
+                  <MaterialIcons name={isRerouteForForwarding ? "forward" : "warning"} size={24} color={isRerouteForForwarding ? "#ffffff" : "#ea580c"} />
+                </View>
+                <Text style={{ fontSize: 20, fontWeight: 'bold', color: '#111827' }}>
+                  {isRerouteForForwarding ? 'Forward to Station' : 'Reroute Station'}
                 </Text>
               </View>
-            )}
-            
-            <ScrollView style={{ maxHeight: 300, marginBottom: 24 }}>
+              <TouchableOpacity
+                onPress={() => {
+                  setShowRerouteModal(false);
+                  setSelectedRerouteStation('');
+                  setRerouteNote('');
+                  setPendingAssignment(null);
+                  setIsRerouteForForwarding(false);
+                }}
+                style={{ padding: 4 }}
+              >
+                <MaterialIcons name="close" size={24} color="#6b7280" />
+              </TouchableOpacity>
+            </View>
+
+            {/* Content */}
+            <ScrollView 
+              style={{ flex: 1 }}
+              contentContainerStyle={{ padding: 20 }}
+              showsVerticalScrollIndicator={true}
+            >
+              {/* Description */}
+              <Text style={{ fontSize: 14, color: '#6b7280', marginBottom: 16, lineHeight: 20 }}>
+                {isRerouteForForwarding ? (
+                  <>Forward this report from <Text style={{ fontWeight: '600', color: '#111827' }}>{pendingAssignment?.stationName}</Text> to one of the nearest stations:</>
+                ) : (
+                  <><Text style={{ fontWeight: '600', color: '#111827' }}>{pendingAssignment?.stationName}</Text> has declined this assignment. Please select a new station:</>
+                )}
+              </Text>
+
+              {/* Report Location */}
+              {selectedReport && (
+                <View style={{ backgroundColor: '#eff6ff', borderLeftWidth: 4, borderLeftColor: '#3b82f6', padding: 12, borderRadius: 8, marginBottom: 20 }}>
+                  <Text style={{ fontSize: 12, color: '#1e40af', fontWeight: '600', marginBottom: 4 }}>Report Location:</Text>
+                  <Text style={{ fontSize: 14, color: '#1e3a8a' }}>
+                    {selectedReport.address || selectedReport.geotag_location || 'Location unavailable'}
+                  </Text>
+                </View>
+              )}
+              
+              {/* Station List */}
               {nearestStations.length > 0 ? (
                 nearestStations.map((station) => (
                   <TouchableOpacity
@@ -1858,57 +2672,111 @@ export default function AMap({ isSidebarOpen = false }) {
                     onPress={() => setSelectedRerouteStation(station.id)}
                     style={{
                       flexDirection: 'row',
-                      alignItems: 'center',
-                      padding: 12,
-                      borderRadius: 8,
-                      marginBottom: 8,
+                      alignItems: 'flex-start',
+                      padding: 16,
+                      borderRadius: 12,
+                      marginBottom: 12,
                       borderWidth: 2,
-                      borderColor: selectedRerouteStation === station.id ? '#2563eb' : '#e5e7eb',
-                      backgroundColor: selectedRerouteStation === station.id ? '#eff6ff' : '#f9fafb'
+                      borderColor: selectedRerouteStation === station.id ? '#f97316' : '#e5e7eb',
+                      backgroundColor: selectedRerouteStation === station.id ? '#fff7ed' : '#f9fafb'
                     }}
                   >
-                    <View style={{ width: 20, height: 20, borderRadius: 10, borderWidth: 2, borderColor: selectedRerouteStation === station.id ? '#2563eb' : '#9ca3af', backgroundColor: selectedRerouteStation === station.id ? '#2563eb' : 'transparent', marginRight: 12 }} />
+                    <View style={{ 
+                      width: 24, 
+                      height: 24, 
+                      borderRadius: 12, 
+                      borderWidth: 2, 
+                      borderColor: selectedRerouteStation === station.id ? '#f97316' : '#9ca3af', 
+                      backgroundColor: selectedRerouteStation === station.id ? '#f97316' : 'transparent', 
+                      marginRight: 12,
+                      marginTop: 2,
+                      justifyContent: 'center',
+                      alignItems: 'center'
+                    }}>
+                      {selectedRerouteStation === station.id && (
+                        <MaterialIcons name="check" size={16} color="#ffffff" />
+                      )}
+                    </View>
                     <View style={{ flex: 1 }}>
-                      <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 4 }}>
-                        <Text style={{ fontWeight: '600', color: '#111827', fontSize: 16 }}>
+                      <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 6, flexWrap: 'wrap' }}>
+                        <Text style={{ fontWeight: '700', color: '#111827', fontSize: 16, marginRight: 8 }}>
                           {station.station_name || 'Station'}
                         </Text>
-                        {stationActiveCounts[station.id] > 0 && (
-                          <View style={{ marginLeft: 8, backgroundColor: '#f59e0b', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 12, minWidth: 28, alignItems: 'center', justifyContent: 'center' }}>
-                            <Text style={{ fontSize: 12, fontWeight: '700', color: '#ffffff' }}>
-                              {stationActiveCounts[station.id]}
+                        {stationActiveCounts[station.id] !== undefined && stationActiveCounts[station.id] > 0 && (
+                          <View style={{ backgroundColor: '#fef3c7', borderWidth: 1, borderColor: '#fde68a', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 12 }}>
+                            <Text style={{ fontSize: 11, fontWeight: '700', color: '#92400e' }}>
+                              {stationActiveCounts[station.id]} Active
                             </Text>
                           </View>
                         )}
                       </View>
-                      <Text style={{ color: '#6b7280', fontSize: 14 }}>
+                      <Text style={{ color: '#6b7280', fontSize: 13 }}>
                         {station.distanceToIncidentKm 
                           ? `${station.distanceToIncidentKm} km from incident` 
                           : station.distanceKm 
                             ? `${station.distanceKm} km away` 
-                            : 'Distance unavailable (no coordinates)'}
+                            : 'Distance unavailable'}
                       </Text>
                     </View>
                   </TouchableOpacity>
                 ))
               ) : (
-                <Text style={{ color: '#6b7280', textAlign: 'center', padding: 20 }}>No stations available.</Text>
+                <View style={{ padding: 40, alignItems: 'center' }}>
+                  <MaterialIcons name="location-off" size={48} color="#9ca3af" />
+                  <Text style={{ color: '#6b7280', textAlign: 'center', marginTop: 12, fontSize: 14 }}>No stations available</Text>
+                </View>
               )}
+
+              {/* Optional Message Field */}
+              <View style={{ marginTop: 20, marginBottom: 20 }}>
+                <Text style={{ fontSize: 14, fontWeight: '600', color: '#374151', marginBottom: 8 }}>
+                  Message (optional)
+                </Text>
+                <TextInput
+                  style={{
+                    width: '100%',
+                    borderWidth: 1,
+                    borderColor: '#d1d5db',
+                    borderRadius: 8,
+                    padding: 12,
+                    fontSize: 14,
+                    minHeight: 100,
+                    textAlignVertical: 'top',
+                    color: '#111827',
+                    backgroundColor: '#ffffff'
+                  }}
+                  multiline
+                  numberOfLines={4}
+                  placeholder="Add a note for the receiving station..."
+                  value={rerouteNote}
+                  onChangeText={setRerouteNote}
+                />
+              </View>
             </ScrollView>
 
-            <TouchableOpacity
-              onPress={handleReroute}
-              disabled={!selectedRerouteStation}
-              style={{ 
-                width: '100%',
-                backgroundColor: selectedRerouteStation ? '#ea580c' : '#d1d5db', 
-                paddingVertical: 12, 
-                borderRadius: 8, 
-                alignItems: 'center' 
-              }}
-            >
-              <Text style={{ color: 'white', fontWeight: 'bold', fontSize: 16 }}>Reroute</Text>
-            </TouchableOpacity>
+            {/* Fixed Button at Bottom */}
+            <View style={{ padding: 20, paddingTop: 12, borderTopWidth: 1, borderTopColor: '#e5e7eb', backgroundColor: '#ffffff' }}>
+              <TouchableOpacity
+                onPress={handleReroute}
+                disabled={!selectedRerouteStation}
+                style={{ 
+                  width: '100%',
+                  backgroundColor: selectedRerouteStation ? (isRerouteForForwarding ? '#f97316' : '#ea580c') : '#d1d5db', 
+                  paddingVertical: 16, 
+                  borderRadius: 12, 
+                  alignItems: 'center',
+                  shadowColor: '#000',
+                  shadowOffset: { width: 0, height: 2 },
+                  shadowOpacity: 0.1,
+                  shadowRadius: 4,
+                  elevation: 3
+                }}
+              >
+                <Text style={{ color: 'white', fontWeight: 'bold', fontSize: 16 }}>
+                  {isRerouteForForwarding ? 'Forward' : 'Reroute'}
+                </Text>
+              </TouchableOpacity>
+            </View>
           </View>
         </View>
       </Modal>
@@ -2312,5 +3180,32 @@ const styles = StyleSheet.create({
     height: 200,
     borderRadius: 8,
     marginTop: 8,
+  },
+  modalRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    marginBottom: 12,
+    gap: 8,
+  },
+  modalLabel: {
+    fontSize: 14,
+    color: '#6b7280',
+    minWidth: 120,
+    marginTop: 2,
+  },
+  modalValue: {
+    fontSize: 14,
+    fontWeight: '500',
+    color: '#111827',
+    flex: 1,
+  },
+  badge: {
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 6,
+  },
+  badgeText: {
+    fontSize: 12,
+    fontWeight: '600',
   },
 });
