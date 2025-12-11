@@ -1576,15 +1576,15 @@ const Adashboard = () => {
             for (const report of reportsToAssign) {
               const lat = parseFloat(report.latitude);
               const lng = parseFloat(report.longitude);
-              await supabase
-                .from('assigned_report_snapshots')
-                .upsert({
+            await supabase
+              .from('assigned_report_snapshots')
+              .upsert({
                   report_id: String(report.id),
-                  lat: isNaN(lat) ? null : lat,
-                  lng: isNaN(lng) ? null : lng,
+                lat: isNaN(lat) ? null : lat,
+                lng: isNaN(lng) ? null : lng,
                   address: report.address || report.geotag_location || null,
                   snapshot_json: report
-                }, { onConflict: 'report_id' });
+              }, { onConflict: 'report_id' });
             }
           } catch (snapErr) {
             console.warn('Snapshot upsert failed:', snapErr?.message || snapErr);
@@ -1597,11 +1597,11 @@ const Adashboard = () => {
           // Station is NOT busy - auto-accept assignment
           // Delete any existing assignments for all reports in cluster
           for (const report of reportsToAssign) {
-            await supabase
-              .from('report_assignments')
-              .delete()
+          await supabase
+            .from('report_assignments')
+            .delete()
               .eq('report_id', report.id)
-              .eq('assignee_type', 'station');
+            .eq('assignee_type', 'station');
           }
           
           // Assign ALL reports in the cluster
@@ -2346,13 +2346,13 @@ const Adashboard = () => {
               <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-red-600 mx-auto mb-4"></div>
               <p className="text-gray-600 font-medium">Loading map...</p>
             </div>
-          </div>
-        )}
-        {mapsLoadError && (
+        </div>
+      )}
+      {mapsLoadError && (
           <div className="absolute inset-0 bg-white bg-opacity-95 flex items-center justify-center z-10">
-            <div className="text-center">
-              <div className="text-red-600 text-6xl mb-4">🗺️</div>
-              <p className="text-red-600 font-semibold mb-2">Failed to load Google Maps API</p>
+          <div className="text-center">
+            <div className="text-red-600 text-6xl mb-4">🗺️</div>
+            <p className="text-red-600 font-semibold mb-2">Failed to load Google Maps API</p>
               <p className="text-gray-600 mb-4">{mapsLoadError.message || 'Please refresh the page.'}</p>
               <button 
                 onClick={() => window.location.reload()} 
@@ -2360,10 +2360,10 @@ const Adashboard = () => {
               >
                 Refresh Page
               </button>
-            </div>
           </div>
-        )}
-        {isMapsLoaded && (
+        </div>
+      )}
+      {isMapsLoaded && (
         <GoogleMap
           mapContainerStyle={mapContainerStyle}
           center={mapCenter}
@@ -3124,7 +3124,7 @@ const Adashboard = () => {
             </InfoWindow>
           )}
         </GoogleMap>
-        )}
+      )}
       </div>
       
       {/* Legacy Loading Overlay - Keep for mapLoaded state (internal map state) */}
