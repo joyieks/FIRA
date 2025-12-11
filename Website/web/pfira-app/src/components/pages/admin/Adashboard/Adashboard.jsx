@@ -780,18 +780,18 @@ const Adashboard = () => {
       if (allAssignments && allAssignments.length > 0) {
         const stationsWithDetails = await Promise.all(
           allAssignments.map(async (assignment) => {
-            const { data: stationData } = await supabase
-              .from('station_users')
-              .select('station_name')
-              .eq('id', assignment.assignee_id)
-              .single();
+        const { data: stationData } = await supabase
+          .from('station_users')
+          .select('station_name')
+          .eq('id', assignment.assignee_id)
+          .single();
 
             return {
-              type: assignment.assignee_type,
-              id: assignment.assignee_id,
-              name: stationData?.station_name || 'Unknown Station',
-              assigned_at: assignment.assigned_at,
-              note: assignment.note || '',
+          type: assignment.assignee_type,
+          id: assignment.assignee_id,
+          name: stationData?.station_name || 'Unknown Station',
+          assigned_at: assignment.assigned_at,
+          note: assignment.note || '',
               status: assignment.status || 'accepted',
               role: assignment.assignment_role || 'primary'
             };
@@ -804,7 +804,7 @@ const Adashboard = () => {
         const primaryStation = stationsWithDetails.find(s => s.role === 'primary');
         if (primaryStation) {
           setCurrentAssignment(primaryStation);
-        } else {
+      } else {
           setCurrentAssignment(null);
         }
       } else {
@@ -912,9 +912,9 @@ const Adashboard = () => {
               setPendingBackupAssignment(null);
             } else {
               // Primary station accepted - close waiting modal and show success
-              setShowWaitingApprovalModal(false);
+            setShowWaitingApprovalModal(false);
               alert(`✅ ${currentPending.stationName} has accepted the assignment.`);
-              setPendingAssignment(null);
+            setPendingAssignment(null);
               pendingAssignmentRef.current = null;
             }
             
