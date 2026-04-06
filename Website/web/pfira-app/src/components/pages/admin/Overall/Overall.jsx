@@ -49,6 +49,10 @@ const Overview = () => {
   const [activeTab, setActiveTab] = useState('active'); // 'active' | 'validation' | 'invalidated'
   const [isInvalidating, setIsInvalidating] = useState(false);
   
+  // Pagination states
+  const [currentPage, setCurrentPage] = useState(1);
+  const itemsPerPage = 15;
+  
   // Restore confirmation modal states
   const [showRestoreModal, setShowRestoreModal] = useState(false);
   const [reportToRestore, setReportToRestore] = useState(null);
@@ -1252,6 +1256,19 @@ const Overview = () => {
     return dateB - dateA; // Descending order (newest first)
   });
 
+  // Pagination calculation
+  const totalPages = Math.ceil(filteredReports.length / itemsPerPage);
+  const startIndex = (currentPage - 1) * itemsPerPage;
+  const endIndex = startIndex + itemsPerPage;
+  const paginatedReports = filteredReports.slice(startIndex, endIndex);
+  
+  // Reset to page 1 if current page exceeds total pages
+  useEffect(() => {
+    if (currentPage > totalPages && totalPages > 0) {
+      setCurrentPage(1);
+    }
+  }, [totalPages, currentPage]);
+
   // Separate list for unvalidated "No Fire/No Smoke" reports
   const validationReports = clusteredReports.filter(report => {
     // Only show unvalidated "No Fire/No Smoke" reports that are not invalidated
@@ -1981,7 +1998,7 @@ const Overview = () => {
                       </td>
                     </tr>
                   ) : (
-                    filteredReports.map((report) => {
+                    paginatedReports.map((report) => {
                       // Check if report is cancelled or fire out
                       const status = (report.status || '').toString().toLowerCase();
                       const isCancelled = status.includes('cancelled') || status.includes('canceled');
@@ -2094,8 +2111,8 @@ const Overview = () => {
                                   report.status === 'Cancelled' 
                                     ? 'opacity-50 cursor-not-allowed' 
                                     : generalAlarmStates[report.id] 
-                                    ? 'bg-red-600 animate-pulse shadow-red-500/50 ring-4 ring-red-400 ring-opacity-75 animate-bounce' 
-                                    : 'bg-red-500 hover:bg-red-600 shadow-red-400/50 hover:ring-2 hover:ring-red-300 hover:ring-opacity-50'
+                                    ? 'bg-red-950 animate-pulse shadow-red-950/50 ring-4 ring-red-950 ring-opacity-75' 
+                                    : 'bg-red-950 hover:bg-red-900 shadow-red-950/50 hover:ring-2 hover:ring-red-900 hover:ring-opacity-50'
                                 }`}
                                 disabled={report.status === 'Cancelled'}
                               >
@@ -2226,6 +2243,64 @@ const Overview = () => {
                 </tbody>
               </table>
             </div>
+            {/* Pagination Controls */}
+            {filteredReports.length > 0 && (
+              <div className="bg-white border-t border-gray-200 px-6 py-4 flex items-center justify-between">
+                <div className="text-sm text-gray-600">
+                  Showing {startIndex + 1} to {Math.min(endIndex, filteredReports.length)} of {filteredReports.length} reports
+                </div>
+                <div className="flex items-center space-x-2">
+                  <button
+                    onClick={() => setCurrentPage(prev => Math.max(1, prev - 1))}
+                    disabled={currentPage === 1}
+                    className="px-4 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                    title="Previous page"
+                  >
+                    ← Previous
+                  </button>
+                  <div className="flex items-center space-x-2">
+                    {[...Array(Math.min(5, totalPages))].map((_, i) => {
+                      const pageNum = currentPage > 3 ? currentPage - 2 + i : i + 1;
+                      if (pageNum > totalPages) return null;
+                      return (
+                        <button
+                          key={pageNum}
+                          onClick={() => setCurrentPage(pageNum)}
+                          className={`px-3 py-1 rounded-lg transition-colors ${
+                            currentPage === pageNum
+                              ? 'bg-red-600 text-white'
+                              : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+                          }`}
+                          title={`Go to page ${pageNum}`}
+                        >
+                          {pageNum}
+                        </button>
+                      );
+                    })}
+                    {totalPages > 5 && currentPage < totalPages - 2 && (
+                      <span className="text-gray-500">...</span>
+                    )}
+                    {totalPages > 5 && currentPage < totalPages - 2 && (
+                      <button
+                        onClick={() => setCurrentPage(totalPages)}
+                        className="px-3 py-1 rounded-lg bg-gray-200 text-gray-700 hover:bg-gray-300 transition-colors"
+                        title={`Go to page ${totalPages}`}
+                      >
+                        {totalPages}
+                      </button>
+                    )}
+                  </div>
+                  <button
+                    onClick={() => setCurrentPage(prev => Math.min(totalPages, prev + 1))}
+                    disabled={currentPage === totalPages}
+                    className="px-4 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                    title="Next page"
+                  >
+                    Next →
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
           </>
         )}

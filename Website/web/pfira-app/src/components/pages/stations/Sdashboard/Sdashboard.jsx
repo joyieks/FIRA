@@ -3,6 +3,7 @@ import { GoogleMap, Marker, InfoWindow, Circle, useJsApiLoader } from '@react-go
 import { useOutletContext } from 'react-router-dom';
 import { supabase } from '../../../../config/supabase';
 import { checkStationIsBusy, handleAssignmentResponse, requestForwarding } from '../../../../utils/assignmentHelpers';
+import CustomLayerToggle from '../../../common/CustomLayerToggle';
 
 const Sdashboard = () => {
   // Helper function to generate human-readable report ID
@@ -187,6 +188,9 @@ const Sdashboard = () => {
   const ENABLE_USER_GEO = false;
   const [mapLoaded, setMapLoaded] = useState(false);
   const [mapError, setMapError] = useState(null);
+  const [mapTypeId, setMapTypeId] = useState('roadmap'); // State for map/satellite toggle
+  const [showTerrainLayer, setShowTerrainLayer] = useState(false); // State for terrain toggle (roadmap mode)
+  const [showLabelsLayer, setShowLabelsLayer] = useState(false); // State for labels toggle (satellite mode)
   const [stationLocation, setStationLocation] = useState(null);
   const [geocodingError, setGeocodingError] = useState(null);
   // Strictly rely on the logged-in station identity; avoid fallback switching
@@ -1144,6 +1148,10 @@ const Sdashboard = () => {
     console.log('✅ Map loaded successfully');
     setMapLoaded(true);
     setMapError(null);
+    // Store map instance reference for layer toggle
+    if (!window.__stationMapInstance) {
+      window.__stationMapInstance = map;
+    }
   }, []);
 
   const onError = useCallback((error) => {
@@ -1151,6 +1159,43 @@ const Sdashboard = () => {
     setMapError('Failed to load map. Please refresh the page.');
     setMapLoaded(false);
   }, []);
+
+  // Handle map type changes (roadmap/satellite) with terrain/labels layer support
+  const handleMapTypeChange = useCallback((newMapType) => {
+    setMapTypeId(newMapType);
+    
+    // Apply map type change with layer styling
+    if (window.__stationMapInstance) {
+      window.__stationMapInstance.setMapTypeId(newMapType);
+      
+      // Apply terrain styling when switching to roadmap
+      if (newMapType === 'roadmap') {
+        if (!showTerrainLayer) {
+          window.__stationMapInstance.setMapTypeId('roadmap');
+        }
+      } else if (newMapType === 'satellite') {
+        window.__stationMapInstance.setMapTypeId('satellite');
+      }
+    }
+  }, [showTerrainLayer]);
+
+  // Apply terrain layer styling when toggled
+  useEffect(() => {
+    if (window.__stationMapInstance && mapTypeId === 'roadmap') {
+      if (showTerrainLayer) {
+        window.__stationMapInstance.setMapTypeId('terrain');
+      } else {
+        window.__stationMapInstance.setMapTypeId('roadmap');
+      }
+    }
+  }, [showTerrainLayer, mapTypeId]);
+
+  // Apply labels layer styling when toggled
+  useEffect(() => {
+    if (window.__stationMapInstance && mapTypeId === 'satellite') {
+      window.__stationMapInstance.setMapTypeId(window.__stationMapInstance.getMapTypeId());
+    }
+  }, [showLabelsLayer, mapTypeId]);
 
   // Check for selectedReportId from notification click and zoom to it
   useEffect(() => {
@@ -1369,7 +1414,7 @@ const Sdashboard = () => {
           options={{
             zoomControl: true,
             streetViewControl: false,
-            mapTypeControl: true,
+            mapTypeControl: false,
             fullscreenControl: true,
           }}
         >
@@ -1863,6 +1908,17 @@ const Sdashboard = () => {
           )}
         </GoogleMap>
       )}
+
+      {/* Custom Layer Toggle Control - Top Left Position with proper z-index and sub-layer controls */}
+      <CustomLayerToggle 
+        mapTypeId={mapTypeId} 
+        onMapTypeChange={handleMapTypeChange}
+        mapInstance={window.__stationMapInstance}
+        showTerrainLayer={showTerrainLayer}
+        onTerrainChange={setShowTerrainLayer}
+        showLabelsLayer={showLabelsLayer}
+        onLabelsChange={setShowLabelsLayer}
+      />
       
       {/* (Bell moved to top-right StationLayout) */}
 

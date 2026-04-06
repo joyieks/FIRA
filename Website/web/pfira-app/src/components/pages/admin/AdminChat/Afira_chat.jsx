@@ -361,7 +361,8 @@ const Afira_chat = () => {
       task_force_bravo: 'TASK FORCE BRAVO',
       task_force_charlie: 'TASK FORCE CHARLIE',
       task_force_delta_echo_hotel_india: 'TASK FORCE DELTA',
-      general: 'GENERAL ALARM'
+      general: 'GENERAL ALARM',
+      'general_alarm': 'GENERAL ALARM'
     };
     return map[suggested] || suggested;
   };

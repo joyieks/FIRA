@@ -25,6 +25,8 @@ const Station_Overview = () => {
   const [responderExisting, setResponderExisting] = useState({}); // reportId -> Set of responderIds
   const [aiChatSuggestions, setAiChatSuggestions] = useState([]); // recent AI suggestions from messages
   const [chatAlarmByReport, setChatAlarmByReport] = useState({}); // reportId -> normalized label
+  const [currentPage, setCurrentPage] = useState(1);
+  const itemsPerPage = 15;
 
   const API_URL = 'https://new-fira-backend.onrender.com';
 
@@ -1116,6 +1118,19 @@ const Station_Overview = () => {
            report.description.toLowerCase().includes(searchQuery.toLowerCase());
   });
 
+  // Pagination calculations
+  const totalPages = Math.ceil(filteredReports.length / itemsPerPage);
+  const startIndex = (currentPage - 1) * itemsPerPage;
+  const endIndex = startIndex + itemsPerPage;
+  const paginatedReports = filteredReports.slice(startIndex, endIndex);
+
+  // Reset page if it exceeds total pages
+  useEffect(() => {
+    if (currentPage > totalPages && totalPages > 0) {
+      setCurrentPage(1);
+    }
+  }, [totalPages, currentPage]);
+
   // Handle map redirection with report selection
   const handleMapRedirect = (report) => {
     // Check if report is cancelled or fire out - don't redirect if so
@@ -1526,8 +1541,8 @@ const Station_Overview = () => {
             </div>
 
               {/* Assigned Reports Table */}
-            <div className="w-full">
-              <table className="w-full">
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[1400px]">
                 <thead className="bg-gray-50">
                   <tr>
                     <th className="px-4 py-4 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-24">Assign</th>
@@ -1541,7 +1556,7 @@ const Station_Overview = () => {
                   </tr>
                 </thead>
                 <tbody className="bg-white divide-y divide-gray-200">
-                  {filteredReports.map((report) => {
+                  {paginatedReports.map((report) => {
                     // Check if report is cancelled or fire out
                     const status = (report.status || '').toString().toLowerCase();
                     const isCancelled = status.includes('cancelled') || status.includes('canceled');
@@ -1703,6 +1718,76 @@ const Station_Overview = () => {
                 </tbody>
               </table>
             </div>
+
+            {/* Pagination Controls */}
+            {filteredReports.length > itemsPerPage && (
+              <div className="mt-6 flex items-center justify-between px-4 py-4">
+                <div className="text-sm text-gray-600">
+                  Showing {startIndex + 1} to {Math.min(endIndex, filteredReports.length)} of {filteredReports.length} reports
+                </div>
+                
+                <div className="flex items-center gap-2">
+                  {/* Previous Button */}
+                  <button
+                    onClick={() => setCurrentPage(prev => Math.max(1, prev - 1))}
+                    disabled={currentPage === 1}
+                    className={`px-4 py-2 rounded-md text-sm font-medium transition-all ${
+                      currentPage === 1
+                        ? 'bg-gray-200 text-gray-400 cursor-not-allowed'
+                        : 'bg-gray-600 text-white hover:bg-gray-700 shadow-md'
+                    }`}
+                  >
+                    Previous
+                  </button>
+
+                  {/* Page Number Buttons */}
+                  <div className="flex gap-1">
+                    {Array.from({ length: Math.min(5, totalPages) }).map((_, i) => {
+                      let pageNum;
+                      if (totalPages <= 5) {
+                        pageNum = i + 1;
+                      } else if (currentPage <= 3) {
+                        pageNum = i + 1;
+                      } else if (currentPage >= totalPages - 2) {
+                        pageNum = totalPages - 4 + i;
+                      } else {
+                        pageNum = currentPage - 2 + i;
+                      }
+
+                      return (
+                        <button
+                          key={pageNum}
+                          onClick={() => setCurrentPage(pageNum)}
+                          className={`px-3 py-2 rounded-md text-sm font-medium transition-all ${
+                            currentPage === pageNum
+                              ? 'bg-red-600 text-white shadow-md ring-2 ring-red-400'
+                              : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                          }`}
+                        >
+                          {pageNum}
+                        </button>
+                      );
+                    })}
+                    {totalPages > 5 && currentPage < totalPages - 2 && (
+                      <span className="px-2 py-2 text-gray-500">...</span>
+                    )}
+                  </div>
+
+                  {/* Next Button */}
+                  <button
+                    onClick={() => setCurrentPage(prev => Math.min(totalPages, prev + 1))}
+                    disabled={currentPage === totalPages}
+                    className={`px-4 py-2 rounded-md text-sm font-medium transition-all ${
+                      currentPage === totalPages
+                        ? 'bg-gray-200 text-gray-400 cursor-not-allowed'
+                        : 'bg-gray-600 text-white hover:bg-gray-700 shadow-md'
+                    }`}
+                  >
+                    Next
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Status Change Confirmation Modal */}

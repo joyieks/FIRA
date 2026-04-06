@@ -1,8 +1,10 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { GoogleMap, Marker, InfoWindow, Circle, useJsApiLoader } from '@react-google-maps/api';
+import { MarkerClusterer } from '@googlemaps/markerclusterer';
 import { supabase } from '../../../../config/supabase';
 import { useNotifications } from '../../../../contexts/NotificationContext';
 import { checkStationIsBusy, findNearestStations, findNearestStationsToStation, handleAssignmentResponse, calculateDistance } from '../../../../utils/assignmentHelpers';
+import CustomLayerToggle from '../../../common/CustomLayerToggle';
 
 // Move libraries outside component to prevent re-initialization
 const GOOGLE_MAPS_LIBRARIES = ['places'];
@@ -49,8 +51,13 @@ const Adashboard = () => {
   const [stationResponders, setStationResponders] = useState([]); // Responders for selected station
   const [loadingResponders, setLoadingResponders] = useState(false); // Loading state for responders
   const [clusterIndex, setClusterIndex] = useState(0); // Pager index for clustered reports
+  const [mapTypeId, setMapTypeId] = useState('roadmap'); // State for map/satellite toggle
+  const [showTerrainLayer, setShowTerrainLayer] = useState(false); // State for terrain toggle (roadmap mode)
+  const [showLabelsLayer, setShowLabelsLayer] = useState(false); // State for labels toggle (satellite mode)
   const noFireNotifiedRef = useRef(new Set()); // track notified report IDs to avoid duplicates
   const pendingAssignmentRef = useRef(null); // Ref to track current pendingAssignment for real-time listeners
+  const clustererRef = useRef(null); // Ref for MarkerClusterer instance
+  const markersRef = useRef([]); // Ref to store markers for clustering
 
   // Helpers to hide "No Fire" + "No Smoke" reports and notify citizen once
   const isNoFireNoSmoke = (report) => {
@@ -382,22 +389,23 @@ const Adashboard = () => {
 
   // Get text color that contrasts well with background
   const getAlarmLevelTextColor = (alarmLevel) => {
-    if (!alarmLevel) return '#374151';
+    if (!alarmLevel) return '#111827'; // Dark text for unknown
     
-    const level = alarmLevel.toLowerCase();
+    const cleanedLevel = cleanAlarmLevel(alarmLevel);
+    const level = cleanedLevel.toLowerCase();
     
-    // Light backgrounds need dark text
-    if (level.includes('first alarm') || level.includes('second alarm') || level.includes('fire out')) {
-      return '#374151';
+    // White text for darker backgrounds
+    if (level.includes('fifth alarm') || level.includes('5th alarm') ||
+        level.includes('task force alpha') ||
+        level.includes('task force bravo') ||
+        level.includes('task force charlie') ||
+        level.includes('task force delta') ||
+        level.includes('general alarm')) {
+      return '#ffffff';
     }
     
-    // Medium backgrounds can use dark text
-    if (level.includes('third alarm') || level.includes('under control')) {
-      return '#1f2937';
-    }
-    
-    // Dark backgrounds need light text
-    return '#ffffff';
+    // All other alarms use dark text
+    return '#111827';
   };
 
   // AI-Assisted Duplicate Report Consolidation
@@ -2233,10 +2241,55 @@ const Adashboard = () => {
   };
 
   const onLoad = useCallback((map) => {
-    // Map loaded
+    // Map loaded - store instance for later use
     setMapLoaded(true);
     setMapError(null);
+    // Store map instance reference if needed for clustering
+    if (!window.__mapInstance) {
+      window.__mapInstance = map;
+    }
   }, []);
+
+  // Handle map type changes (roadmap/satellite) with terrain/labels layer support
+  const handleMapTypeChange = useCallback((newMapType) => {
+    setMapTypeId(newMapType);
+    
+    // Apply map type change with layer styling
+    if (window.__mapInstance) {
+      window.__mapInstance.setMapTypeId(newMapType);
+      
+      // Apply terrain styling when switching to roadmap
+      if (newMapType === 'roadmap') {
+        // Reset terrain on map switch
+        if (!showTerrainLayer) {
+          window.__mapInstance.setMapTypeId('roadmap');
+        }
+      } else if (newMapType === 'satellite') {
+        // Handle satellite mode
+        window.__mapInstance.setMapTypeId('satellite');
+      }
+    }
+  }, [showTerrainLayer]);
+
+  // Apply terrain layer styling when toggled
+  useEffect(() => {
+    if (window.__mapInstance && mapTypeId === 'roadmap') {
+      if (showTerrainLayer) {
+        window.__mapInstance.setMapTypeId('terrain');
+      } else {
+        window.__mapInstance.setMapTypeId('roadmap');
+      }
+    }
+  }, [showTerrainLayer, mapTypeId]);
+
+  // Apply labels layer styling when toggled
+  useEffect(() => {
+    if (window.__mapInstance && mapTypeId === 'satellite') {
+      // Note: Google Maps API handles labels automatically with satellite view
+      // This effect ensures the map is properly refreshed when labels toggle changes
+      window.__mapInstance.setMapTypeId(window.__mapInstance.getMapTypeId());
+    }
+  }, [showLabelsLayer, mapTypeId]);
 
   // Handle LoadScript load
   const handleLoadScriptLoad = useCallback(() => {
@@ -2276,9 +2329,10 @@ const Adashboard = () => {
     }, 100);
   }, [retryCount]);
 
-  // Handle marker click to center map and select report
+  // Handle marker click to center map and select report - MEMOIZED for performance optimization
   const handleMarkerClick = useCallback((report) => {
-    // Marker clicked
+    // Marker clicked - store selection in localStorage for persistence
+    localStorage.setItem('selectedReportId', String(report.id));
     setSelectedReport(report);
     setClusterIndex(0); // reset pager when selecting a new cluster
     // Center map on the clicked fire report
@@ -2363,6 +2417,7 @@ const Adashboard = () => {
             </div>
           </div>
         )}
+      <div style={{ position: 'relative', width: '100%', height: '100%', display: 'flex' }}>
         {isMapsLoaded && (
         <GoogleMap
           mapContainerStyle={mapContainerStyle}
@@ -2374,8 +2429,9 @@ const Adashboard = () => {
           options={{
             zoomControl: true,
             streetViewControl: false,
-            mapTypeControl: true,
+            mapTypeControl: false, // Disable default control - using custom one
             fullscreenControl: true,
+            mapTypeId: mapTypeId, // Use state-managed map type
           }}
         >
           {/* Admin Station Marker - Bureau of Fire Protection Regional Office VII */}
@@ -2423,7 +2479,7 @@ const Adashboard = () => {
             </InfoWindow>
           )}
 
-          {/* Fire Report Markers (clustered) */}
+          {/* Fire Report Markers (with zoom-aware adaptive clustering) */}
           {mapLoaded && clusterReports(fireReports).map((report) => {
             const customIcon = getMarkerIconWithBadge(report);
             const hasBadge = (report.reportStrength || 1) > 1;
@@ -2442,6 +2498,7 @@ const Adashboard = () => {
                   fontSize: '32px'
                 }}
                 zIndex={1000}
+                title={`${report.prediction || 'Fire'} - ${report.address || report.geotag_location || 'Location'}`}
               />
             );
           })}
@@ -2457,7 +2514,7 @@ const Adashboard = () => {
                   scaledSize: new window.google.maps.Size(48, 48),
                   anchor: new window.google.maps.Point(24, 24)
                 }}
-                zIndex={1200}
+                zIndex={500}
                 onClick={async () => {
                   // Fetch full station details from database
                   try {
@@ -2681,7 +2738,7 @@ const Adashboard = () => {
                       className="px-3 py-1 rounded-full text-xs font-bold"
                       style={{ 
                         backgroundColor: getMarkerColor(selectedReport),
-                        color: '#111827' // dark text for readability on light badges
+                        color: getAlarmLevelTextColor(resolveAlarmLevel(selectedReport))
                       }}
                     >
                       {cleanAlarmLevel(resolveAlarmLevel(selectedReport))}
@@ -3125,6 +3182,18 @@ const Adashboard = () => {
           )}
         </GoogleMap>
         )}
+
+        {/* Custom Layer Toggle Control - Top Left Position with proper z-index and sub-layer controls */}
+        <CustomLayerToggle 
+          mapTypeId={mapTypeId} 
+          onMapTypeChange={handleMapTypeChange}
+          mapInstance={window.__mapInstance}
+          showTerrainLayer={showTerrainLayer}
+          onTerrainChange={setShowTerrainLayer}
+          showLabelsLayer={showLabelsLayer}
+          onLabelsChange={setShowLabelsLayer}
+        />
+      </div>
       </div>
       
       {/* Legacy Loading Overlay - Keep for mapLoaded state (internal map state) */}
@@ -3184,15 +3253,15 @@ const Adashboard = () => {
         </div>
       )}
       
-      {/* Toggle Button for Dashboard Panel */}
-      <div className="absolute top-4 left-4 z-30">
+      {/* Toggle Button for Dashboard Panel - Top Right Position, Aligned with Fullscreen */}
+      <div className="absolute top-2 right-15 z-30 flex items-center">
         <button
           onClick={() => setShowDashboard(!showDashboard)}
-          className="bg-white hover:bg-gray-50 rounded-lg shadow-lg border border-gray-200 p-3 transition-all duration-200 group"
+          className="bg-white hover:bg-gray-50 rounded shadow-lg border border-gray-200 p-2 transition-all duration-200 group"
           title={showDashboard ? "Hide Dashboard" : "Show Dashboard"}
         >
           <svg 
-            className={`w-5 h-5 text-red-600 transition-transform duration-200 ${showDashboard ? 'rotate-180' : ''}`} 
+            className={`w-6 h-6 text-red-600 transition-transform duration-200 ${showDashboard ? 'rotate-180' : ''}`} 
             fill="currentColor" 
             viewBox="0 0 20 20"
           >
@@ -3314,13 +3383,13 @@ const Adashboard = () => {
                         {status}
                       </span>
                       
-                      {/* Alarm Level Badge (dark text for readability) */}
+                      {/* Alarm Level Badge - White text only for General Alarm */}
                       <span
                         className="px-2 py-0.5 rounded text-xs font-bold border"
                         style={{ 
                           backgroundColor: alarmColor,
                           borderColor: alarmColor,
-                          color: '#111827'
+                          color: getAlarmLevelTextColor(alarmLevel)
                         }}
                       >
                         {cleanAlarmLevel(alarmLevel) || 'Unknown'}
@@ -3345,9 +3414,9 @@ const Adashboard = () => {
         )}
       </div>
 
-      {/* Professional Admin Dashboard Panel - Compact & Toggleable */}
+      {/* Professional Admin Dashboard Panel - Compact & Toggleable - Top Right Position */}
       {showDashboard && (
-        <div className="absolute top-4 left-16 bg-white backdrop-blur-sm bg-opacity-98 rounded-lg shadow-xl border border-gray-100 z-20 w-64">
+        <div className="absolute top-16 right-4 bg-white backdrop-blur-sm bg-opacity-98 rounded-lg shadow-xl border border-gray-100 z-20 w-64 max-h-[calc(100vh-100px)] overflow-y-auto">
           {/* Compact Header */}
           <div className="bg-gradient-to-r from-red-600 to-red-700 p-3 rounded-t-lg">
             <div className="flex items-center justify-between">

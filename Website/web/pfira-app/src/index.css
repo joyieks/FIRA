@@ -4,7 +4,7 @@
 .reveal {
   opacity: 0;
   transform: translateY(20px);
-  transition: opacity 0.6s ease, transform 0.6s ease;
+  transition: opacity 0.6s cubic-bezier(0.25, 0.46, 0.45, 0.94), transform 0.6s cubic-bezier(0.25, 0.46, 0.45, 0.94);
 }
 
 .reveal-show {
@@ -15,19 +15,37 @@
 /* Custom pulse animations */
 @keyframes pulse-slow {
   0%, 100% {
-    opacity: 0.3;
+    opacity: 0.4;
   }
   50% {
-    opacity: 0.6;
+    opacity: 0.8;
   }
 }
 
 @keyframes pulse-slower {
   0%, 100% {
-    opacity: 0.2;
+    opacity: 0.25;
   }
   50% {
-    opacity: 0.4;
+    opacity: 0.5;
+  }
+}
+
+@keyframes float {
+  0%, 100% {
+    transform: translateY(0px);
+  }
+  50% {
+    transform: translateY(-12px);
+  }
+}
+
+@keyframes glow {
+  0%, 100% {
+    box-shadow: 0 0 5px rgba(239, 68, 68, 0.2), 0 0 10px rgba(239, 68, 68, 0.1);
+  }
+  50% {
+    box-shadow: 0 0 20px rgba(239, 68, 68, 0.4), 0 0 30px rgba(239, 68, 68, 0.2);
   }
 }
 
@@ -39,13 +57,45 @@
   animation: pulse-slower 6s ease-in-out infinite;
 }
 
+.animate-float {
+  animation: float 3s ease-in-out infinite;
+}
+
+.animate-glow {
+  animation: glow 2s ease-in-out infinite;
+}
+
+/* Smooth transitions */
+* {
+  @apply transition-colors duration-300;
+}
+
+/* Card hover effects */
+.card-hover {
+  @apply transition-all duration-300 hover:shadow-lg;
+}
+
+.card-hover:hover {
+  @apply translate-y-0;
+}
+
 /* Card tilt effect */
 .card-tilt {
-  transition: transform 0.2s ease;
+  transition: all 0.3s cubic-bezier(0.23, 1, 0.320, 1);
 }
 
 .card-tilt:hover {
-  transform: translateY(-2px);
+  transform: translateY(-4px) rotateX(2deg);
+}
+
+/* Gradient text */
+.gradient-text {
+  @apply bg-gradient-to-r from-red-600 to-red-700 bg-clip-text text-transparent;
+}
+
+/* Smooth scrolling */
+html {
+  scroll-behavior: smooth;
 }
 
 /* Toast notification slide-in animation */
@@ -61,7 +111,7 @@
 }
 
 .animate-slide-in-right {
-  animation: slide-in-right 0.3s ease-out;
+  animation: slide-in-right 0.4s cubic-bezier(0.23, 1, 0.320, 1);
 }
 
 /* Line clamp utilities */
@@ -92,24 +142,7 @@
 }
 
 .animate-fade-in-up {
-  animation: fade-in-up 1s ease-out forwards;
-  opacity: 0;
-}
-
-/* Slide in from right animation */
-@keyframes slide-in-right {
-  0% {
-    opacity: 0;
-    transform: translateX(50px);
-  }
-  100% {
-    opacity: 1;
-    transform: translateX(0);
-  }
-}
-
-.animate-slide-in-right {
-  animation: slide-in-right 1.2s ease-out forwards;
+  animation: fade-in-up 0.8s cubic-bezier(0.25, 0.46, 0.45, 0.94) forwards;
   opacity: 0;
 }
 
@@ -141,4 +174,23 @@
 
 .animation-delay-700 {
   animation-delay: 0.7s;
+}
+
+/* Glass morphism effect */
+.glass {
+  @apply bg-white/10 backdrop-blur-md border border-white/20;
+}
+
+/* Smooth button transitions */
+button {
+  @apply transition-all duration-300 ease-out;
+}
+
+button:active {
+  @apply scale-95;
+}
+
+/* Link hover styles */
+a {
+  @apply transition-colors duration-300;
 }
