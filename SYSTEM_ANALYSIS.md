@@ -255,7 +255,7 @@ Enable citizens to report fire emergencies, allow administrators to manage and a
 ### External Services
 - **Google Maps API:** For maps and directions
 - **Fire Detection API:** Railway-hosted (Python/Flask)
-  - URL: `https://fire-detection-api-production-f55b.up.railway.app`
+  - URL: `https://new-fira-backend.onrender.com`
   - Endpoint: `/predict`
 - **EmailJS:** For email notifications
   - Service ID: `service_5k3e6xe`
@@ -529,7 +529,7 @@ Enable citizens to report fire emergencies, allow administrators to manage and a
   - Storage (for images)
 
 ### 2. **Fire Detection API** (Railway)
-- **URL:** `https://fire-detection-api-production-f55b.up.railway.app`
+- **URL:** `https://new-fira-backend.onrender.com`
 - **Endpoint:** `/predict`
 - **Method:** POST
 - **Purpose:** Analyze fire images

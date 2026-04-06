@@ -1,9 +1,14 @@
-Flask==2.3.3
-Flask-CORS==4.0.0
-supabase==1.0.4
-requests==2.31.0
-python-dotenv==1.0.0
-asyncio==3.4.3
+flask
+tensorflow-cpu==2.19.0
+pillow
+numpy
+gunicorn
+firebase-admin
+cloudinary
+python-dotenv
+flask-cors
+supabase
+requests
 
 
 

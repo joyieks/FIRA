@@ -13,8 +13,8 @@ import { createNearbyIncidentNotifications } from '../../../services/citizenNoti
 import { notifyRespondersOnNewReport } from '../../../services/responderNotificationService';
 
 // Fire Detection API base
-const API_URL = 'https://fire-detection-api-production-f55b.up.railway.app/predict';
-const API_BASE = 'https://fire-detection-api-production-f55b.up.railway.app';
+const API_URL = 'https://new-fira-backend.onrender.com/predict';
+const API_BASE = 'https://new-fira-backend.onrender.com';
 
 const CStatus = () => {
   const [activeTab, setActiveTab] = useState('All');
@@ -219,7 +219,7 @@ const CStatus = () => {
       const checkStartTime = Date.now();
       
       try {
-        const response = await fetch('https://fire-detection-api-production-f55b.up.railway.app/get_reports', {
+        const response = await fetch('https://new-fira-backend.onrender.com/get_reports', {
           headers: { 'Accept': 'application/json' }
         });
         
@@ -623,7 +623,7 @@ const CStatus = () => {
           
           // Fetch the updated report from API
           try {
-            const response = await fetch('https://fire-detection-api-production-f55b.up.railway.app/get_reports', {
+            const response = await fetch('https://new-fira-backend.onrender.com/get_reports', {
               headers: { 'Accept': 'application/json' }
             });
             
@@ -836,7 +836,7 @@ const CStatus = () => {
               }
               
               // Fetch updated report
-              const response = await fetch('https://fire-detection-api-production-f55b.up.railway.app/get_reports');
+              const response = await fetch('https://new-fira-backend.onrender.com/get_reports');
               if (response.ok) {
                 const allReports = await response.json();
                 const updatedReport = allReports.find(r => String(r.id) === String(notification.related_report_id));
@@ -930,7 +930,7 @@ const CStatus = () => {
           lastReportCheckTime = now;
           
           try {
-            const response = await fetch('https://fire-detection-api-production-f55b.up.railway.app/get_reports', {
+            const response = await fetch('https://new-fira-backend.onrender.com/get_reports', {
               headers: { 'Accept': 'application/json' }
             });
             
@@ -1064,7 +1064,7 @@ const CStatus = () => {
     const fireOutCheckInterval = setInterval(async () => {
       try {
         // Fetch latest reports
-        const response = await fetch('https://fire-detection-api-production-f55b.up.railway.app/get_reports', {
+        const response = await fetch('https://new-fira-backend.onrender.com/get_reports', {
           headers: { 'Accept': 'application/json' }
         });
         
@@ -1226,7 +1226,7 @@ const CStatus = () => {
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 15000); // 15 second timeout
       
-      const response = await fetch('https://fire-detection-api-production-f55b.up.railway.app/get_reports', {
+      const response = await fetch('https://new-fira-backend.onrender.com/get_reports', {
         signal: controller.signal,
         headers: {
           'Accept': 'application/json',
@@ -1751,6 +1751,10 @@ const CStatus = () => {
   };
 
   const submitEmergencyToApi = async () => {
+    console.log('🚀 submitEmergencyToApi CALLED');
+    console.log('Emergency data:', { image: !!emergencyData.image, cause: emergencyData.cause });
+    console.log('Current user:', currentUser?.uid);
+
     if (!currentUser?.uid) {
       Alert.alert('Authentication Error', 'Please log in to submit a report.');
       return;
@@ -1758,7 +1762,8 @@ const CStatus = () => {
 
     try {
       setIsSubmitting(true);
-      console.log('Starting emergency submission for user:', currentUser.uid);
+      console.log('✅ isSubmitting set to true');
+      console.log('✅ Starting emergency submission for user:', currentUser.uid);
       
       // 🚫 SPAM PREVENTION: Check local cache first (immediate), then database
       try {
@@ -1877,14 +1882,18 @@ const CStatus = () => {
       }
 
       const formData = new FormData();
+      console.log('✅ FormData created');
+
       formData.append('image', {
         uri: emergencyData.image,
         name: 'report.jpg',
         type: 'image/jpeg',
       });
-      
+      console.log('✅ Image appended:', emergencyData.image);
+
       // Add real geotag location
       formData.append('geotag_location', currentLocation);
+      console.log('✅ Location appended:', currentLocation);
       
       // Add cause of fire
       formData.append('cause_of_fire', emergencyData.cause);
@@ -1909,16 +1918,18 @@ const CStatus = () => {
       console.log('Sending user data:', { uid: currentUser.uid, name: userName });
 
       console.log('Submitting to API:', API_URL);
-      
+      console.log('✅ Ready to call API');
+
       // Retry logic with exponential backoff (Railway API may be sleeping)
       let response = null;
       let data = null;
       let lastError = null;
       const maxRetries = 3;
-      
+
       for (let attempt = 1; attempt <= maxRetries; attempt++) {
         try {
           console.log(`🔄 Attempt ${attempt}/${maxRetries} - Calling Fire Detection API...`);
+          console.log('API_URL:', API_URL);
           
           const controller = new AbortController();
           const timeoutId = setTimeout(() => controller.abort(), 40000); // 40 second timeout
@@ -2278,12 +2289,16 @@ const CStatus = () => {
       }, 2000);
       
     } catch (err) {
-      console.log('Submission error:', err);
-      
+      console.log('❌🔥 SUBMISSION ERROR CAUGHT');
+      console.log('Error type:', err?.name);
+      console.log('Error message:', err?.message);
+      console.log('Full error:', err);
+      console.log('Error stack:', err?.stack);
+
       // Provide helpful error messages based on error type
       let errorTitle = 'Error';
       let errorMessage = 'Something went wrong while submitting the report';
-      
+
       if (err.name === 'AbortError') {
         errorTitle = 'Request Timeout';
         errorMessage = 'The submission is taking too long. The Fire Detection API might be starting up. Please try again in 30 seconds.';
@@ -2302,7 +2317,7 @@ const CStatus = () => {
       } else {
         errorMessage = err?.message || errorMessage;
       }
-      
+
       Alert.alert(errorTitle, errorMessage, [
         { text: 'OK', style: 'default' }
       ]);

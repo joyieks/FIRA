@@ -3,7 +3,7 @@
 ## Problem
 Error: `API Response status: 404` - "Application not found"
 
-The API endpoint `https://fire-detection-api-production-f55b.up.railway.app/predict` is returning 404.
+The API endpoint `https://new-fira-backend.onrender.com/predict` is returning 404.
 
 ## Possible Causes
 
@@ -15,7 +15,7 @@ The API endpoint `https://fire-detection-api-production-f55b.up.railway.app/pred
 
 ### Option 1: Wake Up Railway API
 Railway free tier apps sleep after 5 minutes of inactivity. Try:
-1. Visit the API URL in browser: `https://fire-detection-api-production-f55b.up.railway.app/predict`
+1. Visit the API URL in browser: `https://new-fira-backend.onrender.com/predict`
 2. Wait 30 seconds for it to wake up
 3. Try submitting the report again
 
@@ -50,7 +50,7 @@ If the Railway API is permanently down, you may need to:
 
 Test if API is accessible:
 ```bash
-curl https://fire-detection-api-production-f55b.up.railway.app/predict
+curl https://new-fira-backend.onrender.com/predict
 ```
 
 Or visit in browser and check if you get a response.

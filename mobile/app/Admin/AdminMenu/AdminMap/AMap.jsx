@@ -93,7 +93,7 @@ export default function AMap({ isSidebarOpen = false }) {
   const fetchFireReports = useCallback(async () => {
     setReportsLoading(true);
     try {
-      const response = await fetch('https://fire-detection-api-production-f55b.up.railway.app/get_reports');
+      const response = await fetch('https://new-fira-backend.onrender.com/get_reports');
       
       if (response.ok) {
         const data = await response.json();
@@ -173,7 +173,7 @@ export default function AMap({ isSidebarOpen = false }) {
           const stationName = stationData?.station_name || 'Unknown Station';
           
           // Get report details
-          const API_URL = 'https://fire-detection-api-production-f55b.up.railway.app';
+          const API_URL = 'https://new-fira-backend.onrender.com';
           let reportData = null;
           try {
             const reportRes = await fetch(`${API_URL}/get_reports`);
@@ -456,7 +456,7 @@ export default function AMap({ isSidebarOpen = false }) {
         const stationName = stationData?.station_name || 'Unknown Station';
         
         // Get report details
-        const API_URL = 'https://fire-detection-api-production-f55b.up.railway.app';
+        const API_URL = 'https://new-fira-backend.onrender.com';
         let reportData = null;
         try {
           const reportRes = await fetch(`${API_URL}/get_reports`);
@@ -726,7 +726,7 @@ export default function AMap({ isSidebarOpen = false }) {
             const stationName = stationData?.station_name || 'Unknown Station';
             
             // Get report details
-            const API_URL = 'https://fire-detection-api-production-f55b.up.railway.app';
+            const API_URL = 'https://new-fira-backend.onrender.com';
             let reportData = null;
             try {
               const reportRes = await fetch(`${API_URL}/get_reports`);

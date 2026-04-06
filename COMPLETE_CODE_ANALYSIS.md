@@ -567,7 +567,7 @@ AuthGuard → Screens/[UserType]Screen
 ### 2. **External APIs**
 
 **Fire Detection API** (Railway):
-- URL: `https://fire-detection-api-production-f55b.up.railway.app`
+- URL: `https://new-fira-backend.onrender.com`
 - Purpose: Fire report processing
 - Endpoint: `/update_report_alarm_level`
 

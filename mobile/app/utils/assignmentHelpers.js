@@ -45,7 +45,7 @@ export const checkStationIsBusy = async (stationId) => {
     const reportIds = assignments.map(a => String(a.report_id));
 
     // Fetch fire reports from API to check their status
-    const response = await fetch('https://fire-detection-api-production-f55b.up.railway.app/get_reports');
+    const response = await fetch('https://new-fira-backend.onrender.com/get_reports');
     if (!response.ok) {
       console.error('❌ Failed to fetch fire reports for busy check');
       return { isBusy: false, busyCount: 0, busyReports: [] };
@@ -224,7 +224,7 @@ export const handleAssignmentResponse = async (reportId, stationId, response) =>
         const stationName = stationData?.station_name || 'Unknown Station';
         
         // Get report details
-        const API_URL = 'https://fire-detection-api-production-f55b.up.railway.app';
+        const API_URL = 'https://new-fira-backend.onrender.com';
         let reportData = null;
         try {
           const reportRes = await fetch(`${API_URL}/get_reports`);

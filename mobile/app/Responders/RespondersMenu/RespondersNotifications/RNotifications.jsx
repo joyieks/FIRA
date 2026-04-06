@@ -231,7 +231,7 @@ export default function RNotifications({ onUnreadCountChange, onNavigateToMap })
         
         if (reportIds.length > 0) {
           try {
-            const response = await fetch('https://fire-detection-api-production-f55b.up.railway.app/get_reports');
+            const response = await fetch('https://new-fira-backend.onrender.com/get_reports');
             if (response.ok) {
               const allReports = await response.json();
               const reportsMap = new Map();
@@ -273,7 +273,7 @@ export default function RNotifications({ onUnreadCountChange, onNavigateToMap })
     
     // Fetch the actual fire report to check its status
     try {
-      const response = await fetch('https://fire-detection-api-production-f55b.up.railway.app/get_reports');
+      const response = await fetch('https://new-fira-backend.onrender.com/get_reports');
       if (!response.ok) {
         console.error('❌ Failed to fetch fire reports');
         return;
@@ -368,7 +368,7 @@ export default function RNotifications({ onUnreadCountChange, onNavigateToMap })
   const fetchNearbyReports = async () => {
     if (!userLocation || !currentResponderId) return;
     try {
-      const response = await fetch('https://fire-detection-api-production-f55b.up.railway.app/get_reports');
+      const response = await fetch('https://new-fira-backend.onrender.com/get_reports');
       if (!response.ok) return;
       const allReports = await response.json();
 

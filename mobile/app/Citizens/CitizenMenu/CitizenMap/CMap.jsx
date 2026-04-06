@@ -62,9 +62,9 @@ export default function CMap({ reportIdToFocus, setReportIdToFocus }) {
   });
   
   // API endpoints
-  const GET_REPORTS_URL = 'https://fire-detection-api-production-f55b.up.railway.app/get_reports';
-  const UPDATE_REPORT_URL = 'https://fire-detection-api-production-f55b.up.railway.app/update_report';
-  const UPDATE_STATUS_URL = 'https://fire-detection-api-production-f55b.up.railway.app/update_report_status';
+  const GET_REPORTS_URL = 'https://new-fira-backend.onrender.com/get_reports';
+  const UPDATE_REPORT_URL = 'https://new-fira-backend.onrender.com/update_report';
+  const UPDATE_STATUS_URL = 'https://new-fira-backend.onrender.com/update_report_status';
 
   // Helper to check if report is "No Fire" + "No Smoke"
   const isNoFireNoSmoke = (report) => {

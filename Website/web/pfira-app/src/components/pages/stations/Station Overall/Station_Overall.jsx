@@ -26,7 +26,7 @@ const Station_Overview = () => {
   const [aiChatSuggestions, setAiChatSuggestions] = useState([]); // recent AI suggestions from messages
   const [chatAlarmByReport, setChatAlarmByReport] = useState({}); // reportId -> normalized label
 
-  const API_URL = 'https://fire-detection-api-production-f55b.up.railway.app';
+  const API_URL = 'https://new-fira-backend.onrender.com';
 
   // Helper function to generate human-readable report ID
   const generateReadableReportId = (uuid) => {

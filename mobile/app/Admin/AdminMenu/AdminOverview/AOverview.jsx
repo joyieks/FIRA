@@ -9,7 +9,7 @@ import { notifyRespondersOnStatusChange, notifyRespondersOnAlarmChange, fetchRep
 import { notifyAllUsersOnStatusChange, notifyAllUsersOnAlarmChange } from '../../../services/universalNotificationService';
 import { checkStationIsBusy, findNearestStations, findNearestStationsToStation, calculateDistance } from '../../../utils/assignmentHelpers';
 
-const API_URL = 'https://fire-detection-api-production-f55b.up.railway.app';
+const API_URL = 'https://new-fira-backend.onrender.com';
 
 export default function AOverview() {
   const [reports, setReports] = useState([]);

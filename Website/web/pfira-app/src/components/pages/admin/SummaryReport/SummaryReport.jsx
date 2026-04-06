@@ -25,7 +25,7 @@ const SummaryReport = ({ reportId, isOpen, onClose, reportQueue = [], currentInd
       setLoading(true);
       
       // Fetch report from API
-      const API_URL = 'https://fire-detection-api-production-f55b.up.railway.app';
+      const API_URL = 'https://new-fira-backend.onrender.com';
       const reportResponse = await fetch(`${API_URL}/get_reports`);
       const allReports = await reportResponse.json();
       const report = allReports.find(r => String(r.id) === String(reportId));

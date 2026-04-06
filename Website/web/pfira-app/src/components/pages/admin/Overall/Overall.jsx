@@ -61,7 +61,7 @@ const Overview = () => {
   const [showInvalidateSuccessModal, setShowInvalidateSuccessModal] = useState(false);
 
   // API endpoint for fetching reports
-  const API_URL = 'https://fire-detection-api-production-f55b.up.railway.app';
+  const API_URL = 'https://new-fira-backend.onrender.com';
 
   // Fallback: fetch reports directly from Supabase fire_reports when Railway API is down/slow
   const fetchReportsFallback = async () => {
@@ -749,7 +749,7 @@ const Overview = () => {
                   .slice(0, 10); // Check last 10 reports
                 
                 // Fetch these reports and check if they form a cluster
-                const reportRes = await fetch('https://fire-detection-api-production-f55b.up.railway.app/get_reports');
+                const reportRes = await fetch('https://new-fira-backend.onrender.com/get_reports');
                 if (reportRes.ok) {
                   const allReports = await reportRes.json();
                   const fireOutReports = allReports.filter(r => 
@@ -816,7 +816,7 @@ const Overview = () => {
           
           // Check if this report is part of a cluster
           try {
-            const reportRes = await fetch('https://fire-detection-api-production-f55b.up.railway.app/get_reports');
+            const reportRes = await fetch('https://new-fira-backend.onrender.com/get_reports');
             if (reportRes.ok) {
               const allReports = await reportRes.json();
               const fireOutReports = allReports.filter(r => 
@@ -2174,7 +2174,7 @@ const Overview = () => {
                                   
                                   // Check if this report is part of a cluster
                                   try {
-                                    const reportRes = await fetch('https://fire-detection-api-production-f55b.up.railway.app/get_reports');
+                                    const reportRes = await fetch('https://new-fira-backend.onrender.com/get_reports');
                                     if (reportRes.ok) {
                                       const allReports = await reportRes.json();
                                       const fireOutReports = allReports.filter(r => 

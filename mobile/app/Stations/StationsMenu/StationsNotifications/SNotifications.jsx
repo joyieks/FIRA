@@ -195,7 +195,7 @@ export default function SNotifications({ onUnreadCountChange, onOpenReport }) {
             console.log('🚨 New assignment received in SNotifications:', row);
             
             // Fetch report data
-            const response = await fetch('https://fire-detection-api-production-f55b.up.railway.app/get_reports');
+            const response = await fetch('https://new-fira-backend.onrender.com/get_reports');
             const reports = response.ok ? await response.json() : [];
             const reportData = reports.find(r => String(r.id) === String(row.report_id));
 
@@ -289,7 +289,7 @@ export default function SNotifications({ onUnreadCountChange, onOpenReport }) {
               }
               
               // Fetch report data
-              const response = await fetch('https://fire-detection-api-production-f55b.up.railway.app/get_reports');
+              const response = await fetch('https://new-fira-backend.onrender.com/get_reports');
               const reports = response.ok ? await response.json() : [];
               const reportData = reports.find(r => String(r.id) === String(row.report_id));
 
@@ -396,7 +396,7 @@ export default function SNotifications({ onUnreadCountChange, onOpenReport }) {
           const assignment = pendingAssignments[0];
           
           // Fetch report data
-          const response = await fetch('https://fire-detection-api-production-f55b.up.railway.app/get_reports');
+          const response = await fetch('https://new-fira-backend.onrender.com/get_reports');
           const reports = response.ok ? await response.json() : [];
           const reportData = reports.find(r => String(r.id) === String(assignment.report_id));
 

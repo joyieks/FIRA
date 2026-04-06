@@ -601,7 +601,7 @@ Alarm level has been ${changeText}. Please review the incident and respond accor
  */
 export async function fetchReportData(reportId) {
   try {
-    const API_URL = 'https://fire-detection-api-production-f55b.up.railway.app';
+    const API_URL = 'https://new-fira-backend.onrender.com';
     const response = await fetch(`${API_URL}/get_reports`);
     
     if (!response.ok) {

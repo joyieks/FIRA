@@ -5,6 +5,15 @@ import { Audio } from 'expo-av';
 import * as Notifications from 'expo-notifications';
 import { supabase } from '../../../config/supabase';
 
+// Suppress expo-notifications warning in Expo Go
+if (Platform.OS === 'android') {
+  try {
+    Notifications.getPermissionsAsync().catch(() => {});
+  } catch (e) {
+    console.log('⚠️ Notifications not fully supported in Expo Go');
+  }
+}
+
 // Headless background worker for admin alerts (no UI)
 export default function AAlertsWorker() {
   const sirenRef = useRef(null);
@@ -304,7 +313,7 @@ export default function AAlertsWorker() {
   const checkForNewFireReports = async () => {
     if (!adminId) return;
     try {
-      const response = await fetch('https://fire-detection-api-production-f55b.up.railway.app/get_reports');
+      const response = await fetch('https://new-fira-backend.onrender.com/get_reports');
       
       if (response.ok) {
         const data = await response.json();

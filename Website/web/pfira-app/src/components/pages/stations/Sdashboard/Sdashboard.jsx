@@ -669,7 +669,7 @@ const Sdashboard = () => {
         if (pendingAssignment) {
           try {
             // Fetch report data
-            const response = await fetch('https://fire-detection-api-production-f55b.up.railway.app/get_reports');
+            const response = await fetch('https://new-fira-backend.onrender.com/get_reports');
             const reports = response.ok ? await response.json() : [];
             const reportData = reports.find(r => String(r.id) === String(pendingAssignment.report_id));
 
@@ -782,7 +782,7 @@ const Sdashboard = () => {
         });
 
         // 3) Fetch full fire reports from the same API used by admin
-        const response = await fetch('https://fire-detection-api-production-f55b.up.railway.app/get_reports');
+        const response = await fetch('https://new-fira-backend.onrender.com/get_reports');
         if (!response.ok) {
           console.error('❌ Failed to fetch fire reports for station view:', response.status);
           return;
@@ -903,7 +903,7 @@ const Sdashboard = () => {
               if (!row) return;
               if (row.assignee_type === 'station' && String(row.assignee_id) === String(stationId)) {
                 // Fetch report data
-                const response = await fetch('https://fire-detection-api-production-f55b.up.railway.app/get_reports');
+                const response = await fetch('https://new-fira-backend.onrender.com/get_reports');
                 const reports = response.ok ? await response.json() : [];
                 const reportData = reports.find(r => String(r.id) === String(row.report_id));
 
@@ -971,7 +971,7 @@ const Sdashboard = () => {
                 
                 if (isNowPending && !wasPending) {
                   // Fetch report data
-                  const response = await fetch('https://fire-detection-api-production-f55b.up.railway.app/get_reports');
+                  const response = await fetch('https://new-fira-backend.onrender.com/get_reports');
                   const reports = response.ok ? await response.json() : [];
                   const reportData = reports.find(r => String(r.id) === String(row.report_id));
 

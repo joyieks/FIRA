@@ -881,7 +881,7 @@ export default function RMap({ routingInfo }) {
       console.log('🔍 Fetching nearby reports for responder...');
       
       // Fetch all reports from API
-      const response = await fetch('https://fire-detection-api-production-f55b.up.railway.app/get_reports');
+      const response = await fetch('https://new-fira-backend.onrender.com/get_reports');
       if (!response.ok) {
         console.error('Failed to fetch fire reports from API');
         return;
@@ -1065,7 +1065,7 @@ export default function RMap({ routingInfo }) {
       }
 
       // Fetch fire reports from API
-      const response = await fetch('https://fire-detection-api-production-f55b.up.railway.app/get_reports');
+      const response = await fetch('https://new-fira-backend.onrender.com/get_reports');
       if (!response.ok) {
         console.error('Failed to fetch fire reports from API');
         return;
@@ -1507,7 +1507,7 @@ export default function RMap({ routingInfo }) {
 
     const checkReportStatus = async () => {
       try {
-        const response = await fetch('https://fire-detection-api-production-f55b.up.railway.app/get_reports');
+        const response = await fetch('https://new-fira-backend.onrender.com/get_reports');
         if (!response.ok) return;
 
         const reports = await response.json();
@@ -1553,7 +1553,7 @@ export default function RMap({ routingInfo }) {
         console.log('📍 Destination:', destination);
 
         // Fetch the specific fire report from Railway API (needed for modal fields)
-        const response = await fetch('https://fire-detection-api-production-f55b.up.railway.app/get_reports');
+        const response = await fetch('https://new-fira-backend.onrender.com/get_reports');
         if (!response.ok) {
           console.error('❌ Failed to fetch fire reports from API');
           Alert.alert('Error', 'Failed to load fire report details');

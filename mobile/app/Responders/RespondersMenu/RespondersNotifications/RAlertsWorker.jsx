@@ -538,7 +538,7 @@ export default function RAlertsWorker() {
             if (statusUpdate.fire_report_id) {
               try {
                 console.log('🔍 Fetching fire report to check status...');
-                const response = await fetch('https://fire-detection-api-production-f55b.up.railway.app/get_reports');
+                const response = await fetch('https://new-fira-backend.onrender.com/get_reports');
                 if (response.ok) {
                   const allReports = await response.json();
                   const report = Array.isArray(allReports) 
@@ -824,7 +824,7 @@ export default function RAlertsWorker() {
             if (newData.fire_report_id) {
               try {
                 console.log('🔍 Real-time: Fetching fire report to check status...');
-                const response = await fetch('https://fire-detection-api-production-f55b.up.railway.app/get_reports');
+                const response = await fetch('https://new-fira-backend.onrender.com/get_reports');
                 if (response.ok) {
                   const allReports = await response.json();
                   const report = Array.isArray(allReports) 
@@ -978,7 +978,7 @@ export default function RAlertsWorker() {
             // Fetch report data
             const reportId = String(assignment.report_id);
             try {
-              const response = await fetch('https://fire-detection-api-production-f55b.up.railway.app/get_reports');
+              const response = await fetch('https://new-fira-backend.onrender.com/get_reports');
               const reports = response.ok ? await response.json() : [];
               const reportData = reports.find(r => String(r.id) === reportId);
               

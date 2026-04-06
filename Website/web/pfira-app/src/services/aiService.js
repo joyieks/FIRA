@@ -97,7 +97,7 @@ export const updateMessageWithAIAnalysis = async (messageId, analysis, supabaseC
         console.log('🤖 AI Update: Message linked to report', reportId, '- checking for cluster and updating recommended_alarm_level');
         try {
           // Fetch all reports to check for clustering
-          const allReportsRes = await fetch('https://fire-detection-api-production-f55b.up.railway.app/get_reports');
+          const allReportsRes = await fetch('https://new-fira-backend.onrender.com/get_reports');
           if (allReportsRes.ok) {
             const allReports = await allReportsRes.json();
             
@@ -199,7 +199,7 @@ export const updateMessageWithAIAnalysis = async (messageId, analysis, supabaseC
 
             // Update all reports in the cluster
             const updatePromises = reportsToUpdate.map(id =>
-              fetch('https://fire-detection-api-production-f55b.up.railway.app/update_report_alarm_level', {
+              fetch('https://new-fira-backend.onrender.com/update_report_alarm_level', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -219,7 +219,7 @@ export const updateMessageWithAIAnalysis = async (messageId, analysis, supabaseC
             }
           } else {
             // Fallback: update single report if clustering check fails
-            const response = await fetch('https://fire-detection-api-production-f55b.up.railway.app/update_report_alarm_level', {
+            const response = await fetch('https://new-fira-backend.onrender.com/update_report_alarm_level', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({

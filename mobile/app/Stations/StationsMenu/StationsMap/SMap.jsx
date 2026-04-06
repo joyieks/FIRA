@@ -296,7 +296,7 @@ export default function SMap({ reportIdToOpen, onReportOpened }) {
         
         // If not found locally, fetch from API
         console.log('🔍 Report not found locally, fetching from API...');
-        const resp = await fetch('https://fire-detection-api-production-f55b.up.railway.app/get_reports');
+        const resp = await fetch('https://new-fira-backend.onrender.com/get_reports');
         if (!resp.ok) throw new Error('Failed to fetch reports from API');
         
         const apiData = await resp.json();
@@ -427,7 +427,7 @@ export default function SMap({ reportIdToOpen, onReportOpened }) {
         if (!ids.length) { setAssignedReports([]); return; }
 
         // Load from external API
-        const resp = await fetch('https://fire-detection-api-production-f55b.up.railway.app/get_reports');
+        const resp = await fetch('https://new-fira-backend.onrender.com/get_reports');
         const apiData = resp.ok ? await resp.json() : [];
         const apiById = new Map((apiData || []).map(r => [String(r.id), r]));
 
@@ -505,7 +505,7 @@ export default function SMap({ reportIdToOpen, onReportOpened }) {
           if (!row) return;
           if (row.assignee_type === 'station' && String(row.assignee_id) === String(currentStationId)) {
             // Fetch report data
-            const response = await fetch('https://fire-detection-api-production-f55b.up.railway.app/get_reports');
+            const response = await fetch('https://new-fira-backend.onrender.com/get_reports');
             const reports = response.ok ? await response.json() : [];
             const reportData = reports.find(r => String(r.id) === String(row.report_id));
 
@@ -561,7 +561,7 @@ export default function SMap({ reportIdToOpen, onReportOpened }) {
             
             if (isNowPending && !wasPending) {
               // Fetch report data
-              const response = await fetch('https://fire-detection-api-production-f55b.up.railway.app/get_reports');
+              const response = await fetch('https://new-fira-backend.onrender.com/get_reports');
               const reports = response.ok ? await response.json() : [];
               const reportData = reports.find(r => String(r.id) === String(row.report_id));
 

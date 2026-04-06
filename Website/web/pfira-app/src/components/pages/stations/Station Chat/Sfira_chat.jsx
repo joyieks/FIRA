@@ -345,7 +345,7 @@ const Sfira_chat = () => {
 
         // 2) External API (richer address/status) to fill gaps — prefer API values over Supabase when present
         try {
-          const apiResp = await fetch('https://fire-detection-api-production-f55b.up.railway.app/get_reports');
+          const apiResp = await fetch('https://new-fira-backend.onrender.com/get_reports');
           if (apiResp.ok) {
             const apiData = await apiResp.json();
             apiData
@@ -918,7 +918,7 @@ const Sfira_chat = () => {
     if (!aiModal.reportId || !aiModal.level) return;
     setAiModal(prev => ({ ...prev, saving: true, error: null }));
     try {
-      const response = await fetch('https://fire-detection-api-production-f55b.up.railway.app/update_final_alarm_level', {
+      const response = await fetch('https://new-fira-backend.onrender.com/update_final_alarm_level', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ report_id: aiModal.reportId, final_alarm_level: aiModal.level })

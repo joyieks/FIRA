@@ -245,7 +245,7 @@ const Auser_management = () => {
 
       setLoadingReports(true);
       try {
-        const response = await fetch('https://fire-detection-api-production-f55b.up.railway.app/get_reports');
+        const response = await fetch('https://new-fira-backend.onrender.com/get_reports');
         if (!response.ok) {
           throw new Error('Failed to fetch reports');
         }

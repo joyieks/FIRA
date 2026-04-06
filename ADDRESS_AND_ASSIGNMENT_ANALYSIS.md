@@ -293,7 +293,7 @@ await supabase.from('assigned_report_snapshots').upsert({
 ### 2.4 Address Data Sources
 
 #### Source 1: External API (Railway)
-**Endpoint**: `https://fire-detection-api-production-f55b.up.railway.app/get_reports`
+**Endpoint**: `https://new-fira-backend.onrender.com/get_reports`
 
 - Reports are stored in external Firebase/API
 - Address fields come from citizen submissions

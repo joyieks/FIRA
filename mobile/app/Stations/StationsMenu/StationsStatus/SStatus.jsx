@@ -54,7 +54,7 @@ export default function SStatus({ reportIdToOpen, onReportOpened }) {
   // Track which assignments have already been shown in modals (to prevent duplicates)
   const shownAssignmentsRef = useRef(new Set()); // Set of assignment IDs that have been shown
 
-  const API_URL = 'https://fire-detection-api-production-f55b.up.railway.app';
+  const API_URL = 'https://new-fira-backend.onrender.com';
 
   // Format time helper
   const formatTime = (timestamp) => {
@@ -791,7 +791,7 @@ export default function SStatus({ reportIdToOpen, onReportOpened }) {
           shownAssignmentsRef.current.add(assignmentKey);
           
           // Fetch report data
-          const response = await fetch('https://fire-detection-api-production-f55b.up.railway.app/get_reports');
+          const response = await fetch('https://new-fira-backend.onrender.com/get_reports');
           const reports = response.ok ? await response.json() : [];
           const reportData = reports.find(r => String(r.id) === String(assignment.report_id));
 
@@ -875,7 +875,7 @@ export default function SStatus({ reportIdToOpen, onReportOpened }) {
             console.log('🚨 New assignment received in SStatus:', row);
             
             // Fetch report data
-            const response = await fetch('https://fire-detection-api-production-f55b.up.railway.app/get_reports');
+            const response = await fetch('https://new-fira-backend.onrender.com/get_reports');
             const reports = response.ok ? await response.json() : [];
             const reportData = reports.find(r => String(r.id) === String(row.report_id));
 
@@ -972,7 +972,7 @@ export default function SStatus({ reportIdToOpen, onReportOpened }) {
               }
               
               // Fetch report data
-              const response = await fetch('https://fire-detection-api-production-f55b.up.railway.app/get_reports');
+              const response = await fetch('https://new-fira-backend.onrender.com/get_reports');
               const reports = response.ok ? await response.json() : [];
               const reportData = reports.find(r => String(r.id) === String(row.report_id));
 
@@ -1114,7 +1114,7 @@ export default function SStatus({ reportIdToOpen, onReportOpened }) {
           console.log('⚠️ Report not found in current list, fetching from API');
           
           // Fetch from API if not in list
-          const API_URL = 'https://fire-detection-api-production-f55b.up.railway.app';
+          const API_URL = 'https://new-fira-backend.onrender.com';
           const response = await fetch(`${API_URL}/get_reports`);
           const allReports = await response.json();
           const fetchedReport = allReports.find(r => String(r.id) === String(reportIdToOpen));

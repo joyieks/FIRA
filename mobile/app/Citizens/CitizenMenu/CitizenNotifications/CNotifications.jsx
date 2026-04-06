@@ -185,7 +185,7 @@ const CNotifications = ({ onUnreadCountChange, setActiveTab, setReportIdToFocus 
     if (!currentUserId) return;
 
     try {
-      const response = await fetch('https://fire-detection-api-production-f55b.up.railway.app/get_reports', {
+      const response = await fetch('https://new-fira-backend.onrender.com/get_reports', {
         headers: { 'Accept': 'application/json' }
       });
       

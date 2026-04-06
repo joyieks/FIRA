@@ -54,7 +54,7 @@ export default function RStatus({ onNavigateToMap }) {
       console.log('🔍 Fetching nearby reports for responder...');
       
       // Fetch all reports from API
-      const response = await fetch('https://fire-detection-api-production-f55b.up.railway.app/get_reports');
+      const response = await fetch('https://new-fira-backend.onrender.com/get_reports');
       if (!response.ok) {
         console.error('Failed to fetch fire reports from API');
         return;
@@ -264,7 +264,7 @@ export default function RStatus({ onNavigateToMap }) {
 
       // Fetch reports once and build assignment cards
       console.log('🌐 Fetching reports from Railway API...');
-      const response = await fetch('https://fire-detection-api-production-f55b.up.railway.app/get_reports');
+      const response = await fetch('https://new-fira-backend.onrender.com/get_reports');
       const allReports = response.ok ? await response.json() : [];
       console.log('📊 Fetched reports from API:', allReports?.length || 0);
       

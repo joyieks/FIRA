@@ -370,7 +370,7 @@ const Afira_chat = () => {
     if (!aiModal.reportId || !aiModal.level) return;
     setAiModal(prev => ({ ...prev, saving: true, error: null }));
     try {
-      const response = await fetch('https://fire-detection-api-production-f55b.up.railway.app/update_final_alarm_level', {
+      const response = await fetch('https://new-fira-backend.onrender.com/update_final_alarm_level', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ report_id: aiModal.reportId, final_alarm_level: aiModal.level })
@@ -393,7 +393,7 @@ const Afira_chat = () => {
     try {
       // Try Railway API first (has complete location data)
       try {
-        const apiResponse = await fetch('https://fire-detection-api-production-f55b.up.railway.app/get_reports');
+        const apiResponse = await fetch('https://new-fira-backend.onrender.com/get_reports');
         if (apiResponse.ok) {
           const allReports = await apiResponse.json();
           const report = Array.isArray(allReports) 
